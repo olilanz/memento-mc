@@ -24,12 +24,9 @@ java {
 }
 
 loom {
-    splitEnvironmentSourceSets()
-
     mods {
-        register("memento-mc") {
+        register("memento") {
             sourceSet("main")
-            sourceSet("client")
         }
     }
 }
@@ -62,9 +59,9 @@ tasks.processResources {
     filesMatching("fabric.mod.json") {
         expand(
             "version" to project.version,
-            "minecraft_version" to project.property("minecraft_version"),
-            "loader_version" to project.property("loader_version"),
-            "kotlin_loader_version" to project.property("kotlin_loader_version")
+            "minecraft_version" to project.property("minecraft_version") as String,
+            "loader_version" to project.property("loader_version") as String,
+            "kotlin_loader_version" to project.property("kotlin_loader_version") as String
         )
     }
 }

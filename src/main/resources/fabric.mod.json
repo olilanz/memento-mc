@@ -1,26 +1,25 @@
 {
   "schemaVersion": 1,
-  "id": "memento-mc",
+  "id": "memento",
   "version": "${version}",
-  "name": "memento-mc",
+  "name": "Memento: Natural Renewal",
   "description": "Automatic world renewal guided by simple player-defined memory anchors.",
-  "authors": [],
-  "contact": {},
+  "authors": ["olilanz"],
+  "contact": {
+    "homepage": "https://github.com/olilanz/memento-mc",
+    "issues": "https://github.com/olilanz/memento-mc/issues"
+  },
   "license": "MIT",
-  "icon": "assets/memento-mc/icon.png",
-  "environment": "server",
+  "icon": "assets/memento/icon.png",
+  "environment": "*",
   "entrypoints": {
     "main": [
-      "ch.oliverlanz.mcmods.mementomc.mementoMc.MementoMc"
+      {
+        "adapter": "kotlin",
+        "value": "ch.oliverlanz.memento.Memento"
+      }
     ]
   },
-  "mixins": [
-    "memento-mc.mixins.json",
-    {
-      "config": "memento-mc.client.mixins.json",
-      "environment": "client"
-    }
-  ],
   "depends": {
     "fabricloader": ">=${loader_version}",
     "fabric-language-kotlin": ">=${kotlin_loader_version}",
