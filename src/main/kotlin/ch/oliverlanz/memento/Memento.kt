@@ -1,12 +1,22 @@
 package ch.oliverlanz.memento
 
 import net.fabricmc.api.ModInitializer
+import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 
 object Memento : ModInitializer {
-    private val logger = LoggerFactory.getLogger("memento")
+    internal val logger: Logger = LoggerFactory.getLogger("memento")
+
+    // Tiny logging DSL for clean calls like: log.info { "text" }
+    object log {
+        fun info(msg: () -> String) = logger.info(msg())
+        fun warn(msg: () -> String) = logger.warn(msg())
+        fun error(msg: () -> String) = logger.error(msg())
+    }
 
     override fun onInitialize() {
-        logger.info("Memento: Natural Renewal initializing...")
+        log.info { "Memento: Natural Renewal initializing..." }
+
+        Commands.register()
     }
 }
