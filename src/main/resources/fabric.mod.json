@@ -25,12 +25,5 @@
     "fabric-language-kotlin": ">=${kotlin_loader_version}",
     "fabric": "*",
     "minecraft": "${minecraft_version}"
-  },
-  "custom": {
-    "fabric-resource-pack": {
-      "memento_resourcepack": {
-        "default": true
-      }
-    }
   }
 }
