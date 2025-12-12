@@ -7,7 +7,6 @@ import org.slf4j.LoggerFactory
 object Memento : ModInitializer {
     internal val logger: Logger = LoggerFactory.getLogger("memento")
 
-    // Tiny logging DSL for clean calls like: log.info { "text" }
     object log {
         fun info(msg: () -> String) = logger.info(msg())
         fun warn(msg: () -> String) = logger.warn(msg())
@@ -17,6 +16,7 @@ object Memento : ModInitializer {
     override fun onInitialize() {
         log.info { "Memento: Natural Renewal initializing..." }
 
+        MementoBlocks.register()
         Commands.register()
     }
 }
