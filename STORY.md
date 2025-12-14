@@ -1,20 +1,31 @@
 # Memento: Natural Renewal — Design Intention
 
-Memento is built around a simple idea:  
-**worlds should evolve naturally, keeping what players care about and renewing what they don’t.**
+Minecraft worlds accumulate history.
 
-Minecraft worlds grow endlessly, and players leave traces everywhere. Over time, unused terrain can accumulate noise, old generation artifacts, and performance overhead. But players also build memories—structures, paths, and places that matter.
+Players explore, build, abandon, return, and move on. Over time, terrain that no longer matters remains loaded, stored, and carried forward indefinitely. Memento is built around a simple idea:
 
-The goal of Memento is to let the world breathe:
+**Worlds should remember what matters — and gently let go of what doesn’t.**
 
-- **Anchors** protect meaningful locations.
-- **Forgetters** guide where renewal should happen.
-- **Unused land gently regenerates**, keeping the world fresh.
-- **No one loses anything important.**
+Memento introduces *anchors*: explicit markers defined by server operators that describe intent.
 
-This is not destruction—it’s maintenance, continuity, and regeneration.
+- Some places are meant to be **remembered**.
+- Some places are safe to **forget**.
+- Everything else is allowed to age naturally.
 
-All mechanics remain simple, practical, and server-side only.  
-Players using vanilla clients can interact with Memento Stones without needing any additional mods.
+This is not destruction.  
+It is maintenance.
 
-Memento aims to be invisible when it should be, and obvious when it matters.
+Memento does not attempt to guess player intent.  
+It does not scan builds, analyze structures, or make subjective decisions.
+
+Instead, it provides a clear language:
+
+- *Anchor this place.*
+- *Release that place.*
+- *Let the rest evolve.*
+
+All mechanics are server-side.  
+Players using vanilla clients remain fully compatible.
+
+Memento aims to be invisible when nothing is happening —  
+and explicit, deliberate, and understandable when it is.

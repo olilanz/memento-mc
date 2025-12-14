@@ -27,6 +27,18 @@ object MementoAnchors {
 
     fun get(name: String): Anchor? = anchors[name]
 
+    /**
+     * Add or replace an anchor with the same name.
+     * This matches the command semantics.
+     */
+    fun addOrReplace(anchor: Anchor) {
+        anchors[anchor.name] = anchor
+    }
+
+    /**
+     * Add only if the name does not exist.
+     * (Kept for possible future use.)
+     */
     fun add(anchor: Anchor): Boolean {
         if (anchors.containsKey(anchor.name)) return false
         anchors[anchor.name] = anchor
