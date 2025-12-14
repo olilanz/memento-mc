@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "ch.oliverlanz.memento.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "VersionedChunkStorageMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

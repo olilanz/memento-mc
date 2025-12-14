@@ -4,6 +4,9 @@ import net.minecraft.registry.RegistryKey
 import net.minecraft.util.math.BlockPos
 import net.minecraft.world.World
 
+import net.minecraft.util.math.ChunkPos
+import kotlin.math.abs
+
 object MementoAnchors {
 
     const val DEFAULT_RADIUS: Int = 5
@@ -57,5 +60,36 @@ object MementoAnchors {
         for (a in newAnchors) {
             anchors[a.name] = a
         }
+    }
+
+    /**
+     * Returns true if there exists a FORGET anchor whose radius
+     * covers the given chunk in the given dimension.
+     *
+     * This is the authoritative forgettability check.
+     */
+    fun shouldForgetChunk(
+        dimension: RegistryKey<World>,
+        chunkPos: ChunkPos
+    ): Boolean {
+        return anchors.values.any { anchor ->
+            anchor.kind == Kind.FORGET &&
+                    anchor.dimension == dimension &&
+                    isChunkWithinAnchorRadius(anchor, chunkPos)
+        }
+    }
+
+    private fun isChunkWithinAnchorRadius(
+        anchor: Anchor,
+        chunkPos: ChunkPos
+    ): Boolean {
+        val anchorChunkX = anchor.pos.x shr 4
+        val anchorChunkZ = anchor.pos.z shr 4
+
+        val dx = abs(anchorChunkX - chunkPos.x)
+        val dz = abs(anchorChunkZ - chunkPos.z)
+
+        // radius is defined in chunks
+        return dx <= anchor.radius && dz <= anchor.radius
     }
 }
