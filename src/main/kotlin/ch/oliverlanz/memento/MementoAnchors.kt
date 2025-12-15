@@ -63,6 +63,24 @@ object MementoAnchors {
     }
 
     /**
+     * Current experiment slice:
+     * Only the chunk that *contains* the FORGET anchor itself is forgettable.
+     *
+     * (Radius/days/heatmaps come later.)
+     */
+    fun shouldForgetExactChunk(
+        dimension: RegistryKey<World>,
+        chunkPos: ChunkPos
+    ): Boolean {
+        return anchors.values.any { anchor ->
+            anchor.kind == Kind.FORGET &&
+                anchor.dimension == dimension &&
+                (anchor.pos.x shr 4) == chunkPos.x &&
+                (anchor.pos.z shr 4) == chunkPos.z
+        }
+    }
+
+    /**
      * Returns true if there exists a FORGET anchor whose radius
      * covers the given chunk in the given dimension.
      *

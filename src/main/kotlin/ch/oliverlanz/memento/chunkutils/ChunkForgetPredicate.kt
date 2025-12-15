@@ -4,13 +4,34 @@ import ch.oliverlanz.memento.MementoAnchors
 import net.minecraft.registry.RegistryKey
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
+import org.slf4j.LoggerFactory
+import java.util.concurrent.ConcurrentHashMap
 
 object ChunkForgetPredicate {
+
+    private val logger = LoggerFactory.getLogger("memento")
+
+    /**
+     * We intentionally keep logging sparse to avoid spamming the console.
+     * Keyed by "dimensionId:chunkLong".
+     */
+    private val loggedForgetDecisions = ConcurrentHashMap.newKeySet<String>()
 
     fun shouldForget(
         dimension: RegistryKey<World>,
         chunkPos: ChunkPos
     ): Boolean {
-        return MementoAnchors.shouldForgetChunk(dimension, chunkPos)
+        // For the current slice: only the *exact* anchor chunk is forgettable.
+        // Radius/days come later.
+        val forget = MementoAnchors.shouldForgetExactChunk(dimension, chunkPos)
+
+        if (forget) {
+            val key = "${dimension.value}:" + chunkPos.toLong()
+            if (loggedForgetDecisions.add(key)) {
+                logger.warn("(memento) Forget predicate: dimension={}, chunk=({}, {}) => FORGET", dimension.value, chunkPos.x, chunkPos.z)
+            }
+        }
+
+        return forget
     }
 }
