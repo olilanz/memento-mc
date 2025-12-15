@@ -28,15 +28,12 @@ object Memento : ModInitializer {
             MementoPersistence.save(server)
         }
 
-        // Observability for the new "forget on load" approach.
-        // These callbacks are not part of the forgetting mechanism; they are purely
-        // to help us understand when chunks are loaded/unloaded and whether they
-        // are marked for forgetting.
+        // Observability for the "forget on load" approach.
         ServerChunkEvents.CHUNK_LOAD.register(ServerChunkEvents.Load { world: ServerWorld, chunk: WorldChunk ->
             val pos = chunk.pos
             if (MementoAnchors.shouldForgetExactChunk(world.registryKey, pos)) {
-                logger.warn(
-                    "(memento) CHUNK_LOAD: dimension={}, chunk=({}, {}) is MARKED FOR FORGET; it may regenerate on next load.",
+                logger.info(
+                    "(memento) Chunk loaded: dimension={}, chunk=({}, {}) is marked for renewal (not remembered).",
                     world.registryKey.value, pos.x, pos.z
                 )
             }
@@ -45,8 +42,8 @@ object Memento : ModInitializer {
         ServerChunkEvents.CHUNK_UNLOAD.register(ServerChunkEvents.Unload { world: ServerWorld, chunk: WorldChunk ->
             val pos: ChunkPos = chunk.pos
             if (MementoAnchors.shouldForgetExactChunk(world.registryKey, pos)) {
-                logger.warn(
-                    "(memento) CHUNK_UNLOAD: dimension={}, chunk=({}, {}) is now dormant; its memory is destined for oblivion.",
+                logger.info(
+                    "(memento) Chunk unloaded: dimension={}, chunk=({}, {}) is marked for renewal (not remembered).",
                     world.registryKey.value, pos.x, pos.z
                 )
             }

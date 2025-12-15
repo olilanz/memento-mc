@@ -28,7 +28,12 @@ object ChunkForgetPredicate {
         if (forget) {
             val key = "${dimension.value}:" + chunkPos.toLong()
             if (loggedForgetDecisions.add(key)) {
-                logger.warn("(memento) Forget predicate: dimension={}, chunk=({}, {}) => FORGET", dimension.value, chunkPos.x, chunkPos.z)
+                logger.info(
+                    "(memento) Forget predicate matched: dimension={}, chunk=({}, {}) will not be remembered.",
+                    dimension.value,
+                    chunkPos.x,
+                    chunkPos.z
+                )
             }
         }
 

@@ -1,5 +1,6 @@
 package ch.oliverlanz.memento
 
+import ch.oliverlanz.memento.chunkutils.ChunkInspection
 import com.mojang.brigadier.CommandDispatcher
 import com.mojang.brigadier.arguments.IntegerArgumentType
 import com.mojang.brigadier.arguments.StringArgumentType
@@ -193,16 +194,12 @@ object Commands {
             )
 
     private fun defaultPos(src: ServerCommandSource): BlockPos {
-        // Simple + stable: use player's current block position.
-        // (If you want “block you’re looking at”, we can raycast later.)
         return src.playerOrThrow.blockPos
     }
 
     private fun currentWorldKey(src: ServerCommandSource) = src.world.registryKey
 
     private fun currentGameTime(src: ServerCommandSource): Long {
-        // If this ever fails due to mapping differences, change to:
-        // src.world.getTime()
         return src.world.time
     }
 
@@ -285,10 +282,42 @@ object Commands {
     }
 
     private fun cmdInfo(src: ServerCommandSource): Int {
-        val worldKey = currentWorldKey(src)
         val now = currentGameTime(src)
-        val count = MementoAnchors.list().size
-        src.sendFeedback({ Text.literal("Memento debug: world=${fmtDim(worldKey)} time=$now anchors=$count") }, false)
+        val anchorCount = MementoAnchors.list().size
+
+        val reports = ChunkInspection.inspectAll(src.server)
+        val forgettableCount = reports.size
+
+        src.sendFeedback(
+            { Text.literal("Memento info: time=$now anchors=$anchorCount forgettableChunks=$forgettableCount") },
+            false
+        )
+
+        if (reports.isEmpty()) {
+            src.sendFeedback({ Text.literal("No forgettable chunks (no FORGET anchors).") }, false)
+            return 1
+        }
+
+        val byDim = reports.groupBy { it.dimension }
+        for ((dim, dimReports) in byDim) {
+            src.sendFeedback({ Text.literal("Dimension: ${fmtDim(dim)} (${dimReports.size})") }, false)
+            for (r in dimReports) {
+                val base = "- chunk=(${r.pos.x}, ${r.pos.z}) ${if (r.isLoaded) "LOADED" else "UNLOADED"} | ${r.summary}"
+                src.sendFeedback({ Text.literal(base) }, false)
+
+                if (r.blockers.isNotEmpty()) {
+                    for (b in r.blockers) {
+                        src.sendFeedback({ Text.literal("    • ${b.kind.name.lowercase()}: ${b.details}") }, false)
+                    }
+                }
+            }
+        }
+
+        src.sendFeedback(
+            { Text.literal("Note: this report is best-effort. If a chunk remains loaded with no obvious blockers, it is likely waiting for server eviction.") },
+            false
+        )
+
         return 1
     }
 
