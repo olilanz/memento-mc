@@ -90,7 +90,7 @@ object MementoPersistence {
             val y = o.get("y")?.asInt ?: continue
             val z = o.get("z")?.asInt ?: continue
 
-            val radius = o.get("radius")?.asInt ?: MementoAnchors.DEFAULT_RADIUS
+            val radius = o.get("radius")?.asInt ?: MementoConstants.DEFAULT_RADIUS_CHUNKS
             val days = if (o.has("days") && !o.get("days").isJsonNull) o.get("days").asInt else null
             val created = o.get("createdGameTime")?.asLong ?: 0L
 
