@@ -1,6 +1,6 @@
 package ch.oliverlanz.memento.chunkutils
 
-import ch.oliverlanz.memento.MementoAnchors
+import ch.oliverlanz.memento.chunkutils.ChunkGroupForgetting
 import net.minecraft.registry.RegistryKey
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
@@ -21,9 +21,10 @@ object ChunkForgetPredicate {
         dimension: RegistryKey<World>,
         chunkPos: ChunkPos
     ): Boolean {
-        // For the current slice: only the *exact* anchor chunk is forgettable.
-        // Radius/days come later.
-        val forget = MementoAnchors.shouldForgetExactChunk(dimension, chunkPos)
+        // The actual regeneration decision is controlled by the group executor.
+        // Only chunks that are actively part of a renewal execution are forgotten.
+        // (This prevents partial regeneration while a group is still waiting to become fully unloaded.)
+        val forget = ChunkGroupForgetting.shouldForgetNow(dimension, chunkPos)
 
         if (forget) {
             val key = "${dimension.value}:" + chunkPos.toLong()

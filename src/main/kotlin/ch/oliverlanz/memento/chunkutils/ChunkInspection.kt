@@ -1,6 +1,6 @@
 package ch.oliverlanz.memento.chunkutils
 
-import ch.oliverlanz.memento.MementoAnchors
+import ch.oliverlanz.memento.chunkutils.ChunkGroupForgetting
 import net.minecraft.entity.Entity
 import net.minecraft.entity.EntityType
 import net.minecraft.entity.ItemEntity
@@ -48,13 +48,14 @@ object ChunkInspection {
 
     /**
      * For the current slice, "forgettable" means:
-     * the exact chunk containing a FORGET anchor.
+     * the chunks that belong to eligible (due) forget-groups.
      */
     fun listForgettableChunks(): List<Pair<RegistryKey<World>, ChunkPos>> {
         val unique = LinkedHashSet<Pair<RegistryKey<World>, ChunkPos>>()
-        for (a in MementoAnchors.list()) {
-            if (a.kind != MementoAnchors.Kind.FORGET) continue
-            unique.add(a.dimension to ChunkPos(a.pos))
+        for (g in ChunkGroupForgetting.snapshotEligibleGroups()) {
+            for (pos in g.chunks) {
+                unique.add(g.dimension to pos)
+            }
         }
         return unique.toList()
     }

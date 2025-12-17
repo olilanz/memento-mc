@@ -5,7 +5,6 @@ import net.minecraft.util.math.BlockPos
 import net.minecraft.world.World
 
 import net.minecraft.util.math.ChunkPos
-import kotlin.math.abs
 
 object MementoAnchors {
 
@@ -81,6 +80,42 @@ object MementoAnchors {
     }
 
     /**
+     * Compute all chunks within a circular radius around an anchor position.
+     *
+     * Radius semantics (locked for this slice):
+     * - radius is given in *chunks* (1 == 16 blocks)
+     * - a chunk is included if its *center* is within the radius from the anchor position
+     *
+     * We use this for anchor-based chunk groups.
+     */
+    fun computeChunksInRadius(anchorPos: BlockPos, radiusChunks: Int): Set<ChunkPos> {
+        val radiusBlocks = radiusChunks * 16.0
+        val radiusSq = radiusBlocks * radiusBlocks
+
+        val anchorX = anchorPos.x.toDouble()
+        val anchorZ = anchorPos.z.toDouble()
+
+        val anchorChunkX = anchorPos.x shr 4
+        val anchorChunkZ = anchorPos.z shr 4
+
+        val result = LinkedHashSet<ChunkPos>()
+
+        // Bounding square in chunk space, then filter by circle distance using chunk centers.
+        for (cx in (anchorChunkX - radiusChunks)..(anchorChunkX + radiusChunks)) {
+            for (cz in (anchorChunkZ - radiusChunks)..(anchorChunkZ + radiusChunks)) {
+                val centerX = (cx * 16 + 8).toDouble()
+                val centerZ = (cz * 16 + 8).toDouble()
+                val dx = centerX - anchorX
+                val dz = centerZ - anchorZ
+                if ((dx * dx + dz * dz) <= radiusSq) {
+                    result.add(ChunkPos(cx, cz))
+                }
+            }
+        }
+        return result
+    }
+
+    /**
      * Returns true if there exists a FORGET anchor whose radius
      * covers the given chunk in the given dimension.
      *
@@ -101,13 +136,17 @@ object MementoAnchors {
         anchor: Anchor,
         chunkPos: ChunkPos
     ): Boolean {
-        val anchorChunkX = anchor.pos.x shr 4
-        val anchorChunkZ = anchor.pos.z shr 4
+        // Reuse the same semantics as the group builder.
+        // This method is not currently used for regeneration, but it is an authoritative
+        // "coverage" check for future slices.
+        val radiusBlocks = anchor.radius * 16.0
+        val radiusSq = radiusBlocks * radiusBlocks
 
-        val dx = abs(anchorChunkX - chunkPos.x)
-        val dz = abs(anchorChunkZ - chunkPos.z)
+        val centerX = (chunkPos.x * 16 + 8).toDouble()
+        val centerZ = (chunkPos.z * 16 + 8).toDouble()
+        val dx = centerX - anchor.pos.x.toDouble()
+        val dz = centerZ - anchor.pos.z.toDouble()
 
-        // radius is defined in chunks
-        return dx <= anchor.radius && dz <= anchor.radius
+        return (dx * dx + dz * dz) <= radiusSq
     }
 }

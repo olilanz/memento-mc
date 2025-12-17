@@ -1,6 +1,8 @@
 package ch.oliverlanz.memento
 
+import ch.oliverlanz.memento.chunkutils.ChunkLoading
 import ch.oliverlanz.memento.chunkutils.ChunkInspection
+import ch.oliverlanz.memento.chunkutils.ChunkGroupForgetting
 import com.mojang.brigadier.CommandDispatcher
 import com.mojang.brigadier.arguments.IntegerArgumentType
 import com.mojang.brigadier.arguments.StringArgumentType
@@ -285,16 +287,31 @@ object Commands {
         val now = currentGameTime(src)
         val anchorCount = MementoAnchors.list().size
 
+        val groups = ChunkGroupForgetting.snapshotEligibleGroups()
         val reports = ChunkInspection.inspectAll(src.server)
         val forgettableCount = reports.size
 
-        src.sendFeedback(
-            { Text.literal("Memento info: time=$now anchors=$anchorCount forgettableChunks=$forgettableCount") },
-            false
-        )
+        src.sendFeedback({ Text.literal(
+            "Memento info: time=$now anchors=$anchorCount eligibleGroups=${groups.size} groupChunks=$forgettableCount"
+        ) }, false)
+
+        // Group-level summary. This keeps the report readable and explains why a renewal is waiting.
+        for (g in groups) {
+            val world = src.server.getWorld(g.dimension)
+            val loadedCount = if (world == null) {
+                -1
+            } else {
+                g.chunks.count { ChunkLoading.isChunkLoadedBestEffort(world, it) }
+            }
+
+            val loadedText = if (loadedCount < 0) "dimension not loaded" else "loadedChunks=$loadedCount"
+            src.sendFeedback({ Text.literal(
+                "Eligible group: anchor='${g.anchorName}' dim=${fmtDim(g.dimension)} r=${g.radiusChunks} chunks=${g.chunks.size} $loadedText"
+            ) }, false)
+        }
 
         if (reports.isEmpty()) {
-            src.sendFeedback({ Text.literal("No forgettable chunks (no FORGET anchors).") }, false)
+            src.sendFeedback({ Text.literal("No queued chunks for renewal.") }, false)
             return 1
         }
 
