@@ -31,9 +31,6 @@ import net.minecraft.world.World
  */
 object Commands {
 
-    private const val DEFAULT_RADIUS = 5
-    private const val DEFAULT_DAYS = 5
-
     fun register() {
         CommandRegistrationCallback.EVENT.register(
             CommandRegistrationCallback { dispatcher, _, _ ->
@@ -45,7 +42,8 @@ object Commands {
     private fun register(dispatcher: CommandDispatcher<ServerCommandSource>) {
         dispatcher.register(
             literal("memento")
-                .requires { it.hasPermissionLevel(2) }
+                // Commands are operator-only. Using a constant makes it easy to tune later.
+                .requires { it.hasPermissionLevel(MementoConstants.REQUIRED_OP_LEVEL) }
                 .then(anchorTree())
                 .then(releaseTree())
                 .then(literal("list").executes { ctx -> cmdList(ctx.source) })
@@ -68,7 +66,7 @@ object Commands {
                         val src = ctx.source
                         val name = StringArgumentType.getString(ctx, "name")
                         val pos = defaultPos(src)
-                        cmdAnchorRemember(src, name, pos, DEFAULT_RADIUS)
+                        cmdAnchorRemember(src, name, pos, MementoConstants.DEFAULT_RADIUS_CHUNKS)
                     }
                     .then(
                         argument("radius", IntegerArgumentType.integer(1, 256))
@@ -96,7 +94,7 @@ object Commands {
                                 val src = ctx.source
                                 val name = StringArgumentType.getString(ctx, "name")
                                 val pos = BlockPosArgumentType.getBlockPos(ctx, "pos")
-                                cmdAnchorRemember(src, name, pos, DEFAULT_RADIUS)
+                                cmdAnchorRemember(src, name, pos, MementoConstants.DEFAULT_RADIUS_CHUNKS)
                             }
                     )
             )
@@ -109,7 +107,13 @@ object Commands {
                         val src = ctx.source
                         val name = StringArgumentType.getString(ctx, "name")
                         val pos = defaultPos(src)
-                        cmdAnchorForget(src, name, pos, DEFAULT_RADIUS, DEFAULT_DAYS)
+                        cmdAnchorForget(
+                            src,
+                            name,
+                            pos,
+                            MementoConstants.DEFAULT_RADIUS_CHUNKS,
+                            MementoConstants.DEFAULT_FORGET_DAYS
+                        )
                     }
                     .then(
                         argument("radius", IntegerArgumentType.integer(1, 256))
@@ -118,7 +122,7 @@ object Commands {
                                 val name = StringArgumentType.getString(ctx, "name")
                                 val radius = IntegerArgumentType.getInteger(ctx, "radius")
                                 val pos = defaultPos(src)
-                                cmdAnchorForget(src, name, pos, radius, DEFAULT_DAYS)
+                                cmdAnchorForget(src, name, pos, radius, MementoConstants.DEFAULT_FORGET_DAYS)
                             }
                             .then(
                                 argument("days", IntegerArgumentType.integer(-1, 3650))
@@ -149,7 +153,7 @@ object Commands {
                                         val name = StringArgumentType.getString(ctx, "name")
                                         val radius = IntegerArgumentType.getInteger(ctx, "radius")
                                         val pos = BlockPosArgumentType.getBlockPos(ctx, "pos")
-                                        cmdAnchorForget(src, name, pos, radius, DEFAULT_DAYS)
+                                        cmdAnchorForget(src, name, pos, radius, MementoConstants.DEFAULT_FORGET_DAYS)
                                     }
                             )
                     )
@@ -160,7 +164,7 @@ object Commands {
                                 val name = StringArgumentType.getString(ctx, "name")
                                 val days = IntegerArgumentType.getInteger(ctx, "days")
                                 val pos = defaultPos(src)
-                                cmdAnchorForget(src, name, pos, DEFAULT_RADIUS, days)
+                                cmdAnchorForget(src, name, pos, MementoConstants.DEFAULT_RADIUS_CHUNKS, days)
                             }
                             .then(
                                 argument("pos", BlockPosArgumentType.blockPos())
@@ -169,7 +173,7 @@ object Commands {
                                         val name = StringArgumentType.getString(ctx, "name")
                                         val days = IntegerArgumentType.getInteger(ctx, "days")
                                         val pos = BlockPosArgumentType.getBlockPos(ctx, "pos")
-                                        cmdAnchorForget(src, name, pos, DEFAULT_RADIUS, days)
+                                        cmdAnchorForget(src, name, pos, MementoConstants.DEFAULT_RADIUS_CHUNKS, days)
                                     }
                             )
                     )
@@ -179,7 +183,13 @@ object Commands {
                                 val src = ctx.source
                                 val name = StringArgumentType.getString(ctx, "name")
                                 val pos = BlockPosArgumentType.getBlockPos(ctx, "pos")
-                                cmdAnchorForget(src, name, pos, DEFAULT_RADIUS, DEFAULT_DAYS)
+                        cmdAnchorForget(
+                            src,
+                            name,
+                            pos,
+                            MementoConstants.DEFAULT_RADIUS_CHUNKS,
+                            MementoConstants.DEFAULT_FORGET_DAYS
+                        )
                             }
                     )
             )
@@ -222,6 +232,12 @@ object Commands {
         MementoAnchors.addOrReplace(anchor)
         MementoPersistence.save(src.server)
 
+        // Lifecycle visibility for in-game testing.
+        MementoDebug.info(
+            src.server,
+            "Anchor set (lorestone/remember): name='$name' dim=${fmtDim(worldKey)} pos=${fmtPos(pos)} r=$radius"
+        )
+
         src.sendFeedback({ Text.literal("Anchored REMEMBER '$name' at ${fmtPos(pos)} r=$radius in ${fmtDim(worldKey)}") }, false)
         return 1
     }
@@ -243,6 +259,12 @@ object Commands {
         MementoAnchors.addOrReplace(anchor)
         MementoPersistence.save(src.server)
 
+        // Lifecycle visibility for in-game testing.
+        MementoDebug.info(
+            src.server,
+            "Anchor set (witherstone/forget): name='$name' dim=${fmtDim(worldKey)} pos=${fmtPos(pos)} r=$radius days=$days"
+        )
+
         val daysText = if (days == -1) "days=-1" else "days=$days"
         src.sendFeedback({ Text.literal("Anchored FORGET '$name' at ${fmtPos(pos)} r=$radius $daysText in ${fmtDim(worldKey)}") }, false)
         return 1
@@ -252,6 +274,7 @@ object Commands {
         val removed = MementoAnchors.remove(name)
         if (removed) {
             MementoPersistence.save(src.server)
+            MementoDebug.info(src.server, "Anchor released: name='$name'")
             src.sendFeedback({ Text.literal("Released anchor '$name'") }, false)
             return 1
         }
@@ -271,7 +294,7 @@ object Commands {
             val days = when (a.kind) {
                 MementoAnchors.Kind.REMEMBER -> ""
                 MementoAnchors.Kind.FORGET -> {
-                    val d = a.days ?: DEFAULT_DAYS
+                    val d = a.days ?: MementoConstants.DEFAULT_FORGET_DAYS
                     if (d == -1) " days=-1" else " days=$d"
                 }
             }

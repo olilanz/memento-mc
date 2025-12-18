@@ -8,9 +8,6 @@ import net.minecraft.util.math.ChunkPos
 
 object MementoAnchors {
 
-    const val DEFAULT_RADIUS: Int = 5
-    const val DEFAULT_DAYS: Int = 5
-
     enum class Kind { REMEMBER, FORGET }
 
     data class Anchor(
@@ -62,10 +59,11 @@ object MementoAnchors {
     }
 
     /**
-     * Current experiment slice:
-     * Only the chunk that *contains* the FORGET anchor itself is forgettable.
+     * Legacy helper used during early experiments.
      *
-     * (Radius/days/heatmaps come later.)
+     * The current model uses anchor-based *chunk groups* (radius) and an
+     * execution gate that waits until all chunks in a group are unloaded.
+     * This function is kept for reference and for possible future test cases.
      */
     fun shouldForgetExactChunk(
         dimension: RegistryKey<World>,

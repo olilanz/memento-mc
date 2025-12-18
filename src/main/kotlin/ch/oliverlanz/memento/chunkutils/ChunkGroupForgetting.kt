@@ -1,6 +1,7 @@
 package ch.oliverlanz.memento.chunkutils
 
 import ch.oliverlanz.memento.MementoAnchors
+import ch.oliverlanz.memento.MementoDebug
 import ch.oliverlanz.memento.MementoPersistence
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
@@ -9,7 +10,6 @@ import net.minecraft.util.math.BlockPos
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
 import net.minecraft.world.chunk.ChunkStatus
-import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -27,8 +27,6 @@ import java.util.concurrent.ConcurrentHashMap
  * - Lorestone protection and world-edge GC are explicitly out-of-scope for this slice.
  */
 object ChunkGroupForgetting {
-
-    private val logger = LoggerFactory.getLogger("memento")
 
     /**
      * We identify groups by their originating anchor name.
@@ -74,7 +72,8 @@ object ChunkGroupForgetting {
         }
 
         if (eligibleGroups.isNotEmpty()) {
-            logger.info("(memento) Rebuilt eligible forgetting queue: {} group(s)", eligibleGroups.size)
+            // High-signal lifecycle information: helps follow the system in-game during testing.
+            MementoDebug.info(server, "Rebuilt eligible forgetting queue: ${eligibleGroups.size} group(s)")
         }
     }
 
@@ -86,6 +85,7 @@ object ChunkGroupForgetting {
      */
     fun ageAnchorsOnce(server: MinecraftServer) {
         var changed = false
+        var dueCount = 0
 
         val updated = MementoAnchors.list().map { a ->
             if (a.kind != MementoAnchors.Kind.FORGET) return@map a
@@ -100,12 +100,10 @@ object ChunkGroupForgetting {
             if (newDays == 0) {
                 val group = deriveGroup(a)
                 eligibleGroups[a.name] = group
-                logger.info(
-                    "(memento) Witherstone '{}' is due: queued group (dim={}, radiusChunks={}, chunks={}).",
-                    a.name,
-                    a.dimension.value,
-                    a.radius,
-                    group.chunks.size
+                dueCount++
+                MementoDebug.info(
+                    server,
+                    "Witherstone '${a.name}' is due: queued group (dim=${a.dimension.value}, radiusChunks=${a.radius}, chunks=${group.chunks.size})"
                 )
             }
 
@@ -116,6 +114,9 @@ object ChunkGroupForgetting {
             MementoAnchors.putAll(updated)
             // Persist anchor countdown changes.
             MementoPersistence.save(server)
+            if (dueCount > 0) {
+                MementoDebug.info(server, "Nightly aging complete: $dueCount group(s) became due")
+            }
         }
     }
 
@@ -144,6 +145,16 @@ object ChunkGroupForgetting {
         if (eligibleGroups.isEmpty()) return
         for (g in eligibleGroups.values) {
             val world = server.getWorld(g.dimension) ?: continue
+            // This sweep is intentionally lightweight and runs rarely (startup + once per Overworld day).
+            // It helps answer "why is nothing happening?" without spamming the chat on every tick.
+            val loadedCount = g.chunks.count { ChunkLoading.isChunkLoadedBestEffort(world, it) }
+            if (loadedCount > 0) {
+                MementoDebug.info(
+                    server,
+                    "Chunk group waiting: anchor='${g.anchorName}' dim=${g.dimension.value} loadedChunks=$loadedCount/${g.chunks.size}"
+                )
+            }
+
             tryExecuteIfReady(server, world, g)
         }
     }
@@ -183,11 +194,10 @@ object ChunkGroupForgetting {
     }
 
     private fun executeGroup(server: MinecraftServer, world: ServerWorld, group: Group) {
-        logger.info(
-            "(memento) Renewing chunk group for witherstone '{}' (dim={}, chunks={}).",
-            group.anchorName,
-            group.dimension.value,
-            group.chunks.size
+        // Lifecycle: the moment we actively trigger regeneration. This should be visible to ops.
+        MementoDebug.warn(
+            server,
+            "Renewing chunk group for witherstone '${group.anchorName}' (dim=${group.dimension.value}, chunks=${group.chunks.size})"
         )
 
         // Mark all chunks as forgotten *before* we load them.
@@ -201,13 +211,9 @@ object ChunkGroupForgetting {
                 world.chunkManager.getChunk(pos.x, pos.z, ChunkStatus.FULL, true)
             } catch (t: Throwable) {
                 // Best effort: if one chunk fails to load, we keep the group queued and try later.
-                logger.warn(
-                    "(memento) Failed to load chunk during group renewal: dim={}, chunk=({}, {}), anchor='{}': {}",
-                    group.dimension.value,
-                    pos.x,
-                    pos.z,
-                    group.anchorName,
-                    t.toString()
+                MementoDebug.warn(
+                    server,
+                    "Failed to load chunk during group renewal: dim=${group.dimension.value} chunk=(${pos.x}, ${pos.z}) anchor='${group.anchorName}' (${t})"
                 )
                 return
             }
@@ -222,7 +228,7 @@ object ChunkGroupForgetting {
         MementoAnchors.remove(group.anchorName)
         MementoPersistence.save(server)
 
-        logger.info("(memento) Completed renewal for witherstone '{}'. Anchor removed.", group.anchorName)
+        MementoDebug.info(server, "Chunk group forgotten; anchor removed: '${group.anchorName}'")
     }
 
     private fun markActiveForget(group: Group) {
