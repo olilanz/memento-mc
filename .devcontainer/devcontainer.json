@@ -1,0 +1,29 @@
+{
+  "name": "Memento Fabric Dev",
+  "image": "mcr.microsoft.com/devcontainers/java:21",
+  "features": {},
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "vscjava.vscode-java-pack",
+        "fwcd.kotlin",
+        "ms-azuretools.vscode-docker"
+      ]
+    }
+  },
+  "forwardPorts": [25565, 5005],
+  "portsAttributes": {
+    "25565": {
+      "label": "Minecraft Server"
+    },
+    "5005": {
+      "label": "JVM Debug"
+    }
+  },
+  "mounts": [
+    "source=memento-gradle-cache,target=/home/vscode/.gradle,type=volume"
+  ],
+  "remoteUser": "vscode",
+  "updateRemoteUserUID": true,
+  "postCreateCommand": "./gradlew --version"
+}
