@@ -310,12 +310,12 @@ object Commands {
         val now = currentGameTime(src)
         val anchorCount = MementoAnchors.list().size
 
-        val groups = ChunkGroupForgetting.snapshotEligibleGroups()
+        val groups = ChunkGroupForgetting.snapshotMarkedGroups()
         val reports = ChunkInspection.inspectAll(src.server)
         val forgettableCount = reports.size
 
         src.sendFeedback({ Text.literal(
-            "Memento info: time=$now anchors=$anchorCount eligibleGroups=${groups.size} groupChunks=$forgettableCount"
+            "Memento info: time=$now anchors=$anchorCount markedGroups=${groups.size} groupChunks=$forgettableCount"
         ) }, false)
 
         // Group-level summary. This keeps the report readable and explains why a renewal is waiting.
@@ -334,7 +334,7 @@ object Commands {
         }
 
         if (reports.isEmpty()) {
-            src.sendFeedback({ Text.literal("No queued chunks for renewal.") }, false)
+            src.sendFeedback({ Text.literal("No land is currently marked for forgetting.") }, false)
             return 1
         }
 

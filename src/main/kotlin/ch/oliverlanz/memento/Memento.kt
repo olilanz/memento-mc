@@ -26,14 +26,15 @@ object Memento : ModInitializer {
             // Initialize the "once per world day" marker. If we don't have persisted state yet,
             // we start from the current Overworld day to avoid an immediate decrement on startup.
             val overworld = server.getWorld(World.OVERWORLD)
-            val currentDay = overworld?.time?.div(MementoConstants.OVERWORLD_DAY_TICKS) ?: -1L
+            // Use *timeOfDay* (not game time) so sleeping and /time set advance the day index.
+            val currentDay = overworld?.timeOfDay?.div(MementoConstants.OVERWORLD_DAY_TICKS) ?: -1L
             if (MementoState.get().lastProcessedOverworldDay < 0 && currentDay >= 0) {
                 MementoState.set(MementoState.State(lastProcessedOverworldDay = currentDay))
                 MementoState.save(server)
             }
 
-            // Rebuild the eligible group queue from persisted anchors.
-            ChunkGroupForgetting.rebuildEligibleGroups(server)
+            // Rebuild the marked land set from persisted anchors.
+            ChunkGroupForgetting.rebuildMarkedGroups(server)
             // Some groups may already be fully unloaded. Sweep once to execute immediately.
             ChunkGroupForgetting.sweep(server)
             MementoDebug.info(server, "Loaded ${MementoAnchors.list().size} anchors")
@@ -50,11 +51,11 @@ object Memento : ModInitializer {
         // Design rationale:
         // - Players can sleep and ops can use /time set, which may jump time.
         // - For algorithmic simplicity we treat "day" as the Overworld day index
-        //   (world.time / OVERWORLD_DAY_TICKS).
+        //   (world.timeOfDay / OVERWORLD_DAY_TICKS).
         // - If the day index advances, we age anchors exactly once.
         ServerTickEvents.END_SERVER_TICK.register(ServerTickEvents.EndTick { server ->
             val overworld = server.getWorld(World.OVERWORLD) ?: return@EndTick
-            val dayIndex = overworld.time / MementoConstants.OVERWORLD_DAY_TICKS
+            val dayIndex = overworld.timeOfDay / MementoConstants.OVERWORLD_DAY_TICKS
             val last = MementoState.get().lastProcessedOverworldDay
 
             if (last >= 0 && dayIndex > last) {
@@ -63,32 +64,28 @@ object Memento : ModInitializer {
                 MementoState.set(MementoState.State(lastProcessedOverworldDay = dayIndex))
                 MementoState.save(server)
 
-                // After aging, some groups may become due. Attempt execution for those already unloaded.
+                // After aging, some Witherstones may mature. Attempt execution for those already unloaded.
                 ChunkGroupForgetting.sweep(server)
             }
         })
 
-        // Observability.
-        ServerChunkEvents.CHUNK_LOAD.register(ServerChunkEvents.Load { world: ServerWorld, chunk: WorldChunk ->
-            val pos = chunk.pos
-            if (ChunkGroupForgetting.isQueued(world.registryKey, pos)) {
-                MementoDebug.info(
-                    world.server,
-                    "Chunk loaded and queued for renewal: dim=${world.registryKey.value} chunk=(${pos.x}, ${pos.z})"
-                )
-            }
+        // Chunk lifecycle triggers.
+        //
+        // The mod is intentionally event-driven:
+        // - day change marks land for forgetting (Witherstone maturity)
+        // - chunk unload is the natural trigger to check whether marked land has become free
+        //
+        // We still subscribe to CHUNK_LOAD/CHUNK_UNLOAD so future observability can be added
+        // without touching wiring. At the moment we keep OP chat high-signal and do not narrate
+        // per-chunk load/unload noise.
+
+        ServerChunkEvents.CHUNK_LOAD.register(ServerChunkEvents.Load { _, _ ->
+            // Intentionally no-op (observability hook only).
         })
 
         ServerChunkEvents.CHUNK_UNLOAD.register(ServerChunkEvents.Unload { world: ServerWorld, chunk: WorldChunk ->
             val pos: ChunkPos = chunk.pos
-            if (ChunkGroupForgetting.isQueued(world.registryKey, pos)) {
-                MementoDebug.info(
-                    world.server,
-                    "Chunk unloaded and queued for renewal: dim=${world.registryKey.value} chunk=(${pos.x}, ${pos.z})"
-                )
-            }
-
-            // Unload-trigger: every unload is a chance for a queued group to become eligible.
+            // Unload-trigger: every unload is a chance for marked land to become free for forgetting.
             ChunkGroupForgetting.onChunkUnloaded(world.server, world, pos)
         })
     }

@@ -18,12 +18,12 @@ import java.util.concurrent.ConcurrentHashMap
  * This slice intentionally keeps the model simple and predictable:
  * - Witherstone (FORGET) anchors carry a days counter (no per-anchor timestamps).
  * - Once per Overworld day we decrement days by 1.
- * - When an anchor reaches days==0, we derive a chunk group (radius) and queue it.
+ * - When a Witherstone reaches days==0, it has matured: we derive its land group and mark it for forgetting.
  * - Groups execute only when *all* their chunks are currently unloaded.
  * - Execution is triggered by chunk unload events (plus a lightweight sweep).
  *
  * Notes:
- * - The group queue is ephemeral and can be rebuilt on server start.
+ * - The marked land set is ephemeral and can be rebuilt on server start.
  * - Lorestone protection and world-edge GC are explicitly out-of-scope for this slice.
  */
 object ChunkGroupForgetting {
@@ -40,8 +40,8 @@ object ChunkGroupForgetting {
         val chunks: Set<ChunkPos>
     )
 
-    // Eligible groups waiting for execution. Ephemeral.
-    private val eligibleGroups = ConcurrentHashMap<String, Group>()
+    // Land groups marked for forgetting, waiting for execution. Ephemeral.
+    private val markedGroups = ConcurrentHashMap<String, Group>()
 
     // Active chunk forget marks used by the VersionedChunkStorage mixin.
     // Keyed by "dimensionId:chunkLong".
@@ -50,14 +50,14 @@ object ChunkGroupForgetting {
     // Guard against re-entrant execution.
     private val executingGroups = ConcurrentHashMap.newKeySet<String>()
 
-    fun snapshotEligibleGroups(): List<Group> = eligibleGroups.values.sortedBy { it.anchorName.lowercase() }
+    fun snapshotMarkedGroups(): List<Group> = markedGroups.values.sortedBy { it.anchorName.lowercase() }
 
     /**
      * Called on SERVER_STARTED after anchors are loaded.
-     * Rebuilds the eligible queue from anchors whose days already reached 0.
+     * Rebuilds the marked set from anchors whose days already reached 0.
      */
-    fun rebuildEligibleGroups(server: MinecraftServer) {
-        eligibleGroups.clear()
+    fun rebuildMarkedGroups(server: MinecraftServer) {
+        markedGroups.clear()
         executingGroups.clear()
         activeForgetChunks.clear()
 
@@ -68,12 +68,12 @@ object ChunkGroupForgetting {
             if (days != 0) continue
 
             val group = deriveGroup(a)
-            eligibleGroups[a.name] = group
+            markedGroups[a.name] = group
         }
 
-        if (eligibleGroups.isNotEmpty()) {
+        if (markedGroups.isNotEmpty()) {
             // High-signal lifecycle information: helps follow the system in-game during testing.
-            MementoDebug.info(server, "Rebuilt eligible forgetting queue: ${eligibleGroups.size} group(s)")
+            MementoDebug.info(server, "Rebuilt marked land set for forgetting: ${markedGroups.size} group(s)")
         }
     }
 
@@ -85,7 +85,7 @@ object ChunkGroupForgetting {
      */
     fun ageAnchorsOnce(server: MinecraftServer) {
         var changed = false
-        var dueCount = 0
+        var maturedCount = 0
 
         val updated = MementoAnchors.list().map { a ->
             if (a.kind != MementoAnchors.Kind.FORGET) return@map a
@@ -96,14 +96,22 @@ object ChunkGroupForgetting {
             val newDays = days - 1
             changed = true
 
-            // When we hit zero, enqueue the group immediately.
+            // High-signal observability: show the time-to-maturity countdown as it progresses.
+            // This runs at most once per Overworld day.
+            MementoDebug.info(
+                server,
+                "Witherstone '${a.name}' is maturing: $newDays day(s) remaining (dim=${a.dimension.value}, pos=${a.pos.x},${a.pos.y},${a.pos.z})"
+            )
+
+            // When we hit zero, the Witherstone has matured: mark its land immediately.
             if (newDays == 0) {
                 val group = deriveGroup(a)
-                eligibleGroups[a.name] = group
-                dueCount++
+                markedGroups[a.name] = group
+                maturedCount++
+                MementoDebug.warn(server, "Witherstone '${a.name}' has matured")
                 MementoDebug.info(
                     server,
-                    "Witherstone '${a.name}' is due: queued group (dim=${a.dimension.value}, radiusChunks=${a.radius}, chunks=${group.chunks.size})"
+                    "The surrounding land is marked for forgetting (dim=${a.dimension.value}, radiusChunks=${a.radius}, chunks=${group.chunks.size})"
                 )
             }
 
@@ -114,8 +122,8 @@ object ChunkGroupForgetting {
             MementoAnchors.putAll(updated)
             // Persist anchor countdown changes.
             MementoPersistence.save(server)
-            if (dueCount > 0) {
-                MementoDebug.info(server, "Nightly aging complete: $dueCount group(s) became due")
+            if (maturedCount > 0) {
+                MementoDebug.info(server, "Daily maturation complete: $maturedCount witherstone(s) matured")
             }
         }
     }
@@ -126,10 +134,10 @@ object ChunkGroupForgetting {
      * that the server is actually releasing memory (no need for polling/retries).
      */
     fun onChunkUnloaded(server: MinecraftServer, world: ServerWorld, chunkPos: ChunkPos) {
-        if (eligibleGroups.isEmpty()) return
+        if (markedGroups.isEmpty()) return
 
         // Only groups in the same dimension can be affected.
-        val candidates = eligibleGroups.values.filter { it.dimension == world.registryKey && it.chunks.contains(chunkPos) }
+        val candidates = markedGroups.values.filter { it.dimension == world.registryKey && it.chunks.contains(chunkPos) }
         if (candidates.isEmpty()) return
 
         for (g in candidates) {
@@ -142,8 +150,8 @@ object ChunkGroupForgetting {
      * waiting for the next unload event (e.g. after server start or after nightly aging).
      */
     fun sweep(server: MinecraftServer) {
-        if (eligibleGroups.isEmpty()) return
-        for (g in eligibleGroups.values) {
+        if (markedGroups.isEmpty()) return
+        for (g in markedGroups.values) {
             val world = server.getWorld(g.dimension) ?: continue
             // This sweep is intentionally lightweight and runs rarely (startup + once per Overworld day).
             // It helps answer "why is nothing happening?" without spamming the chat on every tick.
@@ -151,7 +159,7 @@ object ChunkGroupForgetting {
             if (loadedCount > 0) {
                 MementoDebug.info(
                     server,
-                    "Chunk group waiting: anchor='${g.anchorName}' dim=${g.dimension.value} loadedChunks=$loadedCount/${g.chunks.size}"
+                    "The land cannot be forgotten yet: some affected chunks are still loaded (anchor='${g.anchorName}' dim=${g.dimension.value} loadedChunks=$loadedCount/${g.chunks.size})"
                 )
             }
 
@@ -169,14 +177,14 @@ object ChunkGroupForgetting {
     }
 
     /**
-     * True if the chunk is part of a currently eligible (due) group.
+     * True if the chunk is part of a currently marked (matured) group.
      * This is used for sober observability logs and /memento info output.
      *
      * Note: this is not used for regeneration decisions. Those are controlled by
      * [shouldForgetNow] during an active group execution.
      */
-    fun isQueued(dimension: RegistryKey<World>, pos: ChunkPos): Boolean {
-        return eligibleGroups.values.any { it.dimension == dimension && it.chunks.contains(pos) }
+    fun isMarked(dimension: RegistryKey<World>, pos: ChunkPos): Boolean {
+        return markedGroups.values.any { it.dimension == dimension && it.chunks.contains(pos) }
     }
 
     private fun tryExecuteIfReady(server: MinecraftServer, world: ServerWorld, group: Group) {
@@ -197,7 +205,7 @@ object ChunkGroupForgetting {
         // Lifecycle: the moment we actively trigger regeneration. This should be visible to ops.
         MementoDebug.warn(
             server,
-            "Renewing chunk group for witherstone '${group.anchorName}' (dim=${group.dimension.value}, chunks=${group.chunks.size})"
+            "The land is being forgotten for witherstone '${group.anchorName}' (dim=${group.dimension.value}, chunks=${group.chunks.size})"
         )
 
         // Mark all chunks as forgotten *before* we load them.
@@ -210,7 +218,7 @@ object ChunkGroupForgetting {
             try {
                 world.chunkManager.getChunk(pos.x, pos.z, ChunkStatus.FULL, true)
             } catch (t: Throwable) {
-                // Best effort: if one chunk fails to load, we keep the group queued and try later.
+                // Best effort: if one chunk fails to load, we keep the group marked and try later.
                 MementoDebug.warn(
                     server,
                     "Failed to load chunk during group renewal: dim=${group.dimension.value} chunk=(${pos.x}, ${pos.z}) anchor='${group.anchorName}' (${t})"
@@ -224,11 +232,11 @@ object ChunkGroupForgetting {
         unmarkActiveForget(group)
 
         // Forgetting a group also removes the source anchor.
-        eligibleGroups.remove(group.anchorName)
+        markedGroups.remove(group.anchorName)
         MementoAnchors.remove(group.anchorName)
         MementoPersistence.save(server)
 
-        MementoDebug.info(server, "Chunk group forgotten; anchor removed: '${group.anchorName}'")
+        MementoDebug.info(server, "The land has renewed; witherstone consumed: '${group.anchorName}'")
     }
 
     private fun markActiveForget(group: Group) {

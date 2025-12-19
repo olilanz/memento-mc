@@ -48,11 +48,11 @@ object ChunkInspection {
 
     /**
      * For the current slice, "forgettable" means:
-     * the chunks that belong to eligible (due) forget-groups.
+     * the chunks that belong to land groups marked for forgetting (from matured Witherstones).
      */
     fun listForgettableChunks(): List<Pair<RegistryKey<World>, ChunkPos>> {
         val unique = LinkedHashSet<Pair<RegistryKey<World>, ChunkPos>>()
-        for (g in ChunkGroupForgetting.snapshotEligibleGroups()) {
+        for (g in ChunkGroupForgetting.snapshotMarkedGroups()) {
             for (pos in g.chunks) {
                 unique.add(g.dimension to pos)
             }
