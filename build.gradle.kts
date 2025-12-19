@@ -7,11 +7,20 @@ plugins {
     id("maven-publish")
 }
 
-version = project.property("mod_version") as String
-group = project.property("maven_group") as String
+val modVersionValue = providers.gradleProperty("mod_version").get()
+val minecraftVersionValue = providers.gradleProperty("minecraft_version").get()
+val loaderVersionValue = providers.gradleProperty("loader_version").get()
+val kotlinLoaderVersionValue = providers.gradleProperty("kotlin_loader_version").get()
+val yarnMappingsValue = providers.gradleProperty("yarn_mappings").get()
+val fabricVersionValue = providers.gradleProperty("fabric_version").get()
+val archivesBaseNameValue = providers.gradleProperty("archives_base_name").get()
+val mavenGroupValue = providers.gradleProperty("maven_group").get()
+
+version = modVersionValue
+group = mavenGroupValue
 
 base {
-    archivesName.set(project.property("archives_base_name") as String)
+    archivesName.set(archivesBaseNameValue)
 }
 
 val targetJavaVersion = 21
@@ -41,27 +50,32 @@ repositories {
 }
 
 dependencies {
-    // To change the versions see the gradle.properties file
-    minecraft("com.mojang:minecraft:${project.property("minecraft_version")}")
-    mappings("net.fabricmc:yarn:${project.property("yarn_mappings")}:v2")
-    modImplementation("net.fabricmc:fabric-loader:${project.property("loader_version")}")
-    modImplementation("net.fabricmc:fabric-language-kotlin:${project.property("kotlin_loader_version")}")
-
-    modImplementation("net.fabricmc.fabric-api:fabric-api:${project.property("fabric_version")}")
+    minecraft("com.mojang:minecraft:$minecraftVersionValue")
+    mappings("net.fabricmc:yarn:$yarnMappingsValue:v2")
+    modImplementation("net.fabricmc:fabric-loader:$loaderVersionValue")
+    modImplementation("net.fabricmc:fabric-language-kotlin:$kotlinLoaderVersionValue")
+    modImplementation("net.fabricmc.fabric-api:fabric-api:$fabricVersionValue")
 }
 
 tasks.processResources {
-    inputs.property("version", project.version)
-    inputs.property("minecraft_version", project.property("minecraft_version"))
-    inputs.property("loader_version", project.property("loader_version"))
+    // This task is not configuration-cache compatible due to expand()
+    notCompatibleWithConfigurationCache(
+        "Uses Kotlin DSL expand() which captures script instance"
+    )
+
+    inputs.property("version", modVersionValue)
+    inputs.property("minecraft_version", minecraftVersionValue)
+    inputs.property("loader_version", loaderVersionValue)
+    inputs.property("kotlin_loader_version", kotlinLoaderVersionValue)
+
     filteringCharset = "UTF-8"
 
     filesMatching("fabric.mod.json") {
         expand(
-            "version" to project.version,
-            "minecraft_version" to project.property("minecraft_version") as String,
-            "loader_version" to project.property("loader_version") as String,
-            "kotlin_loader_version" to project.property("kotlin_loader_version") as String
+            "version" to modVersionValue,
+            "minecraft_version" to minecraftVersionValue,
+            "loader_version" to loaderVersionValue,
+            "kotlin_loader_version" to kotlinLoaderVersionValue
         )
     }
 }
