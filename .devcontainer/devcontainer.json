@@ -21,9 +21,10 @@
     }
   },
   "mounts": [
+    "source=${localEnv:HOME}/.gitconfig,target=/home/vscode/.gitconfig,type=bind,consistency=cached",
     "source=memento-gradle-cache,target=/home/vscode/.gradle,type=volume"
   ],
-  "remoteUser": "vscode",
-  "updateRemoteUserUID": true,
+  "remoteUser": "root",
+  "updateRemoteUserUID": false,
   "postCreateCommand": "./gradlew --version"
 }
