@@ -273,3 +273,13 @@ object ChunkGroupForgetting {
         )
     }
 }
+
+
+// Observability helper
+fun logGroupFootprint(logger: org.slf4j.Logger, name: String, anchorCx: Int, anchorCz: Int, chunks: Set<Pair<Int,Int>>) {
+    val xs = chunks.map{it.first}; val zs = chunks.map{it.second}
+    val minX = xs.minOrNull(); val maxX = xs.maxOrNull(); val minZ = zs.minOrNull(); val maxZ = zs.maxOrNull()
+    val includesAnchor = chunks.contains(anchorCx to anchorCz)
+    logger.info("Group footprint for '{}': chunks={} box x=[{}..{}] z=[{}..{}] includesAnchorChunk={}", name, chunks.size, minX, maxX, minZ, maxZ, includesAnchor)
+    if (chunks.size <= 18) logger.info("Chunks for '{}': {}", name, chunks.joinToString())
+}
