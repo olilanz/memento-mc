@@ -6,7 +6,7 @@
       "name": "Attach to Fabric Server",
       "request": "attach",
       "hostName": "localhost",
-      "port": 5005
+      "port": 34209
     }
   ]
 }
