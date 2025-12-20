@@ -1,193 +1,142 @@
-## Architecture Overview
+# Memento: Natural Renewal — Architecture
 
-Memento: Natural Renewal is a lightweight, server-side Fabric mod.
-All logic runs on the server and must remain compatible with vanilla clients.
+This document describes the **current, implemented architecture** of Memento.
 
-This document describes:
-
-* the current architecture
-* the guiding principles
-* and the intended evolution path
-
----
-
-## Architectural Constraints (Foundational)
-
-These constraints are **non-negotiable**:
-
-* Server-side only
-* Vanilla client compatibility
-* Deterministic, operator-driven behavior
-* Explicit commands over implicit automation
-* No reliance on client state or mods
+It focuses on:
+- invariants
+- lifecycles
+- triggers
+- and deliberate constraints
 
 ---
 
-## Development Environment Philosophy
+## Foundational Constraints
 
-Memento is developed in a **container-first, reproducible build environment**.
+These are non-negotiable:
 
-This is intentional.
-
-### Key principles:
-
-* The **Gradle Wrapper** is authoritative
-* Builds must succeed via:
-
-  * CLI
-  * dev container
-  * CI-style execution
-* IDEs are treated as *assistive*, not *defining*
-* Java version, Gradle version, and Fabric tooling are fixed and explicit
-
-This avoids:
-
-* IDE-specific behavior
-* environment drift
-* “works on my machine” issues
+- Server-side only
+- Vanilla client compatibility
+- No forced chunk loading or unloading
+- Deterministic behavior
+- Explicit operator control
 
 ---
 
-## Core Abstraction: Anchors
+## Core Model: Two Lifecycles
 
-An **anchor** is a named, persistent marker in the world.
+Memento is built around **two distinct lifecycles**:
 
-Each anchor has:
+1. **Witherstone lifecycle** — time & intent
+2. **Land (chunk group) lifecycle** — space & permission
 
-* A unique name
-* A position and dimension
-* A radius
-* A kind:
-
-  * **REMEMBER** — protects an area from renewal
-  * **FORGET** — marks an area as eligible for renewal
-* Optional expiry semantics (days), used only for FORGET anchors
-
-Anchors are authoritative.
-Future systems (scanning, renewal, automation) will consult anchors first.
+They intersect, but they are not the same.
 
 ---
 
-## Current Components
+## Witherstone Lifecycle (Time-Based)
 
-### 1. Command System
+A Witherstone works slowly and invisibly.
 
-The primary interaction surface.
+The `days` parameter represents **time to maturity**.
 
-Commands:
+### States
 
-* `/memento anchor remember …`
-* `/memento anchor forget …`
-* `/memento release <name>`
-* `/memento list`
-* `/memento info`
+1. **Maturing**
+   - Influence builds over world days
+   - No world mutation occurs
 
-The command layer is intentionally explicit and operator-focused.
+2. **Matured**
+   - Time to maturity has elapsed
+   - The surrounding land is marked for forgetting
+   - No chunk data is discarded yet
 
----
+3. **Consumed**
+   - Forgetting has completed
+   - The Witherstone is removed
 
-### 2. Anchor Registry
-
-* In-memory representation of anchors
-* Backed by JSON persistence
-* Name-based replacement semantics
-* No world scanning required to read anchor data
-
----
-
-### 3. Persistence Layer
-
-* Simple JSON storage
-* Loaded on server start
-* Written on mutation
-* Decoupled from chunk loading
-
-This keeps anchor management cheap, deterministic, and inspectable.
+A matured Witherstone **permits forgetting**,
+but does not perform it directly.
 
 ---
 
-## Planned (Not Yet Implemented)
+## Land / Chunk Group Lifecycle (Space-Based)
 
-### Chunk Metadata Analysis
+Chunk groups are **derived**, ephemeral structures.
+They only exist meaningfully after a Witherstone matures.
 
-* Read chunk metadata without loading chunks
-* Track inhabited time, visit history, and player proximity
-* Build forgettability scores
+### States
 
-### Renewal Engine
+1. **Marked**
+   - Land is subject to forgetting
 
-* Validate safety constraints
-* Respect simulation distance rules
-* Delete chunks only when safe
-* Allow regeneration on next load
+2. **Blocked**
+   - One or more affected chunks are still loaded
 
-### Player Interaction Layer
+3. **Free**
+   - All affected chunks are unloaded
+   - Forgetting is now safe
 
-* Conceptual items (e.g. “lorestone”, “witherstone”)
-* Still vanilla-compatible (NBT-based)
-* Commands remain authoritative
+4. **Forgetting**
+   - Chunk data is discarded
+   - Regeneration is executed atomically
 
----
-
-## Development Phases
-
-### Phase 1 — Foundations (Current)
-
-* Stable command grammar
-* Anchor model
-* Persistence
-* No world mutation
-
-### Phase 2 — Observation
-
-* Chunk metadata reading
-* Forgettability computation
-* Diagnostics via `/memento info`
-
-### Phase 3 — Renewal
-
-* Controlled deletion queue
-* Safe chunk unloading
-* Regeneration based on anchors
-
-### Phase 4 — Optional UX
-
-* Player-facing affordances
-* Visual hints
-* Optional client enhancements
+5. **Renewed**
+   - New world state generated
+   - Group discarded
 
 ---
 
-## Explicitly Out of Scope (for now)
+## Invariants
 
-* Custom blocks
-* Custom models or textures
-* Client-required mods
-* Automatic, opaque decision-making
-* “AI-driven” renewal logic
-
----
-
-## Why this matters for newcomers
-
-A newcomer should understand:
-
-* **Memento is intentional, not automatic**
-* **Commands define truth**
-* **Anchors are first-class**
-* **Build correctness matters**
-* **The dev container is the reference environment**
-
-Once those are understood, the rest of the system is deliberately simple.
+- Forgetting is atomic per group
+- No partial regeneration
+- No forced unloads
+- No retries or polling
+- Forgetting begins only on chunk unload
+- Witherstone removal happens only after renewal
 
 ---
 
-## Closing note
+## Triggers
 
-Memento values:
+### World Day Change
 
-* clarity over cleverness
-* explicit control over heuristics
-* correctness over convenience
+- Detected via day index (`timeOfDay / 24000`)
+- Advances Witherstone maturation
+- Independent of sleep or `/time set`
 
-The architecture reflects this at every level.
+### Chunk Unload
+
+- Evaluates whether marked land is now free
+- Triggers forgetting when safe
+
+---
+
+## Observability
+
+High-signal lifecycle events are reported to:
+
+- server logs
+- operator chat (OP ≥ 2)
+
+Messages describe **world facts**, not engine mechanics.
+
+---
+
+## Explicitly Out of Scope
+
+- Client-side mods
+- Heuristic or AI-driven decisions
+- Forced chunk management
+- Partial regeneration strategies
+
+---
+
+## Architectural Values
+
+- Clarity over cleverness
+- Intent over automation
+- Safety over speed
+- Semantics that survive time
+
+The code is written to reflect these values directly.

@@ -1,31 +1,105 @@
-# Memento: Natural Renewal — Design Intention
+# Memento: Natural Renewal — The Story
 
-Minecraft worlds accumulate history.
+Minecraft worlds remember everything.
 
-Players explore, build, abandon, return, and move on. Over time, terrain that no longer matters remains loaded, stored, and carried forward indefinitely. Memento is built around a simple idea:
+Every step, every tunnel, every abandoned camp
+is carried forward forever.
 
-**Worlds should remember what matters — and gently let go of what doesn’t.**
+Memento exists to change that — gently.
 
-Memento introduces *anchors*: explicit markers defined by server operators that describe intent.
+---
 
-- Some places are meant to be **remembered**.
-- Some places are safe to **forget**.
-- Everything else is allowed to age naturally.
+## Memory and Forgetting
 
-This is not destruction.  
-It is maintenance.
+Not every place deserves to last forever.
 
-Memento does not attempt to guess player intent.  
-It does not scan builds, analyze structures, or make subjective decisions.
+Some places matter:
+- homes
+- towns
+- monuments
 
-Instead, it provides a clear language:
+Other places are simply passed through.
 
-- *Anchor this place.*
-- *Release that place.*
-- *Let the rest evolve.*
+Memento does not decide this for you.
+You decide.
 
-All mechanics are server-side.  
-Players using vanilla clients remain fully compatible.
+---
 
-Memento aims to be invisible when nothing is happening —  
-and explicit, deliberate, and understandable when it is.
+## Anchors
+
+Memento introduces anchors — expressions of intent.
+
+### Remembering
+
+Some places are marked to be remembered.
+They are protected from forgetting and renewal.
+
+### Forgetting
+
+Other places are safe to forget.
+
+Forgetting is not destruction.
+It is letting the world heal.
+
+---
+
+## Witherstones
+
+A Witherstone is placed where forgetting is allowed.
+
+It does not act immediately.
+
+Instead, it **matures over time**.
+
+As it matures:
+- nothing changes
+- nothing breaks
+- nothing is forced
+
+When the Witherstone has fully matured,
+its surrounding land is **marked for forgetting**.
+
+---
+
+## When Forgetting Happens
+
+Forgetting only begins when the land is left alone.
+
+If any part of the land is still loaded:
+- by players
+- by creatures
+- by the world itself
+
+…nothing happens.
+
+When the land is finally free,
+the world lets go of its memory.
+
+The land renews.
+
+---
+
+## What Players Experience
+
+Most of the time:
+- nothing
+
+Occasionally:
+- familiar land returns to nature
+- caves shift
+- terrain feels new again
+
+Memento is meant to be invisible when idle
+and understandable when it acts.
+
+---
+
+## A Living World
+
+Memento does not erase history.
+It makes room for new stories.
+
+What matters is remembered.
+What does not is allowed to fade.
+
+That is natural renewal.
