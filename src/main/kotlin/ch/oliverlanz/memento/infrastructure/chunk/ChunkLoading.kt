@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.chunkutils
+package ch.oliverlanz.memento.infrastructure.chunk
 
 import net.minecraft.server.world.ServerWorld
 import net.minecraft.util.math.ChunkPos

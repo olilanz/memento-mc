@@ -1,7 +1,9 @@
 package ch.oliverlanz.memento
 
-import ch.oliverlanz.memento.chunkutils.ChunkGroupForgetting
-import ch.oliverlanz.memento.chunkutils.ChunkInspection
+import ch.oliverlanz.memento.infrastructure.MementoConstants
+import ch.oliverlanz.memento.application.MementoAnchors
+import ch.oliverlanz.memento.application.land.ChunkGroupForgetting
+import ch.oliverlanz.memento.application.land.ChunkInspection
 import com.mojang.brigadier.CommandDispatcher
 import com.mojang.brigadier.arguments.IntegerArgumentType
 import com.mojang.brigadier.arguments.StringArgumentType

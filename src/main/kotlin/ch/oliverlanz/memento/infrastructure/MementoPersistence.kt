@@ -1,5 +1,6 @@
-package ch.oliverlanz.memento
+package ch.oliverlanz.memento.infrastructure
 
+import ch.oliverlanz.memento.application.MementoAnchors
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonParser
 import net.minecraft.registry.RegistryKey

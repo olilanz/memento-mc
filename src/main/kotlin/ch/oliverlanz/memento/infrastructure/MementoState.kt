@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento
+package ch.oliverlanz.memento.infrastructure
 
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonParser

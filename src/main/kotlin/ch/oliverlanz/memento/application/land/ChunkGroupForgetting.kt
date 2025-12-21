@@ -1,9 +1,9 @@
-package ch.oliverlanz.memento.chunkutils
+package ch.oliverlanz.memento.application.land
 
-import ch.oliverlanz.memento.MementoAnchors
-import ch.oliverlanz.memento.MementoDebug
-import ch.oliverlanz.memento.MementoConstants
-import ch.oliverlanz.memento.MementoPersistence
+import ch.oliverlanz.memento.application.MementoAnchors
+import ch.oliverlanz.memento.infrastructure.MementoDebug
+import ch.oliverlanz.memento.infrastructure.MementoConstants
+import ch.oliverlanz.memento.infrastructure.MementoPersistence
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld

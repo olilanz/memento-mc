@@ -1,6 +1,6 @@
 package ch.oliverlanz.memento.mixin
 
-import ch.oliverlanz.memento.chunkutils.ChunkForgetPredicate
+import ch.oliverlanz.memento.infrastructure.chunk.ChunkForgetPredicate
 import net.minecraft.registry.RegistryKey
 import net.minecraft.nbt.NbtCompound
 import net.minecraft.util.math.ChunkPos

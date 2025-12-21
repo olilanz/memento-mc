@@ -1,6 +1,6 @@
-package ch.oliverlanz.memento.chunkutils
+package ch.oliverlanz.memento.application.land
 
-import ch.oliverlanz.memento.chunkutils.ChunkGroupForgetting
+import ch.oliverlanz.memento.application.land.ChunkGroupForgetting
 import net.minecraft.entity.Entity
 import net.minecraft.entity.EntityType
 import net.minecraft.entity.ItemEntity

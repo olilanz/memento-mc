@@ -1,6 +1,6 @@
-package ch.oliverlanz.memento.chunkutils
+package ch.oliverlanz.memento.infrastructure.chunk
 
-import ch.oliverlanz.memento.chunkutils.ChunkGroupForgetting
+import ch.oliverlanz.memento.application.land.ChunkGroupForgetting
 import net.minecraft.registry.RegistryKey
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World

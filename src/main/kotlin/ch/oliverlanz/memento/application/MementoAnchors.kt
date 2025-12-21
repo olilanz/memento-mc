@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento
+package ch.oliverlanz.memento.application
 
 import net.minecraft.registry.RegistryKey
 import net.minecraft.util.math.BlockPos

@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento
+package ch.oliverlanz.memento.infrastructure
 
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.network.ServerPlayerEntity
