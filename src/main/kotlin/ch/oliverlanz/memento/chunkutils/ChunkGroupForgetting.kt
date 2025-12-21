@@ -2,6 +2,7 @@ package ch.oliverlanz.memento.chunkutils
 
 import ch.oliverlanz.memento.MementoAnchors
 import ch.oliverlanz.memento.MementoDebug
+import ch.oliverlanz.memento.MementoConstants
 import ch.oliverlanz.memento.MementoPersistence
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
@@ -11,6 +12,7 @@ import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
 import net.minecraft.world.chunk.ChunkStatus
 import java.util.concurrent.ConcurrentHashMap
+import java.util.ArrayDeque
 
 /**
  * Anchor-based group forgetting.
@@ -121,6 +123,8 @@ fun detachServer(server: MinecraftServer) {
      */
     private data class Execution(
     val group: Group,
+    /** Chunks still to be processed for regeneration (one per N ticks). */
+    val pendingChunks: ArrayDeque<ChunkPos>,
     /** Chunks for which we have observed a regeneration decision (NBT treated as missing). */
     val renewedChunks: MutableSet<ChunkPos> = ConcurrentHashMap.newKeySet<ChunkPos>(),
     /** Used to rate-limit progress logging. Incremented opportunistically. */
@@ -128,6 +132,42 @@ fun detachServer(server: MinecraftServer) {
 )
 
     private val executing = ConcurrentHashMap<String, Execution>()
+
+    /** Monotonic tick counter for regeneration pacing (not persisted). */
+    private var tickCounter: Long = 0L
+
+    /**
+     * Budgeted regeneration worker.
+     *
+     * Runs on the server thread (called from Memento.onServerTick).
+     * Every REGENERATION_CHUNK_INTERVAL_TICKS, we request one next chunk load per executing group.
+     * Active forget-marks remain armed until we observe renewal for all chunks.
+     */
+    fun tick(server: MinecraftServer) {
+        if (executing.isEmpty()) return
+        tickCounter++
+        val interval = MementoConstants.REGENERATION_CHUNK_INTERVAL_TICKS
+        if (interval <= 0) return
+        if (tickCounter % interval.toLong() != 0L) return
+
+        // One chunk per group per interval tick.
+        for (exec in executing.values) {
+            val group = exec.group
+            if (group.state != GroupState.FORGETTING) continue
+            val next = pollFirst(exec.pendingChunks) ?: continue
+
+            val world = server.getWorld(group.dimension) ?: continue
+            try {
+                world.chunkManager.getChunk(next.x, next.z, ChunkStatus.FULL, true)
+            } catch (t: Throwable) {
+                MementoDebug.warn(
+                    server,
+                    "Failed to load chunk during budgeted renewal: dim=${group.dimension.value}, chunk=(${next.x},${next.z}) anchor='${group.anchorName}' ($t)"
+                )
+                abortExecution(group)
+            }
+        }
+    }
 
     
     fun snapshotMarkedGroups(): List<Group> =
@@ -341,21 +381,30 @@ fun onChunkRenewalObserved(dimension: RegistryKey<World>, pos: ChunkPos) {
         // If already executing/finalizing, do nothing.
         if (!executingGroups.add(name)) return
 
-        // Only start when the group is explicitly FREE.
-        if (group.state != GroupState.FREE) {
+        // Core invariant: only start when the entire group is currently unloaded.
+        if (!allChunksUnloaded(world, group)) {
+            // Keep a meaningful state for observability.
+            if (group.state != GroupState.BLOCKED && group.state != GroupState.FORGETTING && group.state != GroupState.RENEWED) {
+                group.state = GroupState.BLOCKED
+            }
             executingGroups.remove(name)
             return
         }
 
-        // Core invariant: only start when the entire group is currently unloaded.
-        if (!allChunksUnloaded(world, group)) {
-            executingGroups.remove(name)
-            return
+        // Latch: once all chunks are unloaded, we enter FREE (safe) and can begin forgetting.
+        if (group.state != GroupState.FREE && group.state != GroupState.FORGETTING && group.state != GroupState.RENEWED) {
+            val prev = group.state
+            group.state = GroupState.FREE
+            MementoDebug.info(
+                server,
+                "Chunk group state: '${group.anchorName}' ${prev} -> ${GroupState.FREE} (loadedChunks=0/${group.chunks.size})"
+            )
         }
 
         executeGroup(server, world, group)
         // Note: executingGroups remains set until finalize/abort.
     }
+
 
     private fun executeGroup(server: MinecraftServer, world: ServerWorld, group: Group) {
         MementoDebug.warn(
@@ -376,18 +425,26 @@ fun onChunkRenewalObserved(dimension: RegistryKey<World>, pos: ChunkPos) {
         // Arm forget marks before requesting loads so the storage mixin can act.
         markActiveForget(group)
 
-        // Track execution for finalize.
+        // Transition into execution.
         group.state = GroupState.FORGETTING
-        executing[group.anchorName] = Execution(group)
 
-        // Actively load all group chunks (one-shot). This triggers regeneration via mixin.
-        for (pos in group.chunks) {
+        // Prepare deterministic processing order and start budgeted renewal.
+// We process one chunk now (immediate start), and the remainder via tick() pacing.
+        val ordered = group.chunks.sortedBy { it.toLong() }
+        val queue = ArrayDeque<ChunkPos>(ordered.size)
+        for (p in ordered) queue.addLast(p)
+        val exec = Execution(group = group, pendingChunks = queue)
+        executing[group.anchorName] = exec
+
+        // Immediate start: request the first chunk load right away.
+        val first = pollFirst(exec.pendingChunks)
+        if (first != null) {
             try {
-                world.chunkManager.getChunk(pos.x, pos.z, ChunkStatus.FULL, true)
+                world.chunkManager.getChunk(first.x, first.z, ChunkStatus.FULL, true)
             } catch (t: Throwable) {
                 MementoDebug.warn(
                     server,
-                    "Failed to load chunk during group renewal: dim=${group.dimension.value}, chunk=(${pos.x}, ${pos.z}) anchor='${group.anchorName}' ($t)"
+                    "Failed to load first chunk during budgeted renewal: dim=${group.dimension.value}, chunk=(${first.x}, ${first.z}) anchor='${group.anchorName}' ($t)"
                 )
                 abortExecution(group)
                 return
@@ -395,6 +452,7 @@ fun onChunkRenewalObserved(dimension: RegistryKey<World>, pos: ChunkPos) {
         }
 
         // Do NOT unmark / consume immediately.
+
         // Loads/NBT reads may complete later; we finalize when all group chunks are observed loaded.
     }
 
@@ -420,7 +478,11 @@ fun onChunkRenewalObserved(dimension: RegistryKey<World>, pos: ChunkPos) {
         MementoDebug.info(server, "The land has renewed; witherstone consumed: '${group.anchorName}'")
     }
 
-    private fun abortExecution(group: Group) {
+    
+    private fun pollFirst(queue: ArrayDeque<ChunkPos>): ChunkPos? =
+        if (queue.isEmpty()) null else queue.removeFirst()
+
+private fun abortExecution(group: Group) {
         unmarkActiveForget(group)
         executing.remove(group.anchorName)
         executingGroups.remove(group.anchorName)
@@ -494,7 +556,13 @@ fun onChunkRenewalObserved(dimension: RegistryKey<World>, pos: ChunkPos) {
 
 
     fun discardGroup(anchorName: String) {
-        markedGroups.remove(anchorName)?.let { group ->
+        val group = markedGroups.remove(anchorName)
+
+        // Clear execution bookkeeping as well (used by /memento set ... and /memento remove).
+        executing.remove(anchorName)
+        executingGroups.remove(anchorName)
+
+        if (group != null) {
             // Do not leave stale active-forget marks behind.
             for (pos in group.chunks) {
                 val key = "${group.dimension.value}:" + pos.toLong()

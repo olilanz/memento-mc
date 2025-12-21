@@ -24,6 +24,9 @@ object MementoConstants {
     /** Minecraft Overworld day length in ticks. */
     const val OVERWORLD_DAY_TICKS: Long = 24_000L
 
+    /** Regeneration pacing: process one chunk every N server ticks. */
+    const val REGENERATION_CHUNK_INTERVAL_TICKS: Int = 5
+
     /**
      * Conceptual "renewal checkpoint" time-of-night.
      *

@@ -82,5 +82,8 @@ object Memento : ModInitializer {
             ChunkGroupForgetting.ageAnchorsOnce(server)
             ChunkGroupForgetting.sweep(server)
         }
+
+        // Budgeted regeneration work (chunk queue processing).
+        ChunkGroupForgetting.tick(server)
     }
 }
