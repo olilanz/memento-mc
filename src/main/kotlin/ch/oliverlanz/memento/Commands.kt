@@ -226,6 +226,7 @@ object Commands {
             pos = pos,
             radius = radius,
             days = null,
+            state = null,
             createdGameTime = now
         )
 
@@ -253,6 +254,7 @@ object Commands {
             pos = pos,
             radius = radius,
             days = days,
+            state = if (days != -1 && days <= 0) MementoAnchors.WitherstoneState.MATURED else MementoAnchors.WitherstoneState.MATURING,
             createdGameTime = now
         )
 

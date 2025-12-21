@@ -10,6 +10,17 @@ object MementoAnchors {
 
     enum class Kind { REMEMBER, FORGET }
 
+    /**
+     * Explicit lifecycle state for Witherstone (FORGET) anchors.
+     *
+     * This is persisted so the meaning of an anchor is not inferred purely from counters.
+     *
+     * - MATURING: time to maturity remains (> 0 days)
+     * - MATURED: time to maturity elapsed (0 days); land may be forgotten once it becomes free
+     * - CONSUMED: terminal; anchor is removed from persistence
+     */
+    enum class WitherstoneState { MATURING, MATURED, CONSUMED }
+
     data class Anchor(
         val name: String,
         val kind: Kind,
@@ -17,6 +28,7 @@ object MementoAnchors {
         val pos: BlockPos,
         val radius: Int,
         val days: Int?,              // only for FORGET; null for REMEMBER
+        val state: WitherstoneState? = null, // only for FORGET; null for REMEMBER
         val createdGameTime: Long
     )
 

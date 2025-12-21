@@ -41,6 +41,8 @@ The `days` parameter represents **time to maturity**.
 
 ### States
 
+The Witherstone lifecycle is represented explicitly in code and persisted (`WitherstoneState`).
+
 1. **Maturing**
    - Influence builds over world days
    - No world mutation occurs
@@ -65,6 +67,8 @@ Chunk groups are **derived**, ephemeral structures.
 They only exist meaningfully after a Witherstone matures.
 
 ### States
+
+The Witherstone lifecycle is represented explicitly in code and persisted (`WitherstoneState`).
 
 1. **Marked**
    - Land is subject to forgetting

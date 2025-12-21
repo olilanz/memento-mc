@@ -25,6 +25,7 @@ object MementoPersistence {
         val z: Int,
         val radius: Int,
         val days: Int?,
+        val state: String? = null,
         val createdGameTime: Long
     )
 
@@ -47,6 +48,7 @@ object MementoPersistence {
                     z = a.pos.z,
                     radius = a.radius,
                     days = a.days,
+                    state = a.state?.name,
                     createdGameTime = a.createdGameTime
                 )
             }
@@ -92,11 +94,25 @@ object MementoPersistence {
 
             val radius = o.get("radius")?.asInt ?: MementoConstants.DEFAULT_RADIUS_CHUNKS
             val days = if (o.has("days") && !o.get("days").isJsonNull) o.get("days").asInt else null
+            val stateStr = if (o.has("state") && !o.get("state").isJsonNull) o.get("state").asString else null
             val created = o.get("createdGameTime")?.asLong ?: 0L
 
             val kind = runCatching { MementoAnchors.Kind.valueOf(kindStr) }.getOrNull() ?: continue
             val dimId = runCatching { Identifier.of(dimStr) }.getOrNull() ?: continue
             val dimKey: RegistryKey<World> = RegistryKey.of(net.minecraft.registry.RegistryKeys.WORLD, dimId)
+
+            val state = if (kind == MementoAnchors.Kind.FORGET) {
+                // Backward compatible: if the file predates explicit state, derive it from the remaining days.
+                val parsed = stateStr?.let { runCatching { MementoAnchors.WitherstoneState.valueOf(it) }.getOrNull() }
+                parsed ?: when {
+                    days == null -> MementoAnchors.WitherstoneState.MATURING
+                    days == -1 -> MementoAnchors.WitherstoneState.MATURING
+                    days <= 0 -> MementoAnchors.WitherstoneState.MATURED
+                    else -> MementoAnchors.WitherstoneState.MATURING
+                }
+            } else {
+                null
+            }
 
             loaded += MementoAnchors.Anchor(
                 name = name,
@@ -105,6 +121,7 @@ object MementoPersistence {
                 pos = BlockPos(x, y, z),
                 radius = radius,
                 days = days,
+                state = state,
                 createdGameTime = created
             )
         }

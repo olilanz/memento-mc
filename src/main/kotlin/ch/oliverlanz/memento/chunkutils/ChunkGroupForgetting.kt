@@ -147,7 +147,8 @@ fun detachServer(server: MinecraftServer) {
             if (a.kind != MementoAnchors.Kind.FORGET) continue
             val days = a.days ?: continue
             if (days == -1) continue
-            if (days != 0) continue
+            val state = a.state ?: if (days <= 0) MementoAnchors.WitherstoneState.MATURED else MementoAnchors.WitherstoneState.MATURING
+            if (state != MementoAnchors.WitherstoneState.MATURED) continue
 
             val g = deriveGroup(a)
             markedGroups[a.name] = g
@@ -176,6 +177,12 @@ fun detachServer(server: MinecraftServer) {
             if (a.kind != MementoAnchors.Kind.FORGET) return@map a
             val days = a.days ?: return@map a
             if (days == -1) return@map a
+            // Explicit state is authoritative; fall back to days for backward compatibility.
+            val state = a.state ?: when {
+                days <= 0 -> MementoAnchors.WitherstoneState.MATURED
+                else -> MementoAnchors.WitherstoneState.MATURING
+            }
+            if (state != MementoAnchors.WitherstoneState.MATURING) return@map a
             if (days <= 0) return@map a
 
             val newDays = days - 1
@@ -187,6 +194,7 @@ fun detachServer(server: MinecraftServer) {
             )
 
             if (newDays == 0) {
+                MementoDebug.warn(server, "Witherstone '${a.name}' transitioned MATURING → MATURED")
                 val g = deriveGroup(a)
                 markedGroups[a.name] = g
                 maturedCount++
@@ -198,7 +206,10 @@ fun detachServer(server: MinecraftServer) {
                 )
             }
 
-            a.copy(days = newDays)
+            a.copy(
+                days = newDays,
+                state = if (newDays == 0) MementoAnchors.WitherstoneState.MATURED else MementoAnchors.WitherstoneState.MATURING
+            )
         }
 
         if (changed) {
