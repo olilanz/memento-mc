@@ -189,13 +189,13 @@ object ChunkGroupForgetting {
             if (executingGroups.contains(g.anchorName)) continue
 
             val world = server.getWorld(g.dimension) ?: continue
-            val loadedCount = g.chunks.count { ChunkLoading.isChunkLoadedBestEffort(world, it) }
+            val loadedCount = g.chunks.count { isChunkCurrentlyLoaded(world, it) }
 
             if (loadedCount > 0) {
                 // We do not guess the reason (players/mobs/spawn/ticking blocks). We report the fact.
                 MementoDebug.info(
                     server,
-                    "The land cannot be forgotten yet: some affected chunks are still loaded (anchor='${g.anchorName}' dim=${g.dimension.value} loadedChunks=$loadedCount/${g.chunks.size})"
+                    "The land cannot be forgotten yet: some affected chunks are still loaded or force-ticked (spawn chunks, entities, block ticking, etc.) (anchor='${g.anchorName}' dim=${g.dimension.value} loadedChunks=$loadedCount/${g.chunks.size})"
                 )
             }
 
@@ -241,6 +241,16 @@ object ChunkGroupForgetting {
             "The land is being forgotten for witherstone '${group.anchorName}' (dim=${group.dimension.value}, chunks=${group.chunks.size})"
         )
 
+        // Observability: include the anchor chunk and a compact sample of group chunks.
+        val anchorChunk = ChunkPos(group.anchorPos)
+        val sample = group.chunks.take(6).joinToString(", ") { "(${it.x},${it.z})" }
+        val suffix = if (group.chunks.size > 6) ", ..." else ""
+        MementoDebug.info(
+            server,
+            "Forgetting group details: anchorChunk=(${anchorChunk.x},${anchorChunk.z}) sampleChunks=$sample$suffix"
+        )
+
+
         // Arm forget marks before requesting loads so the storage mixin can act.
         markActiveForget(group)
 
@@ -278,7 +288,7 @@ object ChunkGroupForgetting {
                 return@execute
             }
 
-            val loadedCount = group.chunks.count { ChunkLoading.isChunkLoadedBestEffort(world, it) }
+            val loadedCount = group.chunks.count { isChunkCurrentlyLoaded(world, it) }
             if (loadedCount < group.chunks.size) {
                 exec.ticksWaited++
 
@@ -343,10 +353,19 @@ object ChunkGroupForgetting {
     }
 
     private fun allChunksUnloaded(world: ServerWorld, group: Group): Boolean {
+        // For correctness we must avoid false negatives here.
+        // Using ServerChunkManager.getChunk(..., create=false) does not load chunks;
+        // it only reports chunks that are already loaded/tracked by the server.
         for (pos in group.chunks) {
-            if (ChunkLoading.isChunkLoadedBestEffort(world, pos)) return false
+            if (isChunkCurrentlyLoaded(world, pos)) return false
         }
         return true
+    }
+
+    private fun isChunkCurrentlyLoaded(world: ServerWorld, pos: ChunkPos): Boolean {
+        // ChunkStatus.EMPTY is the lowest status; if the chunk is present in memory at any status,
+        // this should return non-null. create=false guarantees we never force-load.
+        return world.chunkManager.getChunk(pos.x, pos.z, ChunkStatus.EMPTY, false) != null
     }
 
     private fun deriveGroup(anchor: MementoAnchors.Anchor): Group {
