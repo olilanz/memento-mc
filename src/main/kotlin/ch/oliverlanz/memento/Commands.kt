@@ -50,10 +50,26 @@ object Commands {
                  * ====================== */
                 .then(literal("add")
 
-                    // --- witherstone ---
+                    // witherstone: name [radius] [daysToMaturity]
                     .then(literal("witherstone")
                         .then(argument("name", StringArgumentType.word())
+                            .executes { ctx ->
+                                addWitherstone(
+                                    ctx.source,
+                                    StringArgumentType.getString(ctx, "name"),
+                                    MementoConstants.DEFAULT_RADIUS_CHUNKS,
+                                    MementoConstants.DEFAULT_FORGET_DAYS
+                                )
+                            }
                             .then(argument("radius", IntegerArgumentType.integer(1, 10))
+                                .executes { ctx ->
+                                    addWitherstone(
+                                        ctx.source,
+                                        StringArgumentType.getString(ctx, "name"),
+                                        IntegerArgumentType.getInteger(ctx, "radius"),
+                                        MementoConstants.DEFAULT_FORGET_DAYS
+                                    )
+                                }
                                 .then(argument("daysToMaturity", IntegerArgumentType.integer(0, 10))
                                     .executes { ctx ->
                                         addWitherstone(
@@ -68,9 +84,16 @@ object Commands {
                         )
                     )
 
-                    // --- lorestone ---
+                    // lorestone: name [radius]
                     .then(literal("lorestone")
                         .then(argument("name", StringArgumentType.word())
+                            .executes { ctx ->
+                                addLorestone(
+                                    ctx.source,
+                                    StringArgumentType.getString(ctx, "name"),
+                                    MementoConstants.DEFAULT_RADIUS_CHUNKS
+                                )
+                            }
                             .then(argument("radius", IntegerArgumentType.integer(1, 10))
                                 .executes { ctx ->
                                     addLorestone(
@@ -109,22 +132,9 @@ object Commands {
                  * ====================== */
                 .then(literal("set")
 
-                    // --- witherstone ---
+                    // witherstone attributes
                     .then(literal("witherstone")
                         .then(argument("name", StringArgumentType.word())
-
-                            .then(literal("daysToMaturity")
-                                .then(argument("value", IntegerArgumentType.integer(0, 10))
-                                    .executes { ctx ->
-                                        setDaysToMaturity(
-                                            ctx.source,
-                                            StringArgumentType.getString(ctx, "name"),
-                                            IntegerArgumentType.getInteger(ctx, "value")
-                                        )
-                                    }
-                                )
-                            )
-
                             .then(literal("radius")
                                 .then(argument("value", IntegerArgumentType.integer(1, 10))
                                     .executes { ctx ->
@@ -136,10 +146,21 @@ object Commands {
                                     }
                                 )
                             )
+                            .then(literal("daysToMaturity")
+                                .then(argument("value", IntegerArgumentType.integer(0, 10))
+                                    .executes { ctx ->
+                                        setDaysToMaturity(
+                                            ctx.source,
+                                            StringArgumentType.getString(ctx, "name"),
+                                            IntegerArgumentType.getInteger(ctx, "value")
+                                        )
+                                    }
+                                )
+                            )
                         )
                     )
 
-                    // --- lorestone ---
+                    // lorestone attributes
                     .then(literal("lorestone")
                         .then(argument("name", StringArgumentType.word())
                             .then(literal("radius")
@@ -160,7 +181,7 @@ object Commands {
     }
 
     /* ============================================================
-     * Dispatch helpers (no parsing logic below this line)
+     * Dispatch helpers (NO parsing logic below this line)
      * ============================================================ */
 
     private fun addWitherstone(
@@ -226,6 +247,8 @@ object Commands {
 
     private fun remove(src: ServerCommandSource, name: String): Int {
         val removed = MementoAnchors.remove(name)
+
+        // Safe no-op if no group exists
         ChunkGroupForgetting.discardGroup(name)
 
         src.sendFeedback(
@@ -247,7 +270,7 @@ object Commands {
             return error(src, "'$name' is not a witherstone")
         }
 
-        // rewind lifecycle if already matured
+        // Re-arming: matured -> maturing must discard derived group
         if (anchor.state == MementoAnchors.WitherstoneState.MATURED && value > 0) {
             ChunkGroupForgetting.discardGroup(name)
         }
@@ -287,7 +310,10 @@ object Commands {
         return 1
     }
 
-    private fun inspect(src: ServerCommandSource, name: String): Int {
+    private fun inspect(
+        src: ServerCommandSource,
+        name: String
+    ): Int {
         val group = ChunkGroupForgetting.getGroupByAnchorName(name)
             ?: run {
                 src.sendError(Text.literal("No active chunk group for '$name'"))
@@ -304,16 +330,30 @@ object Commands {
             return 1
         }
 
-        reports.forEach { report ->
+        for (r in reports) {
             src.sendFeedback(
-                { Text.literal(report.summary) },
+                {
+                    Text.literal(
+                        "chunk (${r.pos.x}, ${r.pos.z}) in ${r.dimension.value}: ${r.summary}"
+                    )
+                },
                 false
             )
+
+            for (b in r.blockers) {
+                src.sendFeedback(
+                    { Text.literal("  - $b") },
+                    false
+                )
+            }
         }
         return 1
     }
 
-    private fun list(kind: MementoAnchors.Kind?, src: ServerCommandSource): Int {
+    private fun list(
+        kind: MementoAnchors.Kind?,
+        src: ServerCommandSource
+    ): Int {
         val stones = MementoAnchors.list()
             .filter { kind == null || it.kind == kind }
 
@@ -322,14 +362,15 @@ object Commands {
             return 1
         }
 
-        stones.forEach {
+        stones.forEach { a ->
+            val extra =
+                if (a.kind == MementoAnchors.Kind.FORGET)
+                    " daysToMaturity=${a.days}"
+                else
+                    ""
+
             src.sendFeedback(
-                {
-                    Text.literal(
-                        "${it.name}: ${it.kind} radius=${it.radius}" +
-                            (it.days?.let { d -> " daysToMaturity=$d" } ?: "")
-                    )
-                },
+                { Text.literal("${a.name}: ${a.kind} at ${a.pos} radius=${a.radius}$extra") },
                 false
             )
         }
