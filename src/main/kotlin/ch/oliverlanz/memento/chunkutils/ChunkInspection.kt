@@ -90,6 +90,19 @@ object ChunkInspection {
         return reports.sortedWith(compareBy({ it.dimension.value.toString() }, { it.pos.x }, { it.pos.z }))
     }
 
+
+    /**
+     * Inspect only the chunks belonging to a specific derived group.
+     *
+     * This is used by /memento inspect <name> to explain what the group is waiting for,
+     * without scanning all forgettable chunks on the server.
+     */
+    fun inspectGroup(server: MinecraftServer, group: ChunkGroupForgetting.Group): List<ChunkReport> {
+        val world = server.getWorld(group.dimension) ?: return emptyList()
+        val reports = group.chunks.map { pos -> inspectOne(server, world, pos) }
+        return reports.sortedWith(compareBy({ it.dimension.value.toString() }, { it.pos.x }, { it.pos.z }))
+    }
+
     private fun inspectOne(server: MinecraftServer, world: ServerWorld, pos: ChunkPos): ChunkReport {
         val blockers = mutableListOf<Blocker>()
 

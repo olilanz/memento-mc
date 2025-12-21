@@ -35,9 +35,12 @@ They intersect, but they are not the same.
 
 ## Witherstone Lifecycle (Time-Based)
 
-A Witherstone works slowly and invisibly.
-
-The `days` parameter represents **time to maturity**.
+- Witherstones mature when `daysToMaturity` reaches `0`
+- Maturation derives a chunk group and marks it for forgetting
+- Regeneration may only proceed when *all* chunks are unloaded
+- Setting `daysToMaturity` from `0 → N` rewinds the lifecycle:
+  - the derived group is discarded
+  - no regeneration may proceed
 
 ### States
 

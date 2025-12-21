@@ -48,22 +48,28 @@ This ensures:
 
 ---
 
-## Commands
+## Commands (OP ≥ 2)
 
-´´´bash
-/memento anchor forget <name> [radius] [x y z] [days]
-/memento anchor remember <name> [radius] [x y z]
-/memento release <name>
-/memento list
-/memento info
-´´´
+### System
+- `/memento version`  
+  Show mod version.
 
-Notes:
+### Stones
+- `/memento add witherstone <name> <radius> <daysToMaturity>`
+- `/memento add lorestone <name> <radius>`
+- `/memento remove witherstone <name>`
+- `/memento remove lorestone <name>`
+- `/memento set witherstone <name> daysToMaturity <0–10>`
+- `/memento set witherstone <name> radius <1–10>`
 
-- Anchor names are unique
-- Reusing a name replaces the existing anchor
-- Coordinates default to the player position
-- All commands require operator permissions
+### Inspection
+- `/memento list`
+- `/memento list witherstone`
+- `/memento list lorestone`
+- `/memento inspect <name>`
+
+`inspect` explains exactly what Memento is waiting for, including
+loaded chunks blocking regeneration.
 
 ---
 

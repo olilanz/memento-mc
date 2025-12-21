@@ -467,4 +467,44 @@ fun onChunkRenewalObserved(dimension: RegistryKey<World>, pos: ChunkPos) {
             chunks = MementoAnchors.computeChunksInRadius(anchor.pos, anchor.radius)
         )
     }
+
+    /**
+     * Explicit command-path helper: when a witherstone is already matured (daysToMaturity == 0),
+     * we mark its derived chunk group immediately so it can start waiting on unload conditions.
+     */
+    fun markMaturedWitherstoneNow(server: MinecraftServer, anchor: MementoAnchors.Anchor): Boolean {
+        if (anchor.kind != MementoAnchors.Kind.FORGET) return false
+        val days = anchor.days ?: return false
+        val state = anchor.state ?: if (days <= 0) MementoAnchors.WitherstoneState.MATURED else MementoAnchors.WitherstoneState.MATURING
+        if (state != MementoAnchors.WitherstoneState.MATURED || days != 0) return false
+
+        if (markedGroups.containsKey(anchor.name)) return false
+
+        val g = deriveGroup(anchor)
+        markedGroups[anchor.name] = g
+        markActiveForget(g)
+
+        MementoDebug.warn(server, "Witherstone '${anchor.name}' has matured")
+        MementoDebug.info(
+            server,
+            "The surrounding land is marked for forgetting (dim=${anchor.dimension.value}, radiusChunks=${anchor.radius}, chunks=${g.chunks.size})"
+        )
+        return true
+    }
+
+
+    fun discardGroup(anchorName: String) {
+        markedGroups.remove(anchorName)?.let { group ->
+            // Do not leave stale active-forget marks behind.
+            for (pos in group.chunks) {
+                val key = "${group.dimension.value}:" + pos.toLong()
+                activeForgetChunks.remove(key)
+                activeChunkOwner.remove(key)
+            }
+        }
+    }
+
+    fun getGroupByAnchorName(name: String): Group? =
+        markedGroups[name]
+
 }

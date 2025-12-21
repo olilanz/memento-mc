@@ -45,19 +45,12 @@ It is letting the world heal.
 
 ## Witherstones
 
-A Witherstone is placed where forgetting is allowed.
+A Witherstone does not destroy land.
 
-It does not act immediately.
+It waits.
 
-Instead, it **matures over time**.
-
-As it matures:
-- nothing changes
-- nothing breaks
-- nothing is forced
-
-When the Witherstone has fully matured,
-its surrounding land is **marked for forgetting**.
+When its time has come, it watches the land until it is abandoned.
+Only then does the world forget — and grow anew.
 
 ---
 
