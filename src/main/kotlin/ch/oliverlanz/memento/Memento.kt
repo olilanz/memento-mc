@@ -30,6 +30,10 @@ object Memento : ModInitializer {
         ServerLifecycleEvents.SERVER_STARTED.register { server ->
             MementoDebug.info(server, "Loading anchors and state")
 
+
+            // Attach server reference for mixin-driven renewal observations.
+            ChunkGroupForgetting.attachServer(server)
+
             MementoPersistence.load(server)
             MementoState.load(server)
 
@@ -49,6 +53,7 @@ object Memento : ModInitializer {
 
         // Persist state on shutdown.
         ServerLifecycleEvents.SERVER_STOPPING.register { server ->
+            ChunkGroupForgetting.detachServer(server)
             MementoPersistence.save(server)
             MementoState.save(server)
         }

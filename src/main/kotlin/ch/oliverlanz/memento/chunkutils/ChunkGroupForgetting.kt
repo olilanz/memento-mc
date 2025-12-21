@@ -35,13 +35,31 @@ object ChunkGroupForgetting {
      *
      * Groups are ephemeral: they are rebuilt from anchors on startup.
      */
-    data class Group(
-        val anchorName: String,
-        val dimension: RegistryKey<World>,
-        val anchorPos: BlockPos,
-        val radiusChunks: Int,
-        val chunks: Set<ChunkPos>
-    )
+    enum class GroupState {
+    /** Land is subject to forgetting. */
+    MARKED,
+
+    /** One or more affected chunks are still loaded; forgetting is not safe yet. */
+    BLOCKED,
+
+    /** All affected chunks are unloaded; forgetting is now safe. */
+    FREE,
+
+    /** Forget marks are armed; we are observing chunk renewals. */
+    FORGETTING,
+
+    /** All chunks in the group have been observed to renew. */
+    RENEWED
+}
+
+data class Group(
+    val anchorName: String,
+    val dimension: RegistryKey<World>,
+    val anchorPos: BlockPos,
+    val radiusChunks: Int,
+    val chunks: Set<ChunkPos>,
+    @Volatile var state: GroupState = GroupState.MARKED
+)
 
     /** Groups marked for forgetting, waiting to become fully unloaded. */
     private val markedGroups = ConcurrentHashMap<String, Group>()
@@ -52,6 +70,35 @@ object ChunkGroupForgetting {
      * Key format: "<dimensionId>:<chunkLong>"
      */
     private val activeForgetChunks = ConcurrentHashMap.newKeySet<String>()
+/**
+ * Reverse lookup used for observability and completion tracking.
+ *
+ * When a chunk is marked for forgetting, we also remember which anchor/group owns it.
+ * The chunk NBT predicate (via mixin) can then report "this chunk was forgotten" and
+ * we can attribute that observation to the correct executing group without scanning.
+ *
+ * Key format: "<dimensionId>:<chunkLong>"
+ * Value: anchorName
+ */
+private val activeChunkOwner = ConcurrentHashMap<String, String>()
+
+/**
+ * Current server instance (attached on SERVER_STARTED).
+ *
+ * The VersionedChunkStorage mixin calls into ChunkForgetPredicate without giving us a server reference.
+ * We keep a best-effort reference here so that completion (Renewed -> Consumed) can be finalized
+ * on the main thread with correct persistence and OP messaging.
+ */
+@Volatile
+private var serverRef: MinecraftServer? = null
+
+fun attachServer(server: MinecraftServer) {
+    serverRef = server
+}
+
+fun detachServer(server: MinecraftServer) {
+    if (serverRef === server) serverRef = null
+}
 
     /**
      * Guards groups currently executing so we don't start twice.
@@ -73,15 +120,16 @@ object ChunkGroupForgetting {
      * then we consume the anchor and disarm the marks.
      */
     private data class Execution(
-        val group: Group,
-        var ticksWaited: Int = 0
-    )
+    val group: Group,
+    /** Chunks for which we have observed a regeneration decision (NBT treated as missing). */
+    val renewedChunks: MutableSet<ChunkPos> = ConcurrentHashMap.newKeySet<ChunkPos>(),
+    /** Used to rate-limit progress logging. Incremented opportunistically. */
+    var progressPings: Int = 0
+)
 
     private val executing = ConcurrentHashMap<String, Execution>()
 
-    /** Safety bound: avoid keeping forget marks armed indefinitely. (10 seconds) */
-    private const val FINALIZE_MAX_TICKS = 200
-
+    
     fun snapshotMarkedGroups(): List<Group> =
         markedGroups.values.sortedBy { it.anchorName.lowercase() }
 
@@ -191,7 +239,18 @@ object ChunkGroupForgetting {
             val world = server.getWorld(g.dimension) ?: continue
             val loadedCount = g.chunks.count { isChunkCurrentlyLoaded(world, it) }
 
-            if (loadedCount > 0) {
+// State transitions for the group lifecycle (Marked/Blocked/Free).
+val nextState = if (loadedCount > 0) GroupState.BLOCKED else GroupState.FREE
+if (g.state != nextState && g.state != GroupState.FORGETTING && g.state != GroupState.RENEWED) {
+    val prev = g.state
+    g.state = nextState
+    MementoDebug.info(
+        server,
+        "Chunk group state: '${g.anchorName}' ${prev} -> ${nextState} (loadedChunks=$loadedCount/${g.chunks.size})"
+    )
+}
+
+if (loadedCount > 0) {
                 // We do not guess the reason (players/mobs/spawn/ticking blocks). We report the fact.
                 MementoDebug.info(
                     server,
@@ -211,6 +270,52 @@ object ChunkGroupForgetting {
         val key = "${dimension.value}:" + pos.toLong()
         return activeForgetChunks.contains(key)
     }
+/**
+ * Called from ChunkForgetPredicate when the storage mixin decided to treat this chunk as missing.
+ *
+ * This is our only reliable "observation" that the chunk will regenerate.
+ * We use it to drive the final state transitions:
+ *
+ *   Group: FORGETTING -> RENEWED
+ *   Witherstone: Matured -> Consumed
+ */
+fun onChunkRenewalObserved(dimension: RegistryKey<World>, pos: ChunkPos) {
+    val key = "${dimension.value}:" + pos.toLong()
+    val owner = activeChunkOwner[key] ?: return
+
+    val exec = executing[owner] ?: return
+    val group = exec.group
+    if (group.dimension != dimension) return
+    if (!group.chunks.contains(pos)) return
+
+    // Record observation.
+    val added = exec.renewedChunks.add(pos)
+    if (!added) return
+
+    val total = group.chunks.size
+    val done = exec.renewedChunks.size
+
+    // Low-noise progress logging: first observation and then every 5.
+    val server = serverRef
+    if (server != null) {
+        if (done == 1 || done % 5 == 0 || done == total) {
+            MementoDebug.info(
+                server,
+                "Renewal observed for '${group.anchorName}': $done/$total chunk(s) renewed"
+            )
+        }
+    }
+
+    // Completion condition: all chunks observed renewed.
+    if (done == total) {
+        group.state = GroupState.RENEWED
+        val srv = serverRef ?: return
+        // Ensure finalization happens on the server thread.
+        srv.execute {
+            finalizeForgetting(srv, group)
+        }
+    }
+}
 
     /**
      * For observability and /memento info: is this chunk part of any currently marked group?
@@ -224,6 +329,12 @@ object ChunkGroupForgetting {
 
         // If already executing/finalizing, do nothing.
         if (!executingGroups.add(name)) return
+
+        // Only start when the group is explicitly FREE.
+        if (group.state != GroupState.FREE) {
+            executingGroups.remove(name)
+            return
+        }
 
         // Core invariant: only start when the entire group is currently unloaded.
         if (!allChunksUnloaded(world, group)) {
@@ -255,6 +366,7 @@ object ChunkGroupForgetting {
         markActiveForget(group)
 
         // Track execution for finalize.
+        group.state = GroupState.FORGETTING
         executing[group.anchorName] = Execution(group)
 
         // Actively load all group chunks (one-shot). This triggers regeneration via mixin.
@@ -273,54 +385,19 @@ object ChunkGroupForgetting {
 
         // Do NOT unmark / consume immediately.
         // Loads/NBT reads may complete later; we finalize when all group chunks are observed loaded.
-        scheduleFinalize(server, group.anchorName)
-    }
-
-    private fun scheduleFinalize(server: MinecraftServer, anchorName: String) {
-        server.execute {
-            val exec = executing[anchorName] ?: return@execute
-            val group = exec.group
-            val world = server.getWorld(group.dimension)
-
-            if (world == null) {
-                MementoDebug.warn(server, "Finalize aborted: world not available for '${group.anchorName}'")
-                abortExecution(group)
-                return@execute
-            }
-
-            val loadedCount = group.chunks.count { isChunkCurrentlyLoaded(world, it) }
-            if (loadedCount < group.chunks.size) {
-                exec.ticksWaited++
-
-                // Low-noise progress: log on first tick and then every second.
-                if (exec.ticksWaited == 1 || exec.ticksWaited % 20 == 0) {
-                    MementoDebug.info(
-                        server,
-                        "Finalizing forgetting for '${group.anchorName}': waiting for chunks to load ($loadedCount/${group.chunks.size})"
-                    )
-                }
-
-                if (exec.ticksWaited >= FINALIZE_MAX_TICKS) {
-                    MementoDebug.warn(
-                        server,
-                        "Finalizing forgetting for '${group.anchorName}' timed out; aborting this attempt (loaded $loadedCount/${group.chunks.size}). The land remains marked."
-                    )
-                    abortExecution(group)
-                    // Keep the group marked so it can be retried on future unload/sweep.
-                    return@execute
-                }
-
-                scheduleFinalize(server, anchorName)
-                return@execute
-            }
-
-            // All chunks are loaded now; it's safe to disarm marks and consume anchor.
-            finalizeForgetting(server, group)
-        }
     }
 
     private fun finalizeForgetting(server: MinecraftServer, group: Group) {
-        unmarkActiveForget(group)
+    // Defensive: we only consume the witherstone after *all* chunks were observed renewed.
+    if (group.state != GroupState.RENEWED) {
+        MementoDebug.warn(
+            server,
+            "Finalize refused for '${group.anchorName}': group not renewed yet (state=${group.state})"
+        )
+        return
+    }
+
+    unmarkActiveForget(group)
 
         markedGroups.remove(group.anchorName)
         MementoAnchors.remove(group.anchorName)
@@ -342,6 +419,7 @@ object ChunkGroupForgetting {
         for (pos in group.chunks) {
             val key = "${group.dimension.value}:" + pos.toLong()
             activeForgetChunks.add(key)
+            activeChunkOwner[key] = group.anchorName
         }
     }
 
@@ -349,6 +427,7 @@ object ChunkGroupForgetting {
         for (pos in group.chunks) {
             val key = "${group.dimension.value}:" + pos.toLong()
             activeForgetChunks.remove(key)
+            activeChunkOwner.remove(key)
         }
     }
 

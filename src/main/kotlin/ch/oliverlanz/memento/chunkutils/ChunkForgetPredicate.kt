@@ -27,6 +27,8 @@ object ChunkForgetPredicate {
         val forget = ChunkGroupForgetting.shouldForgetNow(dimension, chunkPos)
 
         if (forget) {
+            // Feed the observation back into the group executor.
+            ChunkGroupForgetting.onChunkRenewalObserved(dimension, chunkPos)
             val key = "${dimension.value}:" + chunkPos.toLong()
             if (loggedForgetDecisions.add(key)) {
                 logger.info(
