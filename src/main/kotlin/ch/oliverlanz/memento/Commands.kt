@@ -12,12 +12,6 @@ import net.minecraft.server.command.ServerCommandSource
 import net.minecraft.text.Text
 import net.minecraft.util.math.BlockPos
 
-/**
- * Command parsing + dispatch only.
- *
- * Domain logic belongs to the anchor / forgetting utilities. This file should stay
- * as a thin translation layer from chat commands to explicit domain operations.
- */
 object Commands {
 
     fun register() {
@@ -31,146 +25,169 @@ object Commands {
             literal("memento")
                 .requires { it.hasPermissionLevel(MementoConstants.REQUIRED_OP_LEVEL) }
 
-                // ---------- listing ----------
-                .then(
-                    literal("list")
-                        .executes { ctx -> list(ctx.source, null) }
-                        .then(literal("witherstone").executes { ctx -> list(ctx.source, MementoAnchors.Kind.FORGET) })
-                        .then(literal("lorestone").executes { ctx -> list(ctx.source, MementoAnchors.Kind.REMEMBER) })
+                /* ======================
+                 * LIST
+                 * ====================== */
+                .then(literal("list")
+                    .executes { list(null, it.source) }
+                    .then(literal("witherstone").executes { list(MementoAnchors.Kind.FORGET, it.source) })
+                    .then(literal("lorestone").executes { list(MementoAnchors.Kind.REMEMBER, it.source) })
                 )
 
-                // ---------- inspect ----------
-                .then(
-                    literal("inspect")
-                        .then(
-                            argument("name", StringArgumentType.word())
+                /* ======================
+                 * INSPECT
+                 * ====================== */
+                .then(literal("inspect")
+                    .then(argument("name", StringArgumentType.word())
+                        .executes { ctx ->
+                            inspect(ctx.source, StringArgumentType.getString(ctx, "name"))
+                        }
+                    )
+                )
+
+                /* ======================
+                 * ADD
+                 * ====================== */
+                .then(literal("add")
+
+                    // --- witherstone ---
+                    .then(literal("witherstone")
+                        .then(argument("name", StringArgumentType.word())
+                            .then(argument("radius", IntegerArgumentType.integer(1, 10))
+                                .then(argument("daysToMaturity", IntegerArgumentType.integer(0, 10))
+                                    .executes { ctx ->
+                                        addWitherstone(
+                                            ctx.source,
+                                            StringArgumentType.getString(ctx, "name"),
+                                            IntegerArgumentType.getInteger(ctx, "radius"),
+                                            IntegerArgumentType.getInteger(ctx, "daysToMaturity")
+                                        )
+                                    }
+                                )
+                            )
+                        )
+                    )
+
+                    // --- lorestone ---
+                    .then(literal("lorestone")
+                        .then(argument("name", StringArgumentType.word())
+                            .then(argument("radius", IntegerArgumentType.integer(1, 10))
                                 .executes { ctx ->
-                                    inspect(ctx.source, StringArgumentType.getString(ctx, "name"))
+                                    addLorestone(
+                                        ctx.source,
+                                        StringArgumentType.getString(ctx, "name"),
+                                        IntegerArgumentType.getInteger(ctx, "radius")
+                                    )
                                 }
+                            )
                         )
+                    )
                 )
 
-                // ---------- add ----------
-                .then(
-                    literal("add")
-                        .then(
-                            literal("witherstone")
-                                .then(
-                                    argument("name", StringArgumentType.word())
-                                        .then(
-                                            argument("radius", IntegerArgumentType.integer(1, 10))
-                                                .then(
-                                                    argument("daysToMaturity", IntegerArgumentType.integer(0, 10))
-                                                        .executes { ctx ->
-                                                            addWitherstone(
-                                                                ctx.source,
-                                                                StringArgumentType.getString(ctx, "name"),
-                                                                IntegerArgumentType.getInteger(ctx, "radius"),
-                                                                IntegerArgumentType.getInteger(ctx, "daysToMaturity")
-                                                            )
-                                                        }
-                                                )
-                                        )
-                                )
+                /* ======================
+                 * REMOVE
+                 * ====================== */
+                .then(literal("remove")
+                    .then(literal("witherstone")
+                        .then(argument("name", StringArgumentType.word())
+                            .executes { ctx ->
+                                remove(ctx.source, StringArgumentType.getString(ctx, "name"))
+                            }
                         )
-                        .then(
-                            literal("lorestone")
-                                .then(
-                                    argument("name", StringArgumentType.word())
-                                        .then(
-                                            argument("radius", IntegerArgumentType.integer(1, 10))
-                                                .executes { ctx ->
-                                                    addLorestone(
-                                                        ctx.source,
-                                                        StringArgumentType.getString(ctx, "name"),
-                                                        IntegerArgumentType.getInteger(ctx, "radius")
-                                                    )
-                                                }
-                                        )
-                                )
+                    )
+                    .then(literal("lorestone")
+                        .then(argument("name", StringArgumentType.word())
+                            .executes { ctx ->
+                                remove(ctx.source, StringArgumentType.getString(ctx, "name"))
+                            }
                         )
+                    )
                 )
 
-                // ---------- remove ----------
-                .then(
-                    literal("remove")
-                        .then(
-                            literal("witherstone")
-                                .then(argument("name", StringArgumentType.word()).executes { ctx ->
-                                    removeStone(ctx.source, StringArgumentType.getString(ctx, "name"), expected = MementoAnchors.Kind.FORGET)
-                                })
-                        )
-                        .then(
-                            literal("lorestone")
-                                .then(argument("name", StringArgumentType.word()).executes { ctx ->
-                                    removeStone(ctx.source, StringArgumentType.getString(ctx, "name"), expected = MementoAnchors.Kind.REMEMBER)
-                                })
-                        )
-                )
+                /* ======================
+                 * SET
+                 * ====================== */
+                .then(literal("set")
 
-                // ---------- set ----------
-                .then(
-                    literal("set")
-                        .then(
-                            literal("witherstone")
-                                .then(
-                                    argument("name", StringArgumentType.word())
-                                        .then(
-                                            literal("daysToMaturity")
-                                                .then(
-                                                    argument("value", IntegerArgumentType.integer(0, 10))
-                                                        .executes { ctx ->
-                                                            setWitherstoneDays(
-                                                                ctx.source,
-                                                                StringArgumentType.getString(ctx, "name"),
-                                                                IntegerArgumentType.getInteger(ctx, "value")
-                                                            )
-                                                        }
-                                                )
+                    // --- witherstone ---
+                    .then(literal("witherstone")
+                        .then(argument("name", StringArgumentType.word())
+
+                            .then(literal("daysToMaturity")
+                                .then(argument("value", IntegerArgumentType.integer(0, 10))
+                                    .executes { ctx ->
+                                        setDaysToMaturity(
+                                            ctx.source,
+                                            StringArgumentType.getString(ctx, "name"),
+                                            IntegerArgumentType.getInteger(ctx, "value")
                                         )
-                                        .then(
-                                            literal("radius")
-                                                .then(
-                                                    argument("value", IntegerArgumentType.integer(1, 10))
-                                                        .executes { ctx ->
-                                                            setWitherstoneRadius(
-                                                                ctx.source,
-                                                                StringArgumentType.getString(ctx, "name"),
-                                                                IntegerArgumentType.getInteger(ctx, "value")
-                                                            )
-                                                        }
-                                                )
-                                        )
+                                    }
                                 )
+                            )
+
+                            .then(literal("radius")
+                                .then(argument("value", IntegerArgumentType.integer(1, 10))
+                                    .executes { ctx ->
+                                        setRadius(
+                                            ctx.source,
+                                            StringArgumentType.getString(ctx, "name"),
+                                            IntegerArgumentType.getInteger(ctx, "value")
+                                        )
+                                    }
+                                )
+                            )
                         )
+                    )
+
+                    // --- lorestone ---
+                    .then(literal("lorestone")
+                        .then(argument("name", StringArgumentType.word())
+                            .then(literal("radius")
+                                .then(argument("value", IntegerArgumentType.integer(1, 10))
+                                    .executes { ctx ->
+                                        setRadius(
+                                            ctx.source,
+                                            StringArgumentType.getString(ctx, "name"),
+                                            IntegerArgumentType.getInteger(ctx, "value")
+                                        )
+                                    }
+                                )
+                            )
+                        )
+                    )
                 )
         )
     }
 
-    // ---------------- dispatch implementations ----------------
+    /* ============================================================
+     * Dispatch helpers (no parsing logic below this line)
+     * ============================================================ */
 
-    private fun addWitherstone(src: ServerCommandSource, name: String, radius: Int, daysToMaturity: Int): Int {
-        val world = src.world
+    private fun addWitherstone(
+        src: ServerCommandSource,
+        name: String,
+        radius: Int,
+        daysToMaturity: Int
+    ): Int {
         val pos = BlockPos.ofFloored(src.position)
+        val world = src.world
 
-        // Replace semantics: if a stone name is reused, we discard any existing derived group first.
-        ChunkGroupForgetting.discardGroup(name)
-
-        val anchor = MementoAnchors.Anchor(
-            name = name,
-            kind = MementoAnchors.Kind.FORGET,
-            dimension = world.registryKey,
-            pos = pos,
-            radius = radius,
-            days = daysToMaturity,
-            state = if (daysToMaturity == 0) MementoAnchors.WitherstoneState.MATURED else MementoAnchors.WitherstoneState.MATURING,
-            createdGameTime = world.time
+        MementoAnchors.addOrReplace(
+            MementoAnchors.Anchor(
+                name = name,
+                kind = MementoAnchors.Kind.FORGET,
+                dimension = world.registryKey,
+                pos = pos,
+                radius = radius,
+                days = daysToMaturity,
+                state =
+                    if (daysToMaturity == 0)
+                        MementoAnchors.WitherstoneState.MATURED
+                    else
+                        MementoAnchors.WitherstoneState.MATURING,
+                createdGameTime = world.time
+            )
         )
-        MementoAnchors.addOrReplace(anchor)
-        MementoPersistence.save(src.server)
-
-        // If created matured, mark its group immediately (same semantics as nightly 1->0 maturation).
-        ChunkGroupForgetting.markMaturedWitherstoneNow(src.server, anchor)
 
         src.sendFeedback(
             { Text.literal("Witherstone '$name' placed (radius=$radius, daysToMaturity=$daysToMaturity)") },
@@ -179,22 +196,26 @@ object Commands {
         return 1
     }
 
-    private fun addLorestone(src: ServerCommandSource, name: String, radius: Int): Int {
-        val world = src.world
+    private fun addLorestone(
+        src: ServerCommandSource,
+        name: String,
+        radius: Int
+    ): Int {
         val pos = BlockPos.ofFloored(src.position)
+        val world = src.world
 
-        val anchor = MementoAnchors.Anchor(
-            name = name,
-            kind = MementoAnchors.Kind.REMEMBER,
-            dimension = world.registryKey,
-            pos = pos,
-            radius = radius,
-            days = null,
-            state = null,
-            createdGameTime = world.time
+        MementoAnchors.addOrReplace(
+            MementoAnchors.Anchor(
+                name = name,
+                kind = MementoAnchors.Kind.REMEMBER,
+                dimension = world.registryKey,
+                pos = pos,
+                radius = radius,
+                days = null,
+                state = null,
+                createdGameTime = world.time
+            )
         )
-        MementoAnchors.addOrReplace(anchor)
-        MementoPersistence.save(src.server)
 
         src.sendFeedback(
             { Text.literal("Lorestone '$name' placed (radius=$radius)") },
@@ -203,79 +224,96 @@ object Commands {
         return 1
     }
 
-    private fun removeStone(src: ServerCommandSource, name: String, expected: MementoAnchors.Kind): Int {
-        val existing = MementoAnchors.get(name)
+    private fun remove(src: ServerCommandSource, name: String): Int {
+        val removed = MementoAnchors.remove(name)
+        ChunkGroupForgetting.discardGroup(name)
+
+        src.sendFeedback(
+            { Text.literal(if (removed) "Removed '$name'" else "No such stone '$name'") },
+            false
+        )
+        return 1
+    }
+
+    private fun setDaysToMaturity(
+        src: ServerCommandSource,
+        name: String,
+        value: Int
+    ): Int {
+        val anchor = MementoAnchors.get(name)
+            ?: return error(src, "No such witherstone '$name'")
+
+        if (anchor.kind != MementoAnchors.Kind.FORGET) {
+            return error(src, "'$name' is not a witherstone")
+        }
+
+        // rewind lifecycle if already matured
+        if (anchor.state == MementoAnchors.WitherstoneState.MATURED && value > 0) {
+            ChunkGroupForgetting.discardGroup(name)
+        }
+
+        MementoAnchors.addOrReplace(
+            anchor.copy(
+                days = value,
+                state =
+                    if (value == 0)
+                        MementoAnchors.WitherstoneState.MATURED
+                    else
+                        MementoAnchors.WitherstoneState.MATURING
+            )
+        )
+
+        src.sendFeedback(
+            { Text.literal("Witherstone '$name' daysToMaturity set to $value") },
+            false
+        )
+        return 1
+    }
+
+    private fun setRadius(
+        src: ServerCommandSource,
+        name: String,
+        radius: Int
+    ): Int {
+        val anchor = MementoAnchors.get(name)
             ?: return error(src, "No such stone '$name'")
 
-        if (existing.kind != expected) {
-            return error(src, "'$name' is not a ${expected.name.lowercase()}")
-        }
+        MementoAnchors.addOrReplace(anchor.copy(radius = radius))
 
-        MementoAnchors.remove(name)
-        ChunkGroupForgetting.discardGroup(name)
-        MementoPersistence.save(src.server)
-
-        src.sendFeedback({ Text.literal("Removed '$name'") }, false)
-        return 1
-    }
-
-    private fun setWitherstoneDays(src: ServerCommandSource, name: String, daysToMaturity: Int): Int {
-        val existing = MementoAnchors.get(name)
-            ?: return error(src, "No such witherstone '$name'")
-
-        if (existing.kind != MementoAnchors.Kind.FORGET) {
-            return error(src, "'$name' is not a witherstone")
-        }
-
-        val prevDays = existing.days ?: 0
-        val wasMatured = (existing.state == MementoAnchors.WitherstoneState.MATURED || prevDays == 0)
-
-        // Locked semantics: 0 -> N rewinds lifecycle; derived group must be discarded.
-        if (wasMatured && daysToMaturity > 0) {
-            ChunkGroupForgetting.discardGroup(name)
-        }
-
-        val updated = existing.copy(
-            days = daysToMaturity,
-            state = if (daysToMaturity == 0) MementoAnchors.WitherstoneState.MATURED else MementoAnchors.WitherstoneState.MATURING
+        src.sendFeedback(
+            { Text.literal("Stone '$name' radius set to $radius") },
+            false
         )
-        MementoAnchors.addOrReplace(updated)
-        MementoPersistence.save(src.server)
-
-        // Setting N -> 0 matures immediately; mark group now.
-        if (daysToMaturity == 0) {
-            ChunkGroupForgetting.markMaturedWitherstoneNow(src.server, updated)
-        }
-
-        src.sendFeedback({ Text.literal("Witherstone '$name' daysToMaturity set to $daysToMaturity") }, false)
         return 1
     }
 
-    private fun setWitherstoneRadius(src: ServerCommandSource, name: String, radius: Int): Int {
-        val existing = MementoAnchors.get(name)
-            ?: return error(src, "No such witherstone '$name'")
+    private fun inspect(src: ServerCommandSource, name: String): Int {
+        val group = ChunkGroupForgetting.getGroupByAnchorName(name)
+            ?: run {
+                src.sendError(Text.literal("No active chunk group for '$name'"))
+                return 0
+            }
 
-        if (existing.kind != MementoAnchors.Kind.FORGET) {
-            return error(src, "'$name' is not a witherstone")
+        val reports = ChunkInspection.inspectGroup(src.server, group)
+
+        if (reports.isEmpty()) {
+            src.sendFeedback(
+                { Text.literal("Nothing is blocking regeneration for '$name'") },
+                false
+            )
+            return 1
         }
 
-        val updated = existing.copy(radius = radius)
-        MementoAnchors.addOrReplace(updated)
-        MementoPersistence.save(src.server)
-
-        // If already matured, re-derive group immediately with the new radius.
-        val days = updated.days ?: 0
-        val matured = (updated.state == MementoAnchors.WitherstoneState.MATURED || days == 0)
-        if (matured) {
-            ChunkGroupForgetting.discardGroup(name)
-            ChunkGroupForgetting.markMaturedWitherstoneNow(src.server, updated)
+        reports.forEach { report ->
+            src.sendFeedback(
+                { Text.literal(report.summary) },
+                false
+            )
         }
-
-        src.sendFeedback({ Text.literal("Witherstone '$name' radius set to $radius") }, false)
         return 1
     }
 
-    private fun list(src: ServerCommandSource, kind: MementoAnchors.Kind?): Int {
+    private fun list(kind: MementoAnchors.Kind?, src: ServerCommandSource): Int {
         val stones = MementoAnchors.list()
             .filter { kind == null || it.kind == kind }
 
@@ -284,78 +322,17 @@ object Commands {
             return 1
         }
 
-        for (a in stones) {
-            val days = a.days?.let { " daysToMaturity=$it" } ?: ""
+        stones.forEach {
             src.sendFeedback(
-                { Text.literal("${a.name}: ${a.kind.name.lowercase()} at ${a.pos} r=${a.radius}$days") },
+                {
+                    Text.literal(
+                        "${it.name}: ${it.kind} radius=${it.radius}" +
+                            (it.days?.let { d -> " daysToMaturity=$d" } ?: "")
+                    )
+                },
                 false
             )
         }
-        return 1
-    }
-
-    private fun inspect(src: ServerCommandSource, name: String): Int {
-        val anchor = MementoAnchors.get(name)
-            ?: return error(src, "No such stone '$name'")
-
-        if (anchor.kind == MementoAnchors.Kind.REMEMBER) {
-            src.sendFeedback(
-                { Text.literal("Lorestone '$name': radius=${anchor.radius} (no forgetting behavior in this slice)") },
-                false
-            )
-            return 1
-        }
-
-        val days = anchor.days ?: return error(src, "Witherstone '$name' has no days counter (unexpected)")
-        val state = anchor.state ?: if (days == 0) MementoAnchors.WitherstoneState.MATURED else MementoAnchors.WitherstoneState.MATURING
-
-        src.sendFeedback(
-            { Text.literal("Witherstone '$name': state=$state radius=${anchor.radius} daysToMaturity=$days") },
-            false
-        )
-
-        if (days > 0 || state == MementoAnchors.WitherstoneState.MATURING) {
-            src.sendFeedback(
-                { Text.literal("Not matured yet; will mature in $days day(s).") },
-                false
-            )
-            return 1
-        }
-
-        // Ensure group exists (should after startup rebuild, but safe for command path).
-        ChunkGroupForgetting.markMaturedWitherstoneNow(src.server, anchor)
-
-        val group = ChunkGroupForgetting.getGroupByAnchorName(name)
-            ?: run {
-                src.sendFeedback({ Text.literal("No derived chunk group found for '$name'.") }, false)
-                return 1
-            }
-
-        val reports = ChunkInspection.inspectGroup(src.server, group)
-        val loaded = reports.filter { it.isLoaded }
-
-        src.sendFeedback(
-            { Text.literal("Chunk group: ${group.chunks.size} chunks; loaded=${loaded.size}") },
-            false
-        )
-
-        if (loaded.isEmpty()) {
-            src.sendFeedback(
-                { Text.literal("All chunks are currently unloaded. Regeneration can begin on the next eligible trigger.") },
-                false
-            )
-            return 1
-        }
-
-        // Explain precisely what we are waiting for: the loaded chunks to unload.
-        for (r in loaded) {
-            val header = "Chunk (${r.pos.x},${r.pos.z}) is loaded"
-            src.sendFeedback({ Text.literal(header) }, false)
-            for (b in r.blockers) {
-                src.sendFeedback({ Text.literal(" - ${b.kind}: ${b.details}") }, false)
-            }
-        }
-
         return 1
     }
 
