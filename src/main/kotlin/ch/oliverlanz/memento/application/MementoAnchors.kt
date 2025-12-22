@@ -1,10 +1,13 @@
 package ch.oliverlanz.memento.application
 
+import ch.oliverlanz.memento.infrastructure.MementoDebug
+import ch.oliverlanz.memento.infrastructure.MementoPersistence
 import net.minecraft.registry.RegistryKey
+import net.minecraft.server.MinecraftServer
 import net.minecraft.util.math.BlockPos
-import net.minecraft.world.World
-
 import net.minecraft.util.math.ChunkPos
+import net.minecraft.world.World
+import kotlin.math.sqrt
 
 object MementoAnchors {
 
@@ -14,12 +17,12 @@ object MementoAnchors {
      * Explicit lifecycle state for Witherstone (FORGET) anchors.
      *
      * This is persisted so the meaning of an anchor is not inferred purely from counters.
-     *
-     * - MATURING: time to maturity remains (> 0 days)
-     * - MATURED: time to maturity elapsed (0 days); land may be forgotten once it becomes free
-     * - CONSUMED: terminal; anchor is removed from persistence
      */
-    enum class WitherstoneState { MATURING, MATURED, CONSUMED }
+    enum class WitherstoneState {
+        MATURING,
+        MATURED,
+        CONSUMED
+    }
 
     data class Anchor(
         val name: String,
@@ -27,7 +30,7 @@ object MementoAnchors {
         val dimension: RegistryKey<World>,
         val pos: BlockPos,
         val radius: Int,
-        val days: Int?,              // only for FORGET; null for REMEMBER
+        val days: Int?,                    // only for FORGET; null for REMEMBER
         val state: WitherstoneState? = null, // only for FORGET; null for REMEMBER
         val createdGameTime: Long
     )
@@ -38,79 +41,104 @@ object MementoAnchors {
 
     fun get(name: String): Anchor? = anchors[name]
 
+    fun clear() {
+        anchors.clear()
+    }
+
+    fun putAll(loaded: Map<String, Anchor>) {
+        anchors.putAll(loaded)
+    }
+
     /**
      * Add or replace an anchor with the same name.
-     * This matches the command semantics.
      */
     fun addOrReplace(anchor: Anchor) {
         anchors[anchor.name] = anchor
     }
 
     /**
-     * Add only if the name does not exist.
-     * (Kept for possible future use.)
+     * Remove anchor by name.
+     *
+     * @return true if removed.
      */
-    fun add(anchor: Anchor): Boolean {
-        if (anchors.containsKey(anchor.name)) return false
-        anchors[anchor.name] = anchor
-        return true
-    }
-
     fun remove(name: String): Boolean =
         anchors.remove(name) != null
 
-    fun clear() {
-        anchors.clear()
-    }
+    fun isMaturedForgetAnchor(anchor: Anchor): Boolean =
+        anchor.kind == Kind.FORGET && anchor.state == WitherstoneState.MATURED
 
-    fun putAll(newAnchors: Collection<Anchor>) {
-        anchors.clear()
-        for (a in newAnchors) {
-            anchors[a.name] = a
-        }
+    fun consume(name: String) {
+        val a = anchors[name] ?: return
+        if (a.kind != Kind.FORGET) return
+
+        // Mark consumed (do not delete); stone removal is handled elsewhere.
+        anchors[name] = a.copy(state = WitherstoneState.CONSUMED, days = 0)
     }
 
     /**
-     * Legacy helper used during early experiments.
+     * Ages witherstones by one day.
      *
-     * The current model uses anchor-based *chunk groups* (radius) and an
-     * execution gate that waits until all chunks in a group are unloaded.
-     * This function is kept for reference and for possible future test cases.
+     * This is the explicit "daily maturation" API.
+     *
+     * - Only affects FORGET anchors in MATURING state
+     * - Decrements `days` until it reaches 0
+     * - Transitions MATURING → MATURED when reaching 0
+     * - Persists anchors if any change occurred
+     *
+     * @return number of witherstones that matured in this run
      */
-    fun shouldForgetExactChunk(
-        dimension: RegistryKey<World>,
-        chunkPos: ChunkPos
-    ): Boolean {
-        return anchors.values.any { anchor ->
-            anchor.kind == Kind.FORGET &&
-                anchor.dimension == dimension &&
-                (anchor.pos.x shr 4) == chunkPos.x &&
-                (anchor.pos.z shr 4) == chunkPos.z
+    fun ageOnce(server: MinecraftServer): Int {
+        var matured = 0
+        var changed = false
+
+        val updated = anchors.mapValues { (_, a) ->
+            if (a.kind != Kind.FORGET) return@mapValues a
+            if (a.state != WitherstoneState.MATURING) return@mapValues a
+
+            val current = a.days ?: 0
+            val next = current - 1
+
+            if (next <= 0) {
+                matured++
+                changed = true
+                MementoDebug.warn(
+                    server,
+                    "Witherstone '${a.name}' transitioned MATURING → MATURED"
+                )
+                a.copy(days = 0, state = WitherstoneState.MATURED)
+            } else {
+                changed = true
+                a.copy(days = next)
+            }
         }
+
+        if (changed) {
+            anchors.clear()
+            anchors.putAll(updated)
+            MementoPersistence.saveAnchors(server)
+        }
+
+        return matured
     }
 
     /**
-     * Compute all chunks within a circular radius around an anchor position.
+     * Derive the set of chunks covered by an anchor radius.
      *
-     * Radius semantics (locked for this slice):
-     * - radius is given in *chunks* (1 == 16 blocks)
-     * - a chunk is included if its *center* is within the radius from the anchor position
-     *
-     * We use this for anchor-based chunk groups.
+     * Semantics: circular coverage in chunk space, using chunk-center distance in block space.
+     * This matches chunk-group derivation semantics.
      */
     fun computeChunksInRadius(anchorPos: BlockPos, radiusChunks: Int): Set<ChunkPos> {
-        val radiusBlocks = radiusChunks * 16.0
-        val radiusSq = radiusBlocks * radiusBlocks
-
         val anchorX = anchorPos.x.toDouble()
         val anchorZ = anchorPos.z.toDouble()
+
+        val radiusBlocks = radiusChunks * 16.0
+        val radiusSq = radiusBlocks * radiusBlocks
 
         val anchorChunkX = anchorPos.x shr 4
         val anchorChunkZ = anchorPos.z shr 4
 
         val result = LinkedHashSet<ChunkPos>()
 
-        // Bounding square in chunk space, then filter by circle distance using chunk centers.
         for (cx in (anchorChunkX - radiusChunks)..(anchorChunkX + radiusChunks)) {
             for (cz in (anchorChunkZ - radiusChunks)..(anchorChunkZ + radiusChunks)) {
                 val centerX = (cx * 16 + 8).toDouble()
@@ -122,33 +150,17 @@ object MementoAnchors {
                 }
             }
         }
+
         return result
     }
 
     /**
-     * Returns true if there exists a FORGET anchor whose radius
-     * covers the given chunk in the given dimension.
+     * Coverage check for a single chunk.
      *
-     * This is the authoritative forgettability check.
+     * This is authoritative "is this chunk within the anchor radius" logic,
+     * aligned with computeChunksInRadius semantics.
      */
-    fun shouldForgetChunk(
-        dimension: RegistryKey<World>,
-        chunkPos: ChunkPos
-    ): Boolean {
-        return anchors.values.any { anchor ->
-            anchor.kind == Kind.FORGET &&
-                    anchor.dimension == dimension &&
-                    isChunkWithinAnchorRadius(anchor, chunkPos)
-        }
-    }
-
-    private fun isChunkWithinAnchorRadius(
-        anchor: Anchor,
-        chunkPos: ChunkPos
-    ): Boolean {
-        // Reuse the same semantics as the group builder.
-        // This method is not currently used for regeneration, but it is an authoritative
-        // "coverage" check for future slices.
+    fun coversChunk(anchor: Anchor, chunkPos: ChunkPos): Boolean {
         val radiusBlocks = anchor.radius * 16.0
         val radiusSq = radiusBlocks * radiusBlocks
 

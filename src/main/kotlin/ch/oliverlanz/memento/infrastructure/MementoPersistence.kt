@@ -2,8 +2,11 @@ package ch.oliverlanz.memento.infrastructure
 
 import ch.oliverlanz.memento.application.MementoAnchors
 import com.google.gson.GsonBuilder
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import net.minecraft.registry.RegistryKey
+import net.minecraft.registry.RegistryKeys
 import net.minecraft.server.MinecraftServer
 import net.minecraft.util.Identifier
 import net.minecraft.util.WorldSavePath
@@ -16,47 +19,41 @@ import java.nio.file.Path
 object MementoPersistence {
 
     private val gson = GsonBuilder().setPrettyPrinting().create()
+    private const val FILE_NAME = "memento_anchors.json"
 
-    private data class AnchorDto(
-        val name: String,
-        val kind: String,
-        val dimension: String,
-        val x: Int,
-        val y: Int,
-        val z: Int,
-        val radius: Int,
-        val days: Int?,
-        val state: String? = null,
-        val createdGameTime: Long
-    )
-
-    private fun filePath(server: MinecraftServer): Path {
-        // World root folder (same place as level.dat)
-        return server.getSavePath(WorldSavePath.ROOT).resolve("memento_anchors.json")
-    }
+    private fun filePath(server: MinecraftServer): Path =
+        server.getSavePath(WorldSavePath.ROOT).resolve(FILE_NAME)
 
     @Synchronized
     fun save(server: MinecraftServer) {
-        val dtos = MementoAnchors.list()
-            .sortedBy { it.name.lowercase() }
-            .map { a ->
-                AnchorDto(
-                    name = a.name,
-                    kind = a.kind.name,
-                    dimension = a.dimension.value.toString(),
-                    x = a.pos.x,
-                    y = a.pos.y,
-                    z = a.pos.z,
-                    radius = a.radius,
-                    days = a.days,
-                    state = a.state?.name,
-                    createdGameTime = a.createdGameTime
-                )
-            }
+        saveAnchors(server)
+    }
 
-        val json = gson.toJson(dtos)
-        val path = filePath(server)
-        Files.write(path, json.toByteArray(StandardCharsets.UTF_8))
+    @Synchronized
+    fun saveAnchors(server: MinecraftServer) {
+        val root = JsonObject()
+        val arr = JsonArray()
+
+        for (a in MementoAnchors.list()) {
+            val o = JsonObject()
+            o.addProperty("name", a.name)
+            o.addProperty("kind", a.kind.name)
+            o.addProperty("dimension", a.dimension.value.toString())
+            o.addProperty("x", a.pos.x)
+            o.addProperty("y", a.pos.y)
+            o.addProperty("z", a.pos.z)
+            o.addProperty("radius", a.radius)
+
+            if (a.days != null) o.addProperty("days", a.days)
+            if (a.state != null) o.addProperty("state", a.state.name)
+
+            o.addProperty("createdGameTime", a.createdGameTime)
+            arr.add(o)
+        }
+
+        root.add("anchors", arr)
+        val json = gson.toJson(root)
+        Files.write(filePath(server), json.toByteArray(StandardCharsets.UTF_8))
     }
 
     @Synchronized
@@ -73,49 +70,37 @@ object MementoPersistence {
             return
         }
 
-        val element = JsonParser.parseString(raw)
-        if (!element.isJsonArray) {
-            // bad file format – start clean rather than crash the server
-            MementoAnchors.clear()
-            return
-        }
+        val root = JsonParser.parseString(raw).asJsonObject
+        val arr = root.getAsJsonArray("anchors") ?: JsonArray()
 
-        val loaded = mutableListOf<MementoAnchors.Anchor>()
-        for (e in element.asJsonArray) {
-            if (!e.isJsonObject) continue
+        val loaded = linkedMapOf<String, MementoAnchors.Anchor>()
+
+        for (e in arr) {
             val o = e.asJsonObject
 
-            val name = o.get("name")?.asString ?: continue
-            val kindStr = o.get("kind")?.asString ?: continue
-            val dimStr = o.get("dimension")?.asString ?: continue
+            val name = o.get("name").asString
+            val kind = MementoAnchors.Kind.valueOf(o.get("kind").asString)
 
-            val x = o.get("x")?.asInt ?: continue
-            val y = o.get("y")?.asInt ?: continue
-            val z = o.get("z")?.asInt ?: continue
+            val dimId = Identifier.tryParse(o.get("dimension").asString)
+                ?: Identifier.of("minecraft", "overworld")
+            val dimKey =
+                RegistryKey.of<World>(RegistryKeys.WORLD, dimId)
 
-            val radius = o.get("radius")?.asInt ?: MementoConstants.DEFAULT_RADIUS_CHUNKS
-            val days = if (o.has("days") && !o.get("days").isJsonNull) o.get("days").asInt else null
-            val stateStr = if (o.has("state") && !o.get("state").isJsonNull) o.get("state").asString else null
-            val created = o.get("createdGameTime")?.asLong ?: 0L
+            val x = o.get("x").asInt
+            val y = o.get("y").asInt
+            val z = o.get("z").asInt
+            val radius = o.get("radius").asInt
 
-            val kind = runCatching { MementoAnchors.Kind.valueOf(kindStr) }.getOrNull() ?: continue
-            val dimId = runCatching { Identifier.of(dimStr) }.getOrNull() ?: continue
-            val dimKey: RegistryKey<World> = RegistryKey.of(net.minecraft.registry.RegistryKeys.WORLD, dimId)
+            val days = if (o.has("days")) o.get("days").asInt else null
+            val state =
+                if (o.has("state"))
+                    MementoAnchors.WitherstoneState.valueOf(o.get("state").asString)
+                else
+                    null
 
-            val state = if (kind == MementoAnchors.Kind.FORGET) {
-                // Backward compatible: if the file predates explicit state, derive it from the remaining days.
-                val parsed = stateStr?.let { runCatching { MementoAnchors.WitherstoneState.valueOf(it) }.getOrNull() }
-                parsed ?: when {
-                    days == null -> MementoAnchors.WitherstoneState.MATURING
-                    days == -1 -> MementoAnchors.WitherstoneState.MATURING
-                    days <= 0 -> MementoAnchors.WitherstoneState.MATURED
-                    else -> MementoAnchors.WitherstoneState.MATURING
-                }
-            } else {
-                null
-            }
+            val created = if (o.has("createdGameTime")) o.get("createdGameTime").asLong else 0L
 
-            loaded += MementoAnchors.Anchor(
+            loaded[name] = MementoAnchors.Anchor(
                 name = name,
                 kind = kind,
                 dimension = dimKey,
@@ -127,7 +112,7 @@ object MementoPersistence {
             )
         }
 
-        // If duplicates exist in file, last one wins
+        MementoAnchors.clear()
         MementoAnchors.putAll(loaded)
     }
 }

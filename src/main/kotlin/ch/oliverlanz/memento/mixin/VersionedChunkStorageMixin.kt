@@ -1,8 +1,8 @@
 package ch.oliverlanz.memento.mixin
 
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkForgetPredicate
-import net.minecraft.registry.RegistryKey
 import net.minecraft.nbt.NbtCompound
+import net.minecraft.registry.RegistryKey
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
 import net.minecraft.world.storage.StorageKey
@@ -19,24 +19,21 @@ import java.util.concurrent.CompletableFuture
 abstract class VersionedChunkStorageMixin {
 
     @Shadow
-    protected abstract fun getStorageKey(): StorageKey
+    abstract fun getStorageKey(): StorageKey
 
     @Inject(
-        method = ["getNbt"],
+        method = ["getNbt(Lnet/minecraft/util/math/ChunkPos;)Ljava/util/concurrent/CompletableFuture;"],
         at = [At("HEAD")],
         cancellable = true
     )
-    private fun interceptGetNbt(
+    private fun memento_shouldForgetChunk(
         chunkPos: ChunkPos,
         cir: CallbackInfoReturnable<CompletableFuture<Optional<NbtCompound>>>
     ) {
-        // VersionedChunkStorage is dimension-scoped. We derive dimension from its StorageKey.
-        // StorageKey.dimension() is a RegistryKey<World>.
         @Suppress("UNCHECKED_CAST")
         val dimensionKey = getStorageKey().dimension() as RegistryKey<World>
 
         if (ChunkForgetPredicate.shouldForget(dimensionKey, chunkPos)) {
-            // Returning Optional.empty() means "no chunk NBT exists" => chunk will be generated.
             cir.returnValue = CompletableFuture.completedFuture(Optional.empty())
         }
     }

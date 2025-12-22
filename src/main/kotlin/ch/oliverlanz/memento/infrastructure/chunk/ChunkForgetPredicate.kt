@@ -1,7 +1,8 @@
 package ch.oliverlanz.memento.infrastructure.chunk
 
-import ch.oliverlanz.memento.application.land.ChunkGroupForgetting
+import ch.oliverlanz.memento.application.stone.MementoStoneLifecycle
 import net.minecraft.registry.RegistryKey
+import net.minecraft.server.MinecraftServer
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
 import org.slf4j.LoggerFactory
@@ -10,25 +11,12 @@ import java.util.concurrent.ConcurrentHashMap
 object ChunkForgetPredicate {
 
     private val logger = LoggerFactory.getLogger("memento")
-
-    /**
-     * We intentionally keep logging sparse to avoid spamming the console.
-     * Keyed by "dimensionId:chunkLong".
-     */
     private val loggedForgetDecisions = ConcurrentHashMap.newKeySet<String>()
 
-    fun shouldForget(
-        dimension: RegistryKey<World>,
-        chunkPos: ChunkPos
-    ): Boolean {
-        // The actual regeneration decision is controlled by the group executor.
-        // Only chunks that are actively part of a renewal execution are forgotten.
-        // (This prevents partial regeneration while a group is still waiting to become fully unloaded.)
-        val forget = ChunkGroupForgetting.shouldForgetNow(dimension, chunkPos)
+    fun shouldForget(dimension: RegistryKey<World>, chunkPos: ChunkPos): Boolean {
+        val forget = MementoStoneLifecycle.shouldForgetNow(dimension, chunkPos)
 
         if (forget) {
-            // Feed the observation back into the group executor.
-            ChunkGroupForgetting.onChunkRenewalObserved(dimension, chunkPos)
             val key = "${dimension.value}:" + chunkPos.toLong()
             if (loggedForgetDecisions.add(key)) {
                 logger.info(
@@ -41,5 +29,9 @@ object ChunkForgetPredicate {
         }
 
         return forget
+    }
+
+    fun onChunkRenewalObserved(server: MinecraftServer, dimension: RegistryKey<World>, pos: ChunkPos) {
+        MementoStoneLifecycle.onChunkRenewalObserved(server, dimension, pos)
     }
 }
