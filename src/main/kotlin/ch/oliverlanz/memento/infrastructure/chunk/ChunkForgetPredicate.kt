@@ -5,33 +5,41 @@ import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
-import org.slf4j.LoggerFactory
-import java.util.concurrent.ConcurrentHashMap
 
+/**
+ * Central predicate used by VersionedChunkStorageMixin.
+ */
 object ChunkForgetPredicate {
 
-    private val logger = LoggerFactory.getLogger("memento")
-    private val loggedForgetDecisions = ConcurrentHashMap.newKeySet<String>()
+    /**
+     * Predicate used by the mixin. Keep this signature stable.
+     *
+     * Some mixin injection points don't have direct access to MinecraftServer. In that case we
+     * fall back to the currently attached server (if any). If none is attached we do nothing.
+     */
+    @JvmStatic
+    fun shouldForget(dimension: RegistryKey<World>, pos: ChunkPos): Boolean {
+        val server = MementoStoneLifecycle.currentServerOrNull() ?: return false
+        return shouldForget(server, dimension, pos)
+    }
 
-    fun shouldForget(dimension: RegistryKey<World>, chunkPos: ChunkPos): Boolean {
-        val forget = MementoStoneLifecycle.shouldForgetNow(dimension, chunkPos)
-
-        if (forget) {
-            val key = "${dimension.value}:" + chunkPos.toLong()
-            if (loggedForgetDecisions.add(key)) {
-                logger.info(
-                    "(memento) Loading forgotten chunk: dimension={}, chunk=({}, {}). The chunk will be regenerated.",
-                    dimension.value,
-                    chunkPos.x,
-                    chunkPos.z
-                )
-            }
+    @JvmStatic
+    fun shouldForget(server: MinecraftServer, dimension: RegistryKey<World>, pos: ChunkPos): Boolean {
+        // If the chunk is queued (in-flight) for renewal, we both:
+        //  - return true to force regeneration (read empty NBT)
+        //  - emit an observation that this renewal actually happened
+        if (!MementoStoneLifecycle.isChunkRenewalQueued(dimension, pos)) {
+            return false
         }
 
-        return forget
+        MementoStoneLifecycle.onChunkRenewalObserved(server, dimension, pos)
+        return true
     }
 
-    fun onChunkRenewalObserved(server: MinecraftServer, dimension: RegistryKey<World>, pos: ChunkPos) {
-        MementoStoneLifecycle.onChunkRenewalObserved(server, dimension, pos)
-    }
+    /**
+     * Backwards-compatible alias.
+     */
+    @JvmStatic
+    fun shouldForgetNow(server: MinecraftServer, dimension: RegistryKey<World>, pos: ChunkPos): Boolean =
+        shouldForget(server, dimension, pos)
 }

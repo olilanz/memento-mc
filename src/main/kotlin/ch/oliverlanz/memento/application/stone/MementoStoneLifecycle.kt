@@ -2,7 +2,6 @@ package ch.oliverlanz.memento.application.stone
 
 import ch.oliverlanz.memento.application.MementoAnchors
 import ch.oliverlanz.memento.application.land.ChunkGroupForgetting
-import ch.oliverlanz.memento.infrastructure.MementoConstants
 import ch.oliverlanz.memento.infrastructure.MementoDebug
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
@@ -11,101 +10,80 @@ import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
 
 /**
- * Facade coordinating the lifecycle of memento stones and their derived effects on land.
+ * Coordinates the lifecycle of Memento stones (Witherstones / Lorestones).
  *
- * Responsibilities (locked intent):
- * - MementoAnchors owns aging/maturity of stones (persisted)
- * - ChunkGroupForgetting owns derived groups + execution (not persisted)
- * - This facade wires the two together so the mod entry point stays thin
+ * Responsibilities:
+ * - Evaluate stone maturity (time-based)
+ * - Delegate land / chunk-group lifecycle to [ChunkGroupForgetting]
  */
 object MementoStoneLifecycle {
 
+    private var server: MinecraftServer? = null
+
+    fun currentServerOrNull(): MinecraftServer? = server
+
     fun attachServer(server: MinecraftServer) {
-        rebuildMarkedGroups(server, ChunkGroupForgetting.StoneMaturityTrigger.NIGHTLY_TICK)
+        this.server = server
         MementoDebug.info(server, "MementoStoneLifecycle attached")
     }
 
     fun detachServer(server: MinecraftServer) {
-        // Detach is intentionally a no-op today; kept to preserve call sites.
-        // (We log for symmetry and debuggability.)
-        MementoDebug.info(server, "MementoStoneLifecycle detached")
+        if (this.server === server) {
+            this.server = null
+        }
     }
 
+    /**
+     * Called after persistence is loaded on SERVER_START.
+     * Rebuilds derived chunk groups for already-matured witherstones.
+     */
     fun rebuildMarkedGroups(server: MinecraftServer) {
-        rebuildMarkedGroups(server, ChunkGroupForgetting.StoneMaturityTrigger.SERVER_START)
-    }
-
-    fun rebuildMarkedGroups(server: MinecraftServer, trigger: ChunkGroupForgetting.StoneMaturityTrigger) {
-        ChunkGroupForgetting.rebuildFromAnchors(server, trigger)
+        ChunkGroupForgetting.rebuildFromAnchors(
+            server = server,
+            anchors = snapshotAnchors(),
+            trigger = StoneMaturityTrigger.SERVER_START,
+        )
     }
 
     /**
-     * Age anchors once per Overworld day.
-     *
-     * Important wiring:
-     * - When one or more stones mature, we must rebuild derived groups so land becomes marked.
+     * Called once per overworld day transition.
      */
-    fun ageAnchorsOnce(server: MinecraftServer): Int {
-        // Stone maturity trigger: NIGHTLY_TICK.
-        // If a stone is already matured and still present, renewal has been blocked for >= 1 full day.
-        val alreadyMatured = MementoAnchors.list()
-            .filter { it.kind == MementoAnchors.Kind.FORGET }
-            .filter { it.state == MementoAnchors.WitherstoneState.MATURED }
-
-        for (a in alreadyMatured) {
-            MementoDebug.warn(
-                server,
-                "Witherstone '${a.name}' is still awaiting chunk renewal after one full day. " +
-                    "Stone matured earlier but renewal is blocked (dim=${a.dimension.value}, pos=${a.pos.x},${a.pos.y},${a.pos.z})."
-            )
+    fun ageAnchorsOnce(server: MinecraftServer) {
+        val maturedCount = MementoAnchors.ageOnce(server)
+        if (maturedCount > 0) {
+            MementoDebug.info(server, "Stone maturity trigger=NIGHTLY_TICK → $maturedCount stone(s) matured")
         }
 
-
-        val matured = MementoAnchors.ageOnce(server)
-        if (matured > 0) {
-            rebuildMarkedGroups(server, ChunkGroupForgetting.StoneMaturityTrigger.NIGHTLY_TICK)
-            MementoDebug.info(server, "Daily maturation complete: $matured witherstone(s) matured")
-        }
-        return matured
+        // After maturity changes, rebuild derived groups so operators can inspect immediately.
+        ChunkGroupForgetting.rebuildFromAnchors(
+            server = server,
+            anchors = snapshotAnchors(),
+            trigger = StoneMaturityTrigger.NIGHTLY_TICK,
+        )
     }
 
+    /**
+     * Best-effort tick-time sweep/re-evaluation.
+     */
     fun sweep(server: MinecraftServer) {
-        for (world in server.worlds) {
-            if (world is ServerWorld) {
-                ChunkGroupForgetting.refresh(world, server)
-            }
-        }
+        ChunkGroupForgetting.refreshAllReadiness(server)
     }
 
-    /**
-     * Budgeted regeneration execution step.
-     */
+    fun onChunkUnloaded(server: MinecraftServer, world: ServerWorld, pos: ChunkPos) {
+        ChunkGroupForgetting.onChunkUnloaded(server, world, pos)
+    }
+
     fun tick(server: MinecraftServer) {
-        ChunkGroupForgetting.tick(server, MementoConstants.REGENERATION_CHUNK_INTERVAL_TICKS)
+        ChunkGroupForgetting.tick(server)
     }
 
-    /**
-     * Primary trigger for re-evaluating BLOCKED -> FREE.
-     */
-    fun onChunkUnloaded(
-        server: MinecraftServer,
-        world: ServerWorld,
-        pos: ChunkPos
-    ) {
-        ChunkGroupForgetting.onChunkUnloaded(world, server, pos)
+    fun isChunkRenewalQueued(dimension: RegistryKey<World>, pos: ChunkPos): Boolean =
+        ChunkGroupForgetting.isChunkRenewalQueued(dimension, pos)
+
+    fun onChunkRenewalObserved(server: MinecraftServer, dimension: RegistryKey<World>, pos: ChunkPos) {
+        ChunkGroupForgetting.onChunkRenewalObserved(server, dimension, pos)
     }
 
-    fun onChunkRenewalObserved(
-        server: MinecraftServer,
-        dimension: RegistryKey<World>,
-        pos: ChunkPos
-    ) {
-        ChunkGroupForgetting.onChunkRenewed(server, dimension, pos)
-    }
-
-    fun shouldForgetNow(
-        dimension: RegistryKey<World>,
-        pos: ChunkPos
-    ): Boolean =
-        ChunkGroupForgetting.isMarked(dimension, pos)
+    private fun snapshotAnchors(): Map<String, MementoAnchors.Anchor> =
+        MementoAnchors.list().associateBy { it.name }
 }
