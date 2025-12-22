@@ -2,6 +2,7 @@ package ch.oliverlanz.memento.application.stone
 
 import ch.oliverlanz.memento.application.MementoAnchors
 import ch.oliverlanz.memento.application.land.ChunkGroupForgetting
+import ch.oliverlanz.memento.infrastructure.MementoConstants
 import ch.oliverlanz.memento.infrastructure.MementoDebug
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
@@ -10,10 +11,12 @@ import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
 
 /**
- * Facade coordinating the lifecycle of memento stones
- * and their derived effects on land.
+ * Facade coordinating the lifecycle of memento stones and their derived effects on land.
  *
- * This preserves the legacy integration contract.
+ * Responsibilities (locked intent):
+ * - MementoAnchors owns aging/maturity of stones (persisted)
+ * - ChunkGroupForgetting owns derived groups + execution (not persisted)
+ * - This facade wires the two together so the mod entry point stays thin
  */
 object MementoStoneLifecycle {
 
@@ -23,6 +26,8 @@ object MementoStoneLifecycle {
     }
 
     fun detachServer(server: MinecraftServer) {
+        // Detach is intentionally a no-op today; kept to preserve call sites.
+        // (We log for symmetry and debuggability.)
         MementoDebug.info(server, "MementoStoneLifecycle detached")
     }
 
@@ -30,8 +35,20 @@ object MementoStoneLifecycle {
         ChunkGroupForgetting.rebuildFromAnchors(server)
     }
 
-    fun ageAnchorsOnce(server: MinecraftServer): Int =
-        MementoAnchors.ageOnce(server)
+    /**
+     * Age anchors once per Overworld day.
+     *
+     * Important wiring:
+     * - When one or more stones mature, we must rebuild derived groups so land becomes marked.
+     */
+    fun ageAnchorsOnce(server: MinecraftServer): Int {
+        val matured = MementoAnchors.ageOnce(server)
+        if (matured > 0) {
+            rebuildMarkedGroups(server)
+            MementoDebug.info(server, "Daily maturation complete: $matured witherstone(s) matured")
+        }
+        return matured
+    }
 
     fun sweep(server: MinecraftServer) {
         for (world in server.worlds) {
@@ -41,16 +58,22 @@ object MementoStoneLifecycle {
         }
     }
 
+    /**
+     * Budgeted regeneration execution step.
+     */
     fun tick(server: MinecraftServer) {
-        // kept for compatibility
+        ChunkGroupForgetting.tick(server, MementoConstants.REGENERATION_CHUNK_INTERVAL_TICKS)
     }
 
+    /**
+     * Primary trigger for re-evaluating BLOCKED -> FREE.
+     */
     fun onChunkUnloaded(
         server: MinecraftServer,
         world: ServerWorld,
         pos: ChunkPos
     ) {
-        // unload is observed via refresh()
+        ChunkGroupForgetting.onChunkUnloaded(world, server, pos)
     }
 
     fun onChunkRenewalObserved(

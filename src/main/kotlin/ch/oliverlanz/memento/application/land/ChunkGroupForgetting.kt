@@ -105,23 +105,33 @@ object ChunkGroupForgetting {
      */
     fun refresh(world: ServerWorld, server: MinecraftServer) {
         for (g in groups.values.filter { it.dimension == world.registryKey }) {
-            val loaded = countLoaded(world, g)
-            val next =
-                if (loaded > 0) GroupState.BLOCKED
-                else GroupState.FREE
+            refreshOne(world, server, g)
+        }
+    }
 
-            if (g.state != GroupState.FORGETTING && g.state != GroupState.RENEWED) {
-                transition(
-                    server,
-                    g,
-                    next,
-                    context = "(loadedChunks=$loaded/${g.chunks.size})"
-                )
-            }
+    /**
+     * Primary trigger for BLOCKED -> FREE transitions.
+     *
+     * Any chunk unload that intersects a derived group is an immediate chance for the group to become FREE.
+     * This method re-evaluates only groups affected by the unloaded chunk.
+     */
+    fun onChunkUnloaded(world: ServerWorld, server: MinecraftServer, unloaded: ChunkPos) {
+        val affected = groups.values
+            .asSequence()
+            .filter { it.dimension == world.registryKey }
+            .filter { g -> g.chunks.any { it == unloaded } }
+            .sortedBy { it.anchorName }
+            .toList()
 
-            if (g.state == GroupState.FREE) {
-                startExecution(world, server, g)
-            }
+        if (affected.isEmpty()) return
+
+        MementoDebug.info(
+            server,
+            "Chunk unload observed (dim=${world.registryKey.value}, chunk=(${unloaded.x},${unloaded.z})) -> re-evaluating ${affected.size} group(s)"
+        )
+
+        for (g in affected) {
+            refreshOne(world, server, g)
         }
     }
 
@@ -171,6 +181,26 @@ object ChunkGroupForgetting {
             server,
             "The land is being forgotten for witherstone '${group.anchorName}' (dim=${group.dimension.value}, chunks=${group.chunks.size})"
         )
+    }
+
+    private fun refreshOne(world: ServerWorld, server: MinecraftServer, g: ChunkGroup) {
+        val loaded = countLoaded(world, g)
+        val next =
+            if (loaded > 0) GroupState.BLOCKED
+            else GroupState.FREE
+
+        if (g.state != GroupState.FORGETTING && g.state != GroupState.RENEWED) {
+            transition(
+                server,
+                g,
+                next,
+                context = "(loadedChunks=$loaded/${g.chunks.size})"
+            )
+        }
+
+        if (g.state == GroupState.FREE) {
+            startExecution(world, server, g)
+        }
     }
 
     // ---------------------------------------------------------------------
