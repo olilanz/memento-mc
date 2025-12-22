@@ -21,7 +21,7 @@ import net.minecraft.world.World
 object MementoStoneLifecycle {
 
     fun attachServer(server: MinecraftServer) {
-        rebuildMarkedGroups(server)
+        rebuildMarkedGroups(server, ChunkGroupForgetting.StoneMaturityTrigger.NIGHTLY_TICK)
         MementoDebug.info(server, "MementoStoneLifecycle attached")
     }
 
@@ -32,7 +32,11 @@ object MementoStoneLifecycle {
     }
 
     fun rebuildMarkedGroups(server: MinecraftServer) {
-        ChunkGroupForgetting.rebuildFromAnchors(server)
+        rebuildMarkedGroups(server, ChunkGroupForgetting.StoneMaturityTrigger.SERVER_START)
+    }
+
+    fun rebuildMarkedGroups(server: MinecraftServer, trigger: ChunkGroupForgetting.StoneMaturityTrigger) {
+        ChunkGroupForgetting.rebuildFromAnchors(server, trigger)
     }
 
     /**
@@ -42,9 +46,24 @@ object MementoStoneLifecycle {
      * - When one or more stones mature, we must rebuild derived groups so land becomes marked.
      */
     fun ageAnchorsOnce(server: MinecraftServer): Int {
+        // Stone maturity trigger: NIGHTLY_TICK.
+        // If a stone is already matured and still present, renewal has been blocked for >= 1 full day.
+        val alreadyMatured = MementoAnchors.list()
+            .filter { it.kind == MementoAnchors.Kind.FORGET }
+            .filter { it.state == MementoAnchors.WitherstoneState.MATURED }
+
+        for (a in alreadyMatured) {
+            MementoDebug.warn(
+                server,
+                "Witherstone '${a.name}' is still awaiting chunk renewal after one full day. " +
+                    "Stone matured earlier but renewal is blocked (dim=${a.dimension.value}, pos=${a.pos.x},${a.pos.y},${a.pos.z})."
+            )
+        }
+
+
         val matured = MementoAnchors.ageOnce(server)
         if (matured > 0) {
-            rebuildMarkedGroups(server)
+            rebuildMarkedGroups(server, ChunkGroupForgetting.StoneMaturityTrigger.NIGHTLY_TICK)
             MementoDebug.info(server, "Daily maturation complete: $matured witherstone(s) matured")
         }
         return matured

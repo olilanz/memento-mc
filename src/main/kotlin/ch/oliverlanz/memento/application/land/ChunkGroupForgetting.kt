@@ -13,14 +13,10 @@ import net.minecraft.world.chunk.ChunkStatus
 import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 
-/**
- * Application service managing derived ChunkGroups and their regeneration execution.
- *
- * Constraints (locked for this slice):
- * - Derived groups are not persisted
- * - Anchor mutation / persistence is handled by the stone lifecycle facade
- */
 object ChunkGroupForgetting {
+
+    enum class StoneMaturityTrigger { SERVER_START, NIGHTLY_TICK, COMMAND }
+    enum class ChunkRenewalTrigger { CHUNK_UNLOAD }
 
     private val groups = ConcurrentHashMap<String, ChunkGroup>()
     private val executions = ConcurrentHashMap<String, Execution>()
@@ -48,7 +44,7 @@ object ChunkGroupForgetting {
     }
 
     // ---------------------------------------------------------------------
-    // Public API (used by Commands / Inspection / Lifecycle)
+    // Public API
     // ---------------------------------------------------------------------
 
     fun getGroupByAnchorName(name: String): ChunkGroup? =
@@ -63,12 +59,10 @@ object ChunkGroupForgetting {
     fun snapshotGroups(): List<ChunkGroup> =
         groups.values.sortedBy { it.anchorName }
 
-    /**
-     * Rebuild derived groups from persisted, already-matured anchors.
-     *
-     * Note: this only (re)creates MARKED groups. It does not force transitions.
-     */
-    fun rebuildFromAnchors(server: MinecraftServer) {
+    fun rebuildFromAnchors(server: MinecraftServer) =
+        rebuildFromAnchors(server, StoneMaturityTrigger.SERVER_START)
+
+    fun rebuildFromAnchors(server: MinecraftServer, trigger: StoneMaturityTrigger) {
         groups.clear()
         executions.clear()
         activeForgetChunks.clear()
@@ -83,11 +77,26 @@ object ChunkGroupForgetting {
             val g = deriveGroup(a)
             groups[g.anchorName] = g
 
-            // Creation is not a transition, but is still high-signal during server startup.
             MementoDebug.info(
                 server,
-                "ChunkGroup '${g.anchorName}' created in state ${g.state} (dim=${g.dimension.value}, chunks=${g.chunks.size})"
+                "ChunkGroup '${g.anchorName}' derived due to stone maturity trigger: $trigger " +
+                    "(state=${g.state}, dim=${g.dimension.value}, chunks=${g.chunks.size})"
             )
+
+            if (trigger == StoneMaturityTrigger.SERVER_START) {
+                val world = server.getWorld(g.dimension)
+                if (world != null) {
+                    val loadedChunks = countLoaded(world, g)
+                    if (loadedChunks > 0) {
+                        MementoDebug.warn(
+                            server,
+                            "ChunkGroup '${g.anchorName}' derived on server start but remains blocked " +
+                                "(loadedChunks=$loadedChunks/${g.chunks.size}). " +
+                                "Some chunks are already loaded (spawn chunks, force-loading, or other mods)."
+                        )
+                    }
+                }
+            }
         }
 
         if (groups.isNotEmpty()) {
@@ -98,48 +107,30 @@ object ChunkGroupForgetting {
         }
     }
 
-    /**
-     * Refresh per-world group state:
-     * - MARKED/BLOCKED -> FREE when the last chunk unloads
-     * - FREE triggers execution start (FORGETTING)
-     */
     fun refresh(world: ServerWorld, server: MinecraftServer) {
-        for (g in groups.values.filter { it.dimension == world.registryKey }) {
-            refreshOne(world, server, g)
-        }
+        groups.values
+            .filter { it.dimension == world.registryKey }
+            .forEach { refreshOne(world, server, it) } // ← FIX HERE
     }
 
-    /**
-     * Primary trigger for BLOCKED -> FREE transitions.
-     *
-     * Any chunk unload that intersects a derived group is an immediate chance for the group to become FREE.
-     * This method re-evaluates only groups affected by the unloaded chunk.
-     */
-    fun onChunkUnloaded(world: ServerWorld, server: MinecraftServer, unloaded: ChunkPos) {
+    fun onChunkUnloaded(world: ServerWorld, server: MinecraftServer, pos: ChunkPos) {
         val affected = groups.values
-            .asSequence()
-            .filter { it.dimension == world.registryKey }
-            .filter { g -> g.chunks.any { it == unloaded } }
-            .sortedBy { it.anchorName }
-            .toList()
+            .filter { it.dimension == world.registryKey && it.chunks.contains(pos) }
 
-        if (affected.isEmpty()) return
-
-        MementoDebug.info(
-            server,
-            "Chunk unload observed (dim=${world.registryKey.value}, chunk=(${unloaded.x},${unloaded.z})) -> re-evaluating ${affected.size} group(s)"
-        )
+        if (affected.isNotEmpty()) {
+            MementoDebug.info(
+                server,
+                "Chunk renewal trigger observed: CHUNK_UNLOAD " +
+                    "(dim=${world.registryKey.value}, chunk=(${pos.x},${pos.z})) -> " +
+                    "re-evaluating ${affected.size} group(s)"
+            )
+        }
 
         for (g in affected) {
-            refreshOne(world, server, g)
+            refreshOne(world, server, g, ChunkRenewalTrigger.CHUNK_UNLOAD, pos)
         }
     }
 
-    /**
-     * Budgeted execution step: attempts to load at most one chunk every [intervalTicks] across all active executions.
-     *
-     * The actual regeneration happens on load via the storage mixin + ChunkForgetPredicate.
-     */
     fun tick(server: MinecraftServer, intervalTicks: Int) {
         if (executions.isEmpty()) return
         if (intervalTicks <= 0) return
@@ -147,31 +138,61 @@ object ChunkGroupForgetting {
         tickCounter++
         if (tickCounter % intervalTicks != 0) return
 
-        // Global budget: choose one group deterministically (by anchorName) and load its next chunk.
         val ex = executions.values
-            .filter { it.remaining.isNotEmpty() }
-            .sortedBy { it.group.anchorName }
-            .firstOrNull()
+            .firstOrNull { it.remaining.isNotEmpty() }
             ?: return
 
         val world = server.getWorld(ex.group.dimension) ?: return
-        val pos = ex.remaining.firstOrNull() ?: return
+        val pos = ex.remaining.first()
 
-        // Trigger a normal chunk load. This is the execution mechanism:
-        // the storage mixin consults ChunkForgetPredicate and regenerates if marked.
         world.chunkManager.getChunk(pos.x, pos.z, ChunkStatus.FULL, true)
+    }
+
+    private fun refreshOne(
+        world: ServerWorld,
+        server: MinecraftServer,
+        g: ChunkGroup,
+        renewalTrigger: ChunkRenewalTrigger? = null,
+        renewalChunk: ChunkPos? = null
+    ) {
+        val loaded = countLoaded(world, g)
+        val next = if (loaded > 0) GroupState.BLOCKED else GroupState.FREE
+
+        if (g.state != GroupState.FORGETTING && g.state != GroupState.RENEWED) {
+            transition(
+                server,
+                g,
+                next,
+                context =
+                    if (next == GroupState.BLOCKED)
+                        "(loadedChunks=$loaded/${g.chunks.size}; waiting for chunk renewal trigger: CHUNK_UNLOAD)"
+                    else
+                        "(loadedChunks=$loaded/${g.chunks.size})"
+            )
+        }
+
+        if (g.state == GroupState.FREE) {
+            startExecution(world, server, g, renewalTrigger, renewalChunk)
+        }
     }
 
     private fun startExecution(
         world: ServerWorld,
         server: MinecraftServer,
-        group: ChunkGroup
+        group: ChunkGroup,
+        renewalTrigger: ChunkRenewalTrigger? = null,
+        renewalChunk: ChunkPos? = null
     ) {
         if (executions.containsKey(group.anchorName)) return
         if (!allUnloaded(world, group)) return
 
-        transition(server, group, GroupState.FORGETTING, context = "(latched)"
-        )
+        val latchContext =
+            if (renewalTrigger == ChunkRenewalTrigger.CHUNK_UNLOAD && renewalChunk != null)
+                "(latched due to chunk renewal trigger: CHUNK_UNLOAD chunk=(${renewalChunk.x},${renewalChunk.z}))"
+            else
+                "(latched; chunk renewal trigger conditions already satisfied)"
+
+        transition(server, group, GroupState.FORGETTING, latchContext)
         markForget(group)
 
         executions[group.anchorName] =
@@ -179,39 +200,11 @@ object ChunkGroupForgetting {
 
         MementoDebug.info(
             server,
-            "The land is being forgotten for witherstone '${group.anchorName}' (dim=${group.dimension.value}, chunks=${group.chunks.size})"
+            "The land is being forgotten for witherstone '${group.anchorName}' " +
+                "(dim=${group.dimension.value}, chunks=${group.chunks.size})"
         )
     }
 
-    private fun refreshOne(world: ServerWorld, server: MinecraftServer, g: ChunkGroup) {
-        val loaded = countLoaded(world, g)
-        val next =
-            if (loaded > 0) GroupState.BLOCKED
-            else GroupState.FREE
-
-        if (g.state != GroupState.FORGETTING && g.state != GroupState.RENEWED) {
-            transition(
-                server,
-                g,
-                next,
-                context = "(loadedChunks=$loaded/${g.chunks.size})"
-            )
-        }
-
-        if (g.state == GroupState.FREE) {
-            startExecution(world, server, g)
-        }
-    }
-
-    // ---------------------------------------------------------------------
-    // Renewal observation (called via predicate)
-    // ---------------------------------------------------------------------
-
-    /**
-     * Observe a renewed chunk and advance execution state.
-     *
-     * Returns the completed group when the last chunk is renewed; otherwise null.
-     */
     fun onChunkRenewed(
         server: MinecraftServer,
         dimension: RegistryKey<World>,
@@ -238,7 +231,7 @@ object ChunkGroupForgetting {
     }
 
     private fun finalize(server: MinecraftServer, group: ChunkGroup): ChunkGroup {
-        transition(server, group, GroupState.RENEWED, context = "(renewed=${group.chunks.size}/${group.chunks.size})")
+        transition(server, group, GroupState.RENEWED, "(all chunks renewed)")
         executions.remove(group.anchorName)
         unmarkForget(group)
         groups.remove(group.anchorName)

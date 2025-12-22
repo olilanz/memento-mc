@@ -121,6 +121,13 @@ The Witherstone lifecycle is represented explicitly in code and persisted (`With
 
 ## Observability
 
+### WARN conditions (intentional)
+
+Warnings are reserved for cases that are unexpected or operationally significant:
+
+- Nightly tick sees a Witherstone already matured and still present → renewal has been blocked for more than one day
+- Server start derives a group from a matured Witherstone and the group is immediately BLOCKED → something is loading chunks early (spawn chunks, forced chunks, or other mods)
+
 High-signal lifecycle events are reported to:
 
 - server logs

@@ -312,47 +312,112 @@ object Commands {
         return 1
     }
 
-    private fun inspect(
+    private 
+    fun inspect(
         src: ServerCommandSource,
         name: String
     ): Int {
-        val group = ChunkGroupForgetting.getGroupByAnchorName(name)
+        val stone = MementoAnchors.get(name)
             ?: run {
-                src.sendError(Text.literal("No active chunk group for '$name'"))
+                src.sendError(Text.literal("No stone found with name '$name'"))
                 return 0
             }
 
-        val reports = ChunkInspection.inspectGroup(src.server, group)
+        val stoneLabel =
+            when (stone.kind) {
+                MementoAnchors.Kind.FORGET -> "Witherstone"
+                MementoAnchors.Kind.REMEMBER -> "Lorestone"
+            }
 
-        if (reports.isEmpty()) {
+        src.sendFeedback(
+            { Text.literal("Inspect '$name' ($stoneLabel)") },
+            false
+        )
+
+        src.sendFeedback(
+            { Text.literal("Stone: dim=${stone.dimension.value}, pos=${stone.pos.x},${stone.pos.y},${stone.pos.z}, radiusChunks=${stone.radius}") },
+            false
+        )
+
+        if (stone.kind == MementoAnchors.Kind.FORGET) {
+            val state = stone.state ?: MementoAnchors.WitherstoneState.MATURING
+            val days = stone.days
+
             src.sendFeedback(
-                { Text.literal("Nothing is blocking regeneration for '$name'") },
+                { Text.literal("Witherstone state: $state" + (if (days != null) " (daysToMaturity=$days)" else "")) },
+                false
+            )
+
+            if (state == MementoAnchors.WitherstoneState.MATURING && days != null && days > 0) {
+                src.sendFeedback(
+                    { Text.literal("Waiting for stone maturity trigger: NIGHTLY_TICK (days remaining: $days).") },
+                    false
+                )
+            } else if (state == MementoAnchors.WitherstoneState.MATURED) {
+                src.sendFeedback(
+                    { Text.literal("Stone is matured. Derived chunk groups are created on stone maturity triggers: SERVER_START, NIGHTLY_TICK, COMMAND.") },
+                    false
+                )
+            }
+        }
+
+        val group = ChunkGroupForgetting.getGroupByAnchorName(name)
+        if (group == null) {
+            src.sendFeedback(
+                { Text.literal("Chunk group: none derived yet.") },
                 false
             )
             return 1
         }
 
-        for (r in reports) {
+        val reports = ChunkInspection.inspectGroup(src.server, group)
+        val loaded = reports.filter { it.isLoaded }
+        val loadedCount = loaded.size
+        val total = reports.size
+        val unloadedCount = (total - loadedCount).coerceAtLeast(0)
+
+        src.sendFeedback(
+            { Text.literal("Chunk group: state=${group.state}, chunks=$total, loaded=$loadedCount, unloaded=$unloadedCount") },
+            false
+        )
+
+        if (group.state == ch.oliverlanz.memento.domain.land.GroupState.BLOCKED) {
             src.sendFeedback(
-                {
-                    Text.literal(
-                        "chunk (${r.pos.x}, ${r.pos.z}) in ${r.dimension.value}: ${r.summary}"
-                    )
-                },
+                { Text.literal("Waiting for chunk renewal trigger: CHUNK_UNLOAD (loaded chunks prevent atomic renewal).") },
+                false
+            )
+        }
+
+        if (loaded.isNotEmpty()) {
+            src.sendFeedback(
+                { Text.literal("Blocking chunks (loaded):") },
                 false
             )
 
-            for (b in r.blockers) {
+            val maxLines = 12
+            loaded.take(maxLines).forEach { r ->
                 src.sendFeedback(
-                    { Text.literal("  - $b") },
+                    { Text.literal("- chunk (${r.pos.x},${r.pos.z}): ${r.summary}") },
                     false
                 )
             }
+            if (loaded.size > maxLines) {
+                src.sendFeedback(
+                    { Text.literal("… and ${loaded.size - maxLines} more loaded chunk(s).") },
+                    false
+                )
+            }
+        } else {
+            src.sendFeedback(
+                { Text.literal("No loaded chunks are blocking renewal.") },
+                false
+            )
         }
+
         return 1
     }
 
-    private fun list(
+fun list(
         kind: MementoAnchors.Kind?,
         src: ServerCommandSource
     ): Int {
