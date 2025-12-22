@@ -34,6 +34,19 @@ object ChunkGroupForgetting {
         var renewed: Int = 0
     )
 
+    private fun transition(
+        server: MinecraftServer,
+        group: ChunkGroup,
+        next: GroupState,
+        context: String = ""
+    ) {
+        if (group.state == next) return
+        val prev = group.state
+        group.state = next
+        val suffix = if (context.isBlank()) "" else " $context"
+        MementoDebug.info(server, "ChunkGroup '${group.anchorName}' $prev -> $next$suffix")
+    }
+
     // ---------------------------------------------------------------------
     // Public API (used by Commands / Inspection / Lifecycle)
     // ---------------------------------------------------------------------
@@ -69,6 +82,12 @@ object ChunkGroupForgetting {
         for (a in matured) {
             val g = deriveGroup(a)
             groups[g.anchorName] = g
+
+            // Creation is not a transition, but is still high-signal during server startup.
+            MementoDebug.info(
+                server,
+                "ChunkGroup '${g.anchorName}' created in state ${g.state} (dim=${g.dimension.value}, chunks=${g.chunks.size})"
+            )
         }
 
         if (groups.isNotEmpty()) {
@@ -91,16 +110,12 @@ object ChunkGroupForgetting {
                 if (loaded > 0) GroupState.BLOCKED
                 else GroupState.FREE
 
-            if (
-                g.state != next &&
-                g.state != GroupState.FORGETTING &&
-                g.state != GroupState.RENEWED
-            ) {
-                val prev = g.state
-                g.state = next
-                MementoDebug.info(
+            if (g.state != GroupState.FORGETTING && g.state != GroupState.RENEWED) {
+                transition(
                     server,
-                    "Chunk group state: '${g.anchorName}' $prev -> $next (loadedChunks=$loaded/${g.chunks.size})"
+                    g,
+                    next,
+                    context = "(loadedChunks=$loaded/${g.chunks.size})"
                 )
             }
 
@@ -145,13 +160,14 @@ object ChunkGroupForgetting {
         if (executions.containsKey(group.anchorName)) return
         if (!allUnloaded(world, group)) return
 
-        group.state = GroupState.FORGETTING
+        transition(server, group, GroupState.FORGETTING, context = "(latched)"
+        )
         markForget(group)
 
         executions[group.anchorName] =
             Execution(group, ArrayDeque(group.chunks))
 
-        MementoDebug.warn(
+        MementoDebug.info(
             server,
             "The land is being forgotten for witherstone '${group.anchorName}' (dim=${group.dimension.value}, chunks=${group.chunks.size})"
         )
@@ -192,7 +208,7 @@ object ChunkGroupForgetting {
     }
 
     private fun finalize(server: MinecraftServer, group: ChunkGroup): ChunkGroup {
-        group.state = GroupState.RENEWED
+        transition(server, group, GroupState.RENEWED, context = "(renewed=${group.chunks.size}/${group.chunks.size})")
         executions.remove(group.anchorName)
         unmarkForget(group)
         groups.remove(group.anchorName)
