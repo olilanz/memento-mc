@@ -3,6 +3,7 @@ package ch.oliverlanz.memento.application.stone
 import ch.oliverlanz.memento.application.MementoAnchors
 import ch.oliverlanz.memento.application.land.ChunkGroupForgetting
 import ch.oliverlanz.memento.infrastructure.MementoDebug
+import ch.oliverlanz.memento.infrastructure.MementoPersistence
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld
@@ -44,6 +45,10 @@ object MementoStoneLifecycle {
             anchors = snapshotAnchors(),
             trigger = StoneMaturityTrigger.SERVER_START,
         )
+
+        // Startup reconciliation: on an existing world, no "day rollover" happens at boot.
+        // We must therefore explicitly re-evaluate loaded/unloaded chunk facts so FREE groups can be queued immediately.
+        ChunkGroupForgetting.refreshAllReadiness(server)
     }
 
     /**
@@ -74,7 +79,26 @@ object MementoStoneLifecycle {
         ChunkGroupForgetting.onChunkUnloaded(server, world, pos)
     }
 
-    fun tick(server: MinecraftServer) {
+    
+/**
+ * Terminal action: once a WITHERSTONE-driven chunk group has completed renewal, the stone is consumed
+ * (removed from persistence) and the derived group can be discarded.
+ *
+ * Lorestone/REMEMBER anchors are never consumed automatically.
+ */
+fun onChunkGroupRenewed(server: MinecraftServer, anchorName: String) {
+    val a = MementoAnchors.get(anchorName) ?: return
+    if (a.kind != MementoAnchors.Kind.FORGET) return
+
+    // Witherstone is one-shot: remove it from persistence so it cannot re-trigger.
+    val removed = MementoAnchors.remove(anchorName)
+    if (removed) {
+        MementoPersistence.save(server)
+        MementoDebug.info(server, "Witherstone '$anchorName' consumed (removed) after successful renewal")
+    }
+}
+
+fun tick(server: MinecraftServer) {
         ChunkGroupForgetting.tick(server)
     }
 

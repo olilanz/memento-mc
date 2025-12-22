@@ -5,6 +5,7 @@ import ch.oliverlanz.memento.application.stone.StoneMaturityTrigger
 import ch.oliverlanz.memento.domain.land.ChunkGroup
 import ch.oliverlanz.memento.domain.land.GroupState
 import ch.oliverlanz.memento.infrastructure.MementoDebug
+import ch.oliverlanz.memento.application.stone.MementoStoneLifecycle
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld
@@ -71,6 +72,16 @@ object ChunkGroupForgetting {
         pendingRenewals.keys.removeIf { it.endsWith("::$anchorName") }
         executionsByGroupKey.keys.removeIf { it.endsWith("::$anchorName") }
     }
+
+private fun discardGroupInternal(anchorName: String) {
+    val g = groupsByAnchorName.remove(anchorName) ?: return
+    val key = groupKey(g)
+
+    pendingRenewals.remove(key)
+    executionsByGroupKey.remove(key)
+    lastUnloadObserved.remove(key)
+}
+
 
     fun rebuildFromAnchors(
         server: MinecraftServer,
@@ -194,6 +205,10 @@ object ChunkGroupForgetting {
                         server,
                         "ChunkGroup '${group.anchorName}' FORGETTING -> RENEWED (dim=${group.dimension.value}, chunks=${group.chunks.size})"
                     )
+
+                    // Terminal action: consume the WITHERSTONE (one-shot) and discard the derived group.
+                    MementoStoneLifecycle.onChunkGroupRenewed(server, group.anchorName)
+                    discardGroupInternal(group.anchorName)
                 }
             }
         }
