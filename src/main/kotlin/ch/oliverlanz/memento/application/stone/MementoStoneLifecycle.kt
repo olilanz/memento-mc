@@ -18,6 +18,7 @@ import net.minecraft.world.World
  */
 object MementoStoneLifecycle {
 
+    @Volatile
     private var server: MinecraftServer? = null
 
     fun currentServerOrNull(): MinecraftServer? = server

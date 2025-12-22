@@ -251,7 +251,7 @@ object ChunkGroupForgetting {
 
             // This triggers a load. VersionedChunkStorageMixin consults ChunkForgetPredicate,
             // which will call onChunkRenewalObserved(...)
-            world.chunkManager.getChunk(next.x, next.z, ChunkStatus.EMPTY, true)
+            world.chunkManager.getChunk(next.x, next.z, ChunkStatus.FULL, true)
         }
     }
 
