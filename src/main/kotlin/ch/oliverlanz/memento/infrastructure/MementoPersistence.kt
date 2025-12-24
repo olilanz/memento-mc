@@ -1,6 +1,6 @@
 package ch.oliverlanz.memento.infrastructure
 
-import ch.oliverlanz.memento.application.MementoAnchors
+import ch.oliverlanz.memento.application.MementoStones
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
@@ -34,7 +34,7 @@ object MementoPersistence {
         val root = JsonObject()
         val arr = JsonArray()
 
-        for (a in MementoAnchors.list()) {
+        for (a in MementoStones.list()) {
             val o = JsonObject()
             o.addProperty("name", a.name)
             o.addProperty("kind", a.kind.name)
@@ -60,26 +60,26 @@ object MementoPersistence {
     fun load(server: MinecraftServer) {
         val path = filePath(server)
         if (!Files.exists(path)) {
-            MementoAnchors.clear()
+            MementoStones.clear()
             return
         }
 
         val raw = Files.readString(path, StandardCharsets.UTF_8).trim()
         if (raw.isEmpty()) {
-            MementoAnchors.clear()
+            MementoStones.clear()
             return
         }
 
         val root = JsonParser.parseString(raw).asJsonObject
         val arr = root.getAsJsonArray("anchors") ?: JsonArray()
 
-        val loaded = linkedMapOf<String, MementoAnchors.Anchor>()
+        val loaded = linkedMapOf<String, MementoStones.Stone>()
 
         for (e in arr) {
             val o = e.asJsonObject
 
             val name = o.get("name").asString
-            val kind = MementoAnchors.Kind.valueOf(o.get("kind").asString)
+            val kind = MementoStones.Kind.valueOf(o.get("kind").asString)
 
             val dimId = Identifier.tryParse(o.get("dimension").asString)
                 ?: Identifier.of("minecraft", "overworld")
@@ -94,13 +94,13 @@ object MementoPersistence {
             val days = if (o.has("days")) o.get("days").asInt else null
             val state =
                 if (o.has("state"))
-                    MementoAnchors.WitherstoneState.valueOf(o.get("state").asString)
+                    MementoStones.WitherstoneState.valueOf(o.get("state").asString)
                 else
                     null
 
             val created = if (o.has("createdGameTime")) o.get("createdGameTime").asLong else 0L
 
-            loaded[name] = MementoAnchors.Anchor(
+            loaded[name] = MementoStones.Stone(
                 name = name,
                 kind = kind,
                 dimension = dimKey,
@@ -112,7 +112,7 @@ object MementoPersistence {
             )
         }
 
-        MementoAnchors.clear()
-        MementoAnchors.putAll(loaded)
+        MementoStones.clear()
+        MementoStones.putAll(loaded)
     }
 }

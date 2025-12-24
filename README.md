@@ -13,7 +13,7 @@ Vanilla clients are fully compatible.
 
 ## What Memento Does
 
-Memento introduces the idea of **memory anchors**:
+Memento introduces the idea of **memory stones**:
 
 - Some places should be **remembered**.
 - Some places are safe to **forget**.
@@ -31,7 +31,7 @@ Nothing is automatic. Nothing is forced.
 
 ## Current Gameplay Mechanics
 
-### Witherstones (Forgetting)
+### Witherstones (Lifecycle and Forgetting)
 
 A **Witherstone** marks an area that should eventually be forgotten.
 
@@ -55,7 +55,7 @@ This ensures:
   Show mod version.
 
 ### Stones
-- `/memento add witherstone <name> <radius> <daysToMaturity>`
+- `/memento add witherstone <name> <radius> <daysToMaturity>` (Lifecycle management)
 - `/memento add lorestone <name> <radius>`
 - `/memento remove witherstone <name>`
 - `/memento remove lorestone <name>`

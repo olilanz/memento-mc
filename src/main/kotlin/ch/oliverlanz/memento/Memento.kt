@@ -4,7 +4,7 @@ import ch.oliverlanz.memento.infrastructure.MementoState
 import ch.oliverlanz.memento.infrastructure.MementoPersistence
 import ch.oliverlanz.memento.infrastructure.MementoConstants
 import ch.oliverlanz.memento.infrastructure.MementoDebug
-import ch.oliverlanz.memento.application.stone.MementoStoneLifecycle
+import ch.oliverlanz.memento.application.stone.WitherstoneLifecycle
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
@@ -36,13 +36,13 @@ object Memento : ModInitializer {
 
 
             // Attach server reference for mixin-driven renewal observations.
-            MementoStoneLifecycle.attachServer(server)
+            WitherstoneLifecycle.attachServer(server)
 
             MementoPersistence.load(server)
             MementoState.load(server)
 
             // Rebuild marked groups from already-matured anchors (daysRemaining == 0).
-            MementoStoneLifecycle.rebuildMarkedGroups(server)
+            WitherstoneLifecycle.rebuildMarkedGroups(server)
 
             // Initialize day tracking if this is a fresh world/state.
             val overworld = server.getWorld(ServerWorld.OVERWORLD)
@@ -57,7 +57,7 @@ object Memento : ModInitializer {
 
         // Persist state on shutdown.
         ServerLifecycleEvents.SERVER_STOPPING.register { server ->
-            MementoStoneLifecycle.detachServer(server)
+            WitherstoneLifecycle.detachServer(server)
             MementoPersistence.save(server)
             MementoState.save(server)
         }
@@ -69,7 +69,7 @@ object Memento : ModInitializer {
 
         // Unload trigger: every unload is a chance for marked land to become free for forgetting.
         ServerChunkEvents.CHUNK_UNLOAD.register { world, chunk ->
-            MementoStoneLifecycle.onChunkUnloaded(world.server, world, chunk.pos)
+            WitherstoneLifecycle.onChunkUnloaded(world.server, world, chunk.pos)
         }
     }
 
@@ -83,11 +83,11 @@ object Memento : ModInitializer {
             MementoState.set(MementoState.State(lastProcessedOverworldDay = dayIndex))
             MementoState.save(server)
 
-            MementoStoneLifecycle.ageAnchorsOnce(server)
-            MementoStoneLifecycle.sweep(server)
+            WitherstoneLifecycle.ageAnchorsOnce(server)
+            WitherstoneLifecycle.sweep(server)
         }
 
         // Budgeted regeneration work (chunk queue processing).
-        MementoStoneLifecycle.tick(server)
+        WitherstoneLifecycle.tick(server)
     }
 }

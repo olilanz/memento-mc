@@ -1,6 +1,6 @@
 package ch.oliverlanz.memento.application.stone
 
-import ch.oliverlanz.memento.application.MementoAnchors
+import ch.oliverlanz.memento.application.MementoStones
 import ch.oliverlanz.memento.application.land.ChunkGroupForgetting
 import ch.oliverlanz.memento.infrastructure.MementoDebug
 import ch.oliverlanz.memento.infrastructure.MementoPersistence
@@ -11,13 +11,13 @@ import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
 
 /**
- * Coordinates the lifecycle of Memento stones (Witherstones / Lorestones).
+ * Coordinates the lifecycle of Witherstones.
  *
  * Responsibilities:
  * - Evaluate stone maturity (time-based)
  * - Delegate land / chunk-group lifecycle to [ChunkGroupForgetting]
  */
-object MementoStoneLifecycle {
+object WitherstoneLifecycle {
 
     @Volatile
     private var server: MinecraftServer? = null
@@ -26,7 +26,7 @@ object MementoStoneLifecycle {
 
     fun attachServer(server: MinecraftServer) {
         this.server = server
-        MementoDebug.info(server, "MementoStoneLifecycle attached")
+        MementoDebug.info(server, "WitherstoneLifecycle attached")
     }
 
     fun detachServer(server: MinecraftServer) {
@@ -42,7 +42,7 @@ object MementoStoneLifecycle {
     fun rebuildMarkedGroups(server: MinecraftServer) {
         ChunkGroupForgetting.rebuildFromAnchors(
             server = server,
-            anchors = snapshotAnchors(),
+            stones = snapshotStones(),
             trigger = StoneMaturityTrigger.SERVER_START,
         )
 
@@ -55,7 +55,7 @@ object MementoStoneLifecycle {
      * Called once per overworld day transition.
      */
     fun ageAnchorsOnce(server: MinecraftServer) {
-        val maturedCount = MementoAnchors.ageOnce(server)
+        val maturedCount = MementoStones.ageOnce(server)
         if (maturedCount > 0) {
             MementoDebug.info(server, "Stone maturity trigger=NIGHTLY_TICK → $maturedCount stone(s) matured")
         }
@@ -63,7 +63,7 @@ object MementoStoneLifecycle {
         // After maturity changes, rebuild derived groups so operators can inspect immediately.
         ChunkGroupForgetting.rebuildFromAnchors(
             server = server,
-            anchors = snapshotAnchors(),
+            stones = snapshotStones(),
             trigger = StoneMaturityTrigger.NIGHTLY_TICK,
         )
     }
@@ -86,15 +86,15 @@ object MementoStoneLifecycle {
  *
  * Lorestone/REMEMBER anchors are never consumed automatically.
  */
-fun onChunkGroupRenewed(server: MinecraftServer, anchorName: String) {
-    val a = MementoAnchors.get(anchorName) ?: return
-    if (a.kind != MementoAnchors.Kind.FORGET) return
+fun onChunkGroupRenewed(server: MinecraftServer, stoneName: String) {
+    val a = MementoStones.get(stoneName) ?: return
+    if (a.kind != MementoStones.Kind.FORGET) return
 
     // Witherstone is one-shot: remove it from persistence so it cannot re-trigger.
-    val removed = MementoAnchors.remove(anchorName)
+    val removed = MementoStones.remove(stoneName)
     if (removed) {
         MementoPersistence.save(server)
-        MementoDebug.info(server, "Witherstone '$anchorName' consumed (removed) after successful renewal")
+        MementoDebug.info(server, "Witherstone '$stoneName' consumed (removed) after successful renewal")
     }
 }
 
@@ -109,6 +109,6 @@ fun tick(server: MinecraftServer) {
         ChunkGroupForgetting.onChunkRenewalObserved(server, dimension, pos)
     }
 
-    private fun snapshotAnchors(): Map<String, MementoAnchors.Anchor> =
-        MementoAnchors.list().associateBy { it.name }
+    private fun snapshotStones(): Map<String, MementoStones.Stone> =
+        MementoStones.list().associateBy { it.name }
 }

@@ -9,7 +9,7 @@ import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
 import kotlin.math.sqrt
 
-object MementoAnchors {
+object MementoStones {
 
     enum class Kind { REMEMBER, FORGET }
 
@@ -24,7 +24,7 @@ object MementoAnchors {
         CONSUMED
     }
 
-    data class Anchor(
+    data class Stone(
         val name: String,
         val kind: Kind,
         val dimension: RegistryKey<World>,
@@ -35,25 +35,25 @@ object MementoAnchors {
         val createdGameTime: Long
     )
 
-    private val anchors = mutableMapOf<String, Anchor>()
+    private val stones = mutableMapOf<String, Stone>()
 
-    fun list(): Collection<Anchor> = anchors.values
+    fun list(): Collection<Stone> = stones.values
 
-    fun get(name: String): Anchor? = anchors[name]
+    fun get(name: String): Stone? = stones[name]
 
     fun clear() {
-        anchors.clear()
+        stones.clear()
     }
 
-    fun putAll(loaded: Map<String, Anchor>) {
-        anchors.putAll(loaded)
+    fun putAll(loaded: Map<String, Stone>) {
+        stones.putAll(loaded)
     }
 
     /**
      * Add or replace an anchor with the same name.
      */
-    fun addOrReplace(anchor: Anchor) {
-        anchors[anchor.name] = anchor
+    fun addOrReplace(stone: Stone) {
+        stones[stone.name] = stone
     }
 
     /**
@@ -62,17 +62,17 @@ object MementoAnchors {
      * @return true if removed.
      */
     fun remove(name: String): Boolean =
-        anchors.remove(name) != null
+        stones.remove(name) != null
 
-    fun isMaturedForgetAnchor(anchor: Anchor): Boolean =
-        anchor.kind == Kind.FORGET && anchor.state == WitherstoneState.MATURED
+    fun isMaturedForgetStone(stone: Stone): Boolean =
+        stone.kind == Kind.FORGET && stone.state == WitherstoneState.MATURED
 
     fun consume(name: String) {
-        val a = anchors[name] ?: return
+        val a = stones[name] ?: return
         if (a.kind != Kind.FORGET) return
 
         // Mark consumed (do not delete); stone removal is handled elsewhere.
-        anchors[name] = a.copy(state = WitherstoneState.CONSUMED, days = 0)
+        stones[name] = a.copy(state = WitherstoneState.CONSUMED, days = 0)
     }
 
     /**
@@ -91,7 +91,7 @@ object MementoAnchors {
         var matured = 0
         var changed = false
 
-        val updated = anchors.mapValues { (_, a) ->
+        val updated = stones.mapValues { (_, a) ->
             if (a.kind != Kind.FORGET) return@mapValues a
             if (a.state != WitherstoneState.MATURING) return@mapValues a
 
@@ -113,8 +113,8 @@ object MementoAnchors {
         }
 
         if (changed) {
-            anchors.clear()
-            anchors.putAll(updated)
+            stones.clear()
+            stones.putAll(updated)
             MementoPersistence.saveAnchors(server)
         }
 
@@ -127,24 +127,24 @@ object MementoAnchors {
      * Semantics: circular coverage in chunk space, using chunk-center distance in block space.
      * This matches chunk-group derivation semantics.
      */
-    fun computeChunksInRadius(anchorPos: BlockPos, radiusChunks: Int): Set<ChunkPos> {
-        val anchorX = anchorPos.x.toDouble()
-        val anchorZ = anchorPos.z.toDouble()
+    fun computeChunksInRadius(stonePos: BlockPos, radiusChunks: Int): Set<ChunkPos> {
+        val stoneX = stonePos.x.toDouble()
+        val stoneZ = stonePos.z.toDouble()
 
         val radiusBlocks = radiusChunks * 16.0
         val radiusSq = radiusBlocks * radiusBlocks
 
-        val anchorChunkX = anchorPos.x shr 4
-        val anchorChunkZ = anchorPos.z shr 4
+        val stoneChunkX = stonePos.x shr 4
+        val stoneChunkZ = stonePos.z shr 4
 
         val result = LinkedHashSet<ChunkPos>()
 
-        for (cx in (anchorChunkX - radiusChunks)..(anchorChunkX + radiusChunks)) {
-            for (cz in (anchorChunkZ - radiusChunks)..(anchorChunkZ + radiusChunks)) {
+        for (cx in (stoneChunkX - radiusChunks)..(stoneChunkX + radiusChunks)) {
+            for (cz in (stoneChunkZ - radiusChunks)..(stoneChunkZ + radiusChunks)) {
                 val centerX = (cx * 16 + 8).toDouble()
                 val centerZ = (cz * 16 + 8).toDouble()
-                val dx = centerX - anchorX
-                val dz = centerZ - anchorZ
+                val dx = centerX - stoneX
+                val dz = centerZ - stoneZ
                 if ((dx * dx + dz * dz) <= radiusSq) {
                     result.add(ChunkPos(cx, cz))
                 }
@@ -160,14 +160,14 @@ object MementoAnchors {
      * This is authoritative "is this chunk within the anchor radius" logic,
      * aligned with computeChunksInRadius semantics.
      */
-    fun coversChunk(anchor: Anchor, chunkPos: ChunkPos): Boolean {
-        val radiusBlocks = anchor.radius * 16.0
+    fun coversChunk(stone: Stone, chunkPos: ChunkPos): Boolean {
+        val radiusBlocks = stone.radius * 16.0
         val radiusSq = radiusBlocks * radiusBlocks
 
         val centerX = (chunkPos.x * 16 + 8).toDouble()
         val centerZ = (chunkPos.z * 16 + 8).toDouble()
-        val dx = centerX - anchor.pos.x.toDouble()
-        val dz = centerZ - anchor.pos.z.toDouble()
+        val dx = centerX - stone.pos.x.toDouble()
+        val dz = centerZ - stone.pos.z.toDouble()
 
         return (dx * dx + dz * dz) <= radiusSq
     }

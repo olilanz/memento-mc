@@ -1,6 +1,6 @@
 package ch.oliverlanz.memento.infrastructure.chunk
 
-import ch.oliverlanz.memento.application.stone.MementoStoneLifecycle
+import ch.oliverlanz.memento.application.stone.WitherstoneLifecycle
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
 import net.minecraft.util.math.ChunkPos
@@ -19,7 +19,7 @@ object ChunkForgetPredicate {
      */
     @JvmStatic
     fun shouldForget(dimension: RegistryKey<World>, pos: ChunkPos): Boolean {
-        val server = MementoStoneLifecycle.currentServerOrNull() ?: return false
+        val server = WitherstoneLifecycle.currentServerOrNull() ?: return false
         return shouldForget(server, dimension, pos)
     }
 
@@ -28,11 +28,11 @@ object ChunkForgetPredicate {
         // If the chunk is queued (in-flight) for renewal, we both:
         //  - return true to force regeneration (read empty NBT)
         //  - emit an observation that this renewal actually happened
-        if (!MementoStoneLifecycle.isChunkRenewalQueued(dimension, pos)) {
+        if (!WitherstoneLifecycle.isChunkRenewalQueued(dimension, pos)) {
             return false
         }
 
-        MementoStoneLifecycle.onChunkRenewalObserved(server, dimension, pos)
+        WitherstoneLifecycle.onChunkRenewalObserved(server, dimension, pos)
         return true
     }
 

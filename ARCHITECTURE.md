@@ -26,7 +26,7 @@ These are non-negotiable:
 
 Memento is built around **two distinct lifecycles**:
 
-1. **Witherstone lifecycle** — time & intent
+1. **Witherstone Lifecycle** — Time & Intent
 2. **Land (chunk group) lifecycle** — space & permission
 
 They intersect, but they are not the same.
@@ -44,7 +44,7 @@ They intersect, but they are not the same.
 
 ### States
 
-The Witherstone lifecycle is represented explicitly in code and persisted (`WitherstoneState`).
+The Witherstone Lifecycle is represented explicitly in code and persisted (`WitherstoneState`).
 
 1. **Maturing**
    - Influence builds over world days
@@ -71,7 +71,7 @@ They only exist meaningfully after a Witherstone matures.
 
 ### States
 
-The Witherstone lifecycle is represented explicitly in code and persisted (`WitherstoneState`).
+The Witherstone Lifecycle is represented explicitly in code and persisted (`WitherstoneState`).
 
 1. **Marked**
    - Land is subject to forgetting
