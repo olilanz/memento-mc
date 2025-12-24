@@ -1,7 +1,7 @@
 package ch.oliverlanz.memento.application.stone
 
 import ch.oliverlanz.memento.application.MementoStones
-import ch.oliverlanz.memento.application.land.ChunkGroupForgetting
+import ch.oliverlanz.memento.application.land.RenewalBatchForgetting
 import ch.oliverlanz.memento.infrastructure.MementoDebug
 import ch.oliverlanz.memento.infrastructure.MementoPersistence
 import net.minecraft.registry.RegistryKey
@@ -15,7 +15,7 @@ import net.minecraft.world.World
  *
  * Responsibilities:
  * - Evaluate stone maturity (time-based)
- * - Delegate land / chunk-group lifecycle to [ChunkGroupForgetting]
+ * - Delegate land / renewal-batch lifecycle to [RenewalBatchForgetting]
  */
 object WitherstoneLifecycle {
 
@@ -40,7 +40,7 @@ object WitherstoneLifecycle {
      * Rebuilds derived chunk groups for already-matured witherstones.
      */
     fun rebuildMarkedGroups(server: MinecraftServer) {
-        ChunkGroupForgetting.rebuildFromAnchors(
+        RenewalBatchForgetting.rebuildFromAnchors(
             server = server,
             stones = snapshotStones(),
             trigger = StoneMaturityTrigger.SERVER_START,
@@ -48,7 +48,7 @@ object WitherstoneLifecycle {
 
         // Startup reconciliation: on an existing world, no "day rollover" happens at boot.
         // We must therefore explicitly re-evaluate loaded/unloaded chunk facts so FREE groups can be queued immediately.
-        ChunkGroupForgetting.refreshAllReadiness(server)
+        RenewalBatchForgetting.refreshAllReadiness(server)
     }
 
     /**
@@ -61,7 +61,7 @@ object WitherstoneLifecycle {
         }
 
         // After maturity changes, rebuild derived groups so operators can inspect immediately.
-        ChunkGroupForgetting.rebuildFromAnchors(
+        RenewalBatchForgetting.rebuildFromAnchors(
             server = server,
             stones = snapshotStones(),
             trigger = StoneMaturityTrigger.NIGHTLY_TICK,
@@ -72,11 +72,11 @@ object WitherstoneLifecycle {
      * Best-effort tick-time sweep/re-evaluation.
      */
     fun sweep(server: MinecraftServer) {
-        ChunkGroupForgetting.refreshAllReadiness(server)
+        RenewalBatchForgetting.refreshAllReadiness(server)
     }
 
     fun onChunkUnloaded(server: MinecraftServer, world: ServerWorld, pos: ChunkPos) {
-        ChunkGroupForgetting.onChunkUnloaded(server, world, pos)
+        RenewalBatchForgetting.onChunkUnloaded(server, world, pos)
     }
 
     
@@ -99,14 +99,14 @@ fun onChunkGroupRenewed(server: MinecraftServer, stoneName: String) {
 }
 
 fun tick(server: MinecraftServer) {
-        ChunkGroupForgetting.tick(server)
+        RenewalBatchForgetting.tick(server)
     }
 
     fun isChunkRenewalQueued(dimension: RegistryKey<World>, pos: ChunkPos): Boolean =
-        ChunkGroupForgetting.isChunkRenewalQueued(dimension, pos)
+        RenewalBatchForgetting.isChunkRenewalQueued(dimension, pos)
 
     fun onChunkRenewalObserved(server: MinecraftServer, dimension: RegistryKey<World>, pos: ChunkPos) {
-        ChunkGroupForgetting.onChunkRenewalObserved(server, dimension, pos)
+        RenewalBatchForgetting.onChunkRenewalObserved(server, dimension, pos)
     }
 
     private fun snapshotStones(): Map<String, MementoStones.Stone> =

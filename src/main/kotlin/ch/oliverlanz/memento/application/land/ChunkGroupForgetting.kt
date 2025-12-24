@@ -2,7 +2,7 @@ package ch.oliverlanz.memento.application.land
 
 import ch.oliverlanz.memento.application.MementoStones
 import ch.oliverlanz.memento.application.stone.StoneMaturityTrigger
-import ch.oliverlanz.memento.domain.land.ChunkGroup
+import ch.oliverlanz.memento.domain.land.RenewalBatch
 import ch.oliverlanz.memento.domain.land.GroupState
 import ch.oliverlanz.memento.infrastructure.MementoDebug
 import ch.oliverlanz.memento.application.stone.WitherstoneLifecycle
@@ -14,7 +14,7 @@ import net.minecraft.world.World
 import net.minecraft.world.chunk.ChunkStatus
 
 /**
- * Land / ChunkGroup lifecycle coordinator.
+ * Land / RenewalBatch lifecycle coordinator.
  *
  * Responsibilities:
  * - derive chunk groups from matured witherstones (derived, not persisted)
@@ -25,7 +25,7 @@ import net.minecraft.world.chunk.ChunkStatus
  * CHUNK_UNLOAD must never cause a direct transition into renewal.
  * Unload events only record facts and trigger re-evaluation.
  */
-object ChunkGroupForgetting {
+object RenewalBatchForgetting {
 
     data class PendingRenewal(
         val trigger: String,
@@ -34,13 +34,13 @@ object ChunkGroupForgetting {
     )
 
     data class Execution(
-        val chunkGroup: ChunkGroup,
+        val renewalBatch: RenewalBatch,
         val remaining: MutableSet<ChunkPos>,
         val inFlight: MutableSet<ChunkPos>,
         val queuedGameTime: Long,
     )
 
-    private val groupsByStoneName = linkedMapOf<String, ChunkGroup>()
+    private val batchesByStoneName = linkedMapOf<String, RenewalBatch>()
 
     // Key: "<dimId>::<stoneName>"
     private val pendingRenewals = linkedMapOf<String, PendingRenewal>()
@@ -57,16 +57,16 @@ object ChunkGroupForgetting {
     // A loose upper bound to avoid unbounded growth if unload fires repeatedly.
     private const val UNLOAD_DEBOUNCE_WINDOW_TICKS: Long = 5
 
-    fun getGroupByStoneName(stoneName: String): ChunkGroup? = groupsByStoneName[stoneName]
+    fun getBatchByStoneName(stoneName: String): RenewalBatch? = batchesByStoneName[stoneName]
 
-    fun snapshotGroups(): List<ChunkGroup> = groupsByStoneName.values.toList()
+    fun snapshotBatches(): List<RenewalBatch> = batchesByStoneName.values.toList()
 
     /**
      * Commands operate stone-first and only carry the stone name.
      * If the same name exists across dimensions (shouldn't happen), discard all.
      */
     fun discardGroup(stoneName: String) {
-        if (groupsByStoneName.remove(stoneName) == null) return
+        if (batchesByStoneName.remove(stoneName) == null) return
 
         // Remove any queued/active work for this stone across dimensions.
         pendingRenewals.keys.removeIf { it.endsWith("::$stoneName") }
@@ -74,8 +74,8 @@ object ChunkGroupForgetting {
     }
 
 private fun discardGroupInternal(stoneName: String) {
-    val g = groupsByStoneName.remove(stoneName) ?: return
-    val key = groupKey(g)
+    val b = batchesByStoneName.remove(stoneName) ?: return
+    val key = batchKey(b)
 
     pendingRenewals.remove(key)
     executionsByGroupKey.remove(key)
@@ -88,21 +88,21 @@ private fun discardGroupInternal(stoneName: String) {
         stones: Map<String, MementoStones.Stone>,
         trigger: StoneMaturityTrigger
     ) {
-        groupsByStoneName.clear()
+        batchesByStoneName.clear()
         pendingRenewals.clear()
         executionsByGroupKey.clear()
         lastUnloadObserved.clear()
 
         val derived = deriveGroupsFromMaturedWitherstones(server, stones, trigger)
-        derived.forEach { (name, g) ->
-            groupsByStoneName[name] = g
+        derived.forEach { (name, b) ->
+            batchesByStoneName[name] = b
 
             // Server start / maturity trigger should also trigger an initial readiness evaluation.
             // This is not a direct renewal action; it merely registers that a renewal is desired.
-            pendingRenewals[groupKey(g)] = PendingRenewal(
+            pendingRenewals[batchKey(b)] = PendingRenewal(
                 trigger = trigger.name,
-                observedChunk = ChunkPos(g.anchorPos),
-                observedGameTime = server.overworld.time,
+                observedChunk = ChunkPos(b.anchorPos),
+                observedGameTime = server.overworld.time
             )
         }
 
@@ -124,8 +124,8 @@ private fun discardGroupInternal(stoneName: String) {
     }
 
     fun refreshAllReadiness(server: MinecraftServer) {
-        for (g in groupsByStoneName.values) {
-            refreshGroupReadiness(server, g)
+        for (b in batchesByStoneName.values) {
+            batchesByStoneName.values.forEach { batch -> refreshBatchReadiness(server, batch) }
         }
     }
 
@@ -136,8 +136,8 @@ private fun discardGroupInternal(stoneName: String) {
      * group readiness (BLOCKED/FREE).
      */
     fun onChunkUnloaded(server: MinecraftServer, world: ServerWorld, pos: ChunkPos) {
-        val affected = groupsByStoneName.values.filter { g ->
-            g.dimension == world.registryKey && g.state != GroupState.RENEWED && pos in g.chunks
+        val affected = batchesByStoneName.values.filter { b ->
+            b.dimension == world.registryKey && b.state != GroupState.RENEWED && pos in b.chunks
         }
         if (affected.isEmpty()) return
 
@@ -155,13 +155,13 @@ private fun discardGroupInternal(stoneName: String) {
         }
 
         for (g in affected) {
-            val key = groupKey(g)
+            val key = groupKey(g.dimension, g.anchorName)
             pendingRenewals[key] = PendingRenewal(
                 trigger = "CHUNK_UNLOAD",
                 observedChunk = pos,
                 observedGameTime = now,
             )
-            refreshGroupReadiness(server, g)
+            refreshBatchReadiness(server, g)
         }
     }
 
@@ -171,7 +171,7 @@ private fun discardGroupInternal(stoneName: String) {
      */
     fun isChunkRenewalQueued(dimension: RegistryKey<World>, pos: ChunkPos): Boolean {
         return executionsByGroupKey.values.any { ex ->
-            ex.chunkGroup.dimension == dimension && pos in ex.inFlight
+            ex.renewalBatch.dimension == dimension && pos in ex.inFlight
         }
     }
 
@@ -180,7 +180,7 @@ private fun discardGroupInternal(stoneName: String) {
      */
     fun onChunkRenewalObserved(server: MinecraftServer, dimension: RegistryKey<World>, pos: ChunkPos) {
         val matching = executionsByGroupKey.values.filter { ex ->
-            ex.chunkGroup.dimension == dimension && (pos in ex.remaining || pos in ex.inFlight)
+            ex.renewalBatch.dimension == dimension && (pos in ex.remaining || pos in ex.inFlight)
         }
         if (matching.isEmpty()) return
 
@@ -189,42 +189,42 @@ private fun discardGroupInternal(stoneName: String) {
             ex.inFlight.remove(pos)
 
             if (wasRemaining) {
-                val done = (ex.chunkGroup.chunks.size - ex.remaining.size)
-                val total = ex.chunkGroup.chunks.size
-                MementoDebug.info(server, "ChunkGroup '${ex.chunkGroup.anchorName}' renewed chunk (${pos.x},${pos.z}) ($done/$total)")
+                val done = (ex.renewalBatch.chunks.size - ex.remaining.size)
+                val total = ex.renewalBatch.chunks.size
+                MementoDebug.info(server, "RenewalBatch '${ex.renewalBatch.anchorName}' renewed chunk (${pos.x},${pos.z}) ($done/$total)")
             }
 
             if (ex.remaining.isEmpty()) {
-                val group = ex.chunkGroup
-                val key = groupKey(group)
+                val batch = ex.renewalBatch
+                val key = batchKey(batch)
                 executionsByGroupKey.remove(key)
 
-                if (group.state != GroupState.RENEWED) {
-                    groupsByStoneName[group.anchorName] = group.copy(state = GroupState.RENEWED)
+                if (batch.state != GroupState.RENEWED) {
+                    batchesByStoneName[batch.anchorName] = batch.copy(state = GroupState.RENEWED)
                     MementoDebug.info(
                         server,
-                        "ChunkGroup '${group.anchorName}' FORGETTING -> RENEWED (dim=${group.dimension.value}, chunks=${group.chunks.size})"
+                        "RenewalBatch '${batch.anchorName}' FORGETTING -> RENEWED (dim=${batch.dimension.value}, chunks=${batch.chunks.size})"
                     )
 
                     // Terminal action: consume the WITHERSTONE (one-shot) and discard the derived group.
-                    WitherstoneLifecycle.onChunkGroupRenewed(server, group.anchorName)
-                    discardGroupInternal(group.anchorName)
+                    WitherstoneLifecycle.onChunkGroupRenewed(server, batch.anchorName)
+                    discardGroupInternal(batch.anchorName)
                 }
             }
         }
     }
 
     private fun maybeStartQueuedRenewals(server: MinecraftServer) {
-        if (groupsByStoneName.isEmpty()) return
+        if (batchesByStoneName.isEmpty()) return
 
-        for (g in groupsByStoneName.values) {
-            val key = groupKey(g)
+        for (b in batchesByStoneName.values) {
+            val key = batchKey(b)
             val pending = pendingRenewals[key] ?: continue
 
-            if (g.state != GroupState.FREE) continue
+            if (b.state != GroupState.FREE) continue
 
             // Extra guard: state FREE must match actual loaded-chunk reality.
-            val loadedChunks = countLoadedChunks(server, g)
+            val loadedChunks = countLoadedChunks(server, b)
             if (loadedChunks != 0) continue
 
             // Do not start twice.
@@ -233,11 +233,11 @@ private fun discardGroupInternal(stoneName: String) {
                 continue
             }
 
-            val updated = g.copy(state = GroupState.FORGETTING)
-            groupsByStoneName[g.anchorName] = updated
+            val updated = b.copy(state = GroupState.FORGETTING)
+            batchesByStoneName[b.anchorName] = updated
 
             executionsByGroupKey[key] = Execution(
-                chunkGroup = updated,
+                renewalBatch = updated,
                 remaining = updated.chunks.toMutableSet(),
                 inFlight = linkedSetOf(),
                 queuedGameTime = server.overworld.time,
@@ -257,7 +257,7 @@ private fun discardGroupInternal(stoneName: String) {
         if (executions.isEmpty()) return
 
         for (ex in executions) {
-            val world = server.getWorld(ex.chunkGroup.dimension) ?: continue
+            val world = server.getWorld(ex.renewalBatch.dimension) ?: continue
 
             // Pick the next chunk that isn't already in-flight.
             val next = ex.remaining.firstOrNull { it !in ex.inFlight } ?: continue
@@ -270,22 +270,22 @@ private fun discardGroupInternal(stoneName: String) {
         }
     }
 
-    private fun refreshGroupReadiness(server: MinecraftServer, group: ChunkGroup) {
-        if (group.state == GroupState.FORGETTING || group.state == GroupState.RENEWED) return
+    private fun refreshBatchReadiness(server: MinecraftServer, batch: RenewalBatch) {
+        if (batch.state == GroupState.FORGETTING || batch.state == GroupState.RENEWED) return
 
-        val loaded = countLoadedChunks(server, group)
-        val total = group.chunks.size
+        val loaded = countLoadedChunks(server, batch)
+        val total = batch.chunks.size
         val newState = if (loaded == 0) GroupState.FREE else GroupState.BLOCKED
 
-        if (newState != group.state) {
-            groupsByStoneName[group.anchorName] = group.copy(state = newState)
-            MementoDebug.info(server, "ChunkGroup '${group.anchorName}' ${group.state} -> $newState (loadedChunks=$loaded/$total)")
+        if (newState != batch.state) {
+            batchesByStoneName[batch.anchorName] = batch.copy(state = newState)
+            MementoDebug.info(server, "RenewalBatch '${batch.anchorName}' ${batch.state} -> $newState (loadedChunks=$loaded/$total)")
         }
     }
 
-    private fun countLoadedChunks(server: MinecraftServer, group: ChunkGroup): Int {
-        val world = server.getWorld(group.dimension) ?: return 0
-        return group.chunks.count { pos ->
+    private fun countLoadedChunks(server: MinecraftServer, batch: RenewalBatch): Int {
+        val world = server.getWorld(batch.dimension) ?: return 0
+        return batch.chunks.count { pos ->
             world.chunkManager.getChunk(pos.x, pos.z, ChunkStatus.EMPTY, false) != null
         }
     }
@@ -294,8 +294,8 @@ private fun discardGroupInternal(stoneName: String) {
         server: MinecraftServer,
         stones: Map<String, MementoStones.Stone>,
         trigger: StoneMaturityTrigger,
-    ): Map<String, ChunkGroup> {
-        val derived = linkedMapOf<String, ChunkGroup>()
+    ): Map<String, RenewalBatch> {
+        val derived = linkedMapOf<String, RenewalBatch>()
 
         val matured = stones.values.filter { s ->
             s.kind == MementoStones.Kind.FORGET && s.state == MementoStones.WitherstoneState.MATURED
@@ -303,7 +303,7 @@ private fun discardGroupInternal(stoneName: String) {
 
         for (s in matured) {
             val chunks = MementoStones.computeChunksInRadius(s.pos, s.radius).toList()
-            val g = ChunkGroup(
+            val b = RenewalBatch(
                 anchorName = s.name,
                 dimension = s.dimension,
                 anchorPos = s.pos,
@@ -312,21 +312,21 @@ private fun discardGroupInternal(stoneName: String) {
                 state = GroupState.MARKED,
             )
 
-            derived[s.name] = g
+            derived[s.name] = b
 
             MementoDebug.info(
                 server,
-                "ChunkGroup '${g.anchorName}' derived due to stone maturity trigger: $trigger (state=${g.state}, dim=${g.dimension.value}, chunks=${g.chunks.size})"
+                "RenewalBatch '${b.anchorName}' derived due to stone maturity trigger: $trigger (state=${b.state}, dim=${b.dimension.value}, chunks=${b.chunks.size})"
             )
 
             // Evaluate readiness once, so /memento inspect is accurate right after trigger.
-            refreshGroupReadiness(server, g)
+            refreshBatchReadiness(server, b)
         }
 
         return derived
     }
 
-    private fun groupKey(group: ChunkGroup): String = groupKey(group.dimension, group.anchorName)
+    private fun batchKey(batch: RenewalBatch): String = "${batch.dimension.value}::${batch.anchorName}"
 
     private fun groupKey(dimension: RegistryKey<World>, stoneName: String): String =
         "${dimension.value}::$stoneName"

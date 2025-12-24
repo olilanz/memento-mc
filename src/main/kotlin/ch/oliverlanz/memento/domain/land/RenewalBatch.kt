@@ -16,7 +16,7 @@ import net.minecraft.world.World
  * Lifecycle is represented by [state], but transitions are still
  * orchestrated by application services (for now).
  */
-data class ChunkGroup(
+data class RenewalBatch(
     val anchorName: String,
     val dimension: RegistryKey<World>,
     val anchorPos: BlockPos,

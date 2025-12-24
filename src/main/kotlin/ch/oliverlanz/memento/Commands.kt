@@ -2,7 +2,7 @@ package ch.oliverlanz.memento
 
 import ch.oliverlanz.memento.infrastructure.MementoConstants
 import ch.oliverlanz.memento.application.MementoStones
-import ch.oliverlanz.memento.application.land.ChunkGroupForgetting
+import ch.oliverlanz.memento.application.land.RenewalBatchForgetting
 import ch.oliverlanz.memento.application.land.ChunkInspection
 import com.mojang.brigadier.CommandDispatcher
 import com.mojang.brigadier.arguments.IntegerArgumentType
@@ -251,7 +251,7 @@ object Commands {
         val removed = MementoStones.remove(name)
 
         // Safe no-op if no group exists
-        ChunkGroupForgetting.discardGroup(name)
+        RenewalBatchForgetting.discardGroup(name)
 
         src.sendFeedback(
             { Text.literal(if (removed) "Removed '$name'" else "No such stone '$name'") },
@@ -274,7 +274,7 @@ object Commands {
 
         // Re-arming: matured -> maturing must discard derived group
         if (stone.state == MementoStones.WitherstoneState.MATURED && value > 0) {
-            ChunkGroupForgetting.discardGroup(name)
+            RenewalBatchForgetting.discardGroup(name)
         }
 
         MementoStones.addOrReplace(
@@ -361,8 +361,8 @@ object Commands {
             }
         }
 
-        val group = ChunkGroupForgetting.getGroupByStoneName(name)
-        if (group == null) {
+        val batch = RenewalBatchForgetting.getBatchByStoneName(name)
+        if (batch == null) {
             src.sendFeedback(
                 { Text.literal("Chunk group: none derived yet.") },
                 false
@@ -370,18 +370,18 @@ object Commands {
             return 1
         }
 
-        val reports = ChunkInspection.inspectGroup(src.server, group)
+        val reports = ChunkInspection.inspectBatch(src.server, batch)
         val loaded = reports.filter { it.isLoaded }
         val loadedCount = loaded.size
         val total = reports.size
         val unloadedCount = (total - loadedCount).coerceAtLeast(0)
 
         src.sendFeedback(
-            { Text.literal("Chunk group: state=${group.state}, chunks=$total, loaded=$loadedCount, unloaded=$unloadedCount") },
+            { Text.literal("Renewal batch: state=${batch.state}, chunks=$total, loaded=$loadedCount, unloaded=$unloadedCount") },
             false
         )
 
-        if (group.state == ch.oliverlanz.memento.domain.land.GroupState.BLOCKED) {
+        if (batch.state == ch.oliverlanz.memento.domain.land.GroupState.BLOCKED) {
             src.sendFeedback(
                 { Text.literal("Waiting for chunk renewal trigger: CHUNK_UNLOAD (loaded chunks prevent atomic renewal).") },
                 false
