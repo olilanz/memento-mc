@@ -381,7 +381,7 @@ object Commands {
             false
         )
 
-        if (batch.state == ch.oliverlanz.memento.domain.land.GroupState.BLOCKED) {
+        if (batch.state == ch.oliverlanz.memento.domain.land.RenewalBatchState.BLOCKED) {
             src.sendFeedback(
                 { Text.literal("Waiting for chunk renewal trigger: CHUNK_UNLOAD (loaded chunks prevent atomic renewal).") },
                 false

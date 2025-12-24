@@ -86,7 +86,7 @@ object WitherstoneLifecycle {
  *
  * Lorestone/REMEMBER anchors are never consumed automatically.
  */
-fun onChunkGroupRenewed(server: MinecraftServer, stoneName: String) {
+fun onRenewalBatchRenewed(server: MinecraftServer, stoneName: String) {
     val a = MementoStones.get(stoneName) ?: return
     if (a.kind != MementoStones.Kind.FORGET) return
 

@@ -19,8 +19,8 @@ import net.minecraft.world.World
 data class RenewalBatch(
     val anchorName: String,
     val dimension: RegistryKey<World>,
-    val anchorPos: BlockPos,
+    val stonePos: BlockPos,
     val radiusChunks: Int,
     val chunks: List<ChunkPos>,
-    var state: GroupState = GroupState.MARKED
+    var state: RenewalBatchState = RenewalBatchState.MARKED
 )
