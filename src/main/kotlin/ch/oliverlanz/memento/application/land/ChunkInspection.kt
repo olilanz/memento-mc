@@ -1,6 +1,6 @@
 package ch.oliverlanz.memento.application.land
 
-import ch.oliverlanz.memento.domain.land.ChunkGroup
+import ch.oliverlanz.memento.domain.land.RenewalBatch
 import net.minecraft.entity.EntityType
 import net.minecraft.entity.ItemEntity
 import net.minecraft.entity.mob.MobEntity
@@ -44,25 +44,25 @@ object ChunkInspection {
         val summary: String
     )
 
-    fun inspectGroup(
+    fun inspectBatch(
         server: MinecraftServer,
-        group: ChunkGroup
+        batch: RenewalBatch
     ): List<ChunkReport> {
-        val world = server.getWorld(group.dimension) ?: return emptyList()
+        val world = server.getWorld(batch.dimension) ?: return emptyList()
 
-        return group.chunks
+        return batch.chunks
             .map { inspectOne(world, server, it) }
             .sortedWith(compareBy({ it.pos.x }, { it.pos.z }))
     }
 
     fun inspectAll(server: MinecraftServer): List<ChunkReport> {
-        val groups = ChunkGroupForgetting.snapshotGroups()
-        if (groups.isEmpty()) return emptyList()
+        val batches = RenewalBatchForgetting.snapshotBatches()
+        if (batches.isEmpty()) return emptyList()
 
         val reports = mutableListOf<ChunkReport>()
-        for (g in groups) {
-            val world = server.getWorld(g.dimension) ?: continue
-            for (pos in g.chunks) {
+        for (b in batches) {
+            val world = server.getWorld(b.dimension) ?: continue
+            for (pos in b.chunks) {
                 reports += inspectOne(world, server, pos)
             }
         }

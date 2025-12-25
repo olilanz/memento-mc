@@ -1,12 +1,12 @@
 package ch.oliverlanz.memento.domain.land
 
 /**
- * Lifecycle state of a derived ChunkGroup.
+ * Lifecycle state of a derived RenewalBatch.
  *
  * This enum is purely domain-level.
  * It contains no execution logic and no Minecraft references.
  */
-enum class GroupState {
+enum class RenewalBatchState {
 
     /**
      * Group has been derived from a matured stone,

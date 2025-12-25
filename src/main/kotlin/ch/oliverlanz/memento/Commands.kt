@@ -1,8 +1,8 @@
 package ch.oliverlanz.memento
 
 import ch.oliverlanz.memento.infrastructure.MementoConstants
-import ch.oliverlanz.memento.application.MementoAnchors
-import ch.oliverlanz.memento.application.land.ChunkGroupForgetting
+import ch.oliverlanz.memento.application.MementoStones
+import ch.oliverlanz.memento.application.land.RenewalBatchForgetting
 import ch.oliverlanz.memento.application.land.ChunkInspection
 import com.mojang.brigadier.CommandDispatcher
 import com.mojang.brigadier.arguments.IntegerArgumentType
@@ -32,8 +32,8 @@ object Commands {
                  * ====================== */
                 .then(literal("list")
                     .executes { list(null, it.source) }
-                    .then(literal("witherstone").executes { list(MementoAnchors.Kind.FORGET, it.source) })
-                    .then(literal("lorestone").executes { list(MementoAnchors.Kind.REMEMBER, it.source) })
+                    .then(literal("witherstone").executes { list(MementoStones.Kind.FORGET, it.source) })
+                    .then(literal("lorestone").executes { list(MementoStones.Kind.REMEMBER, it.source) })
                 )
 
                 /* ======================
@@ -195,19 +195,19 @@ object Commands {
         val pos = BlockPos.ofFloored(src.position)
         val world = src.world
 
-        MementoAnchors.addOrReplace(
-            MementoAnchors.Anchor(
+        MementoStones.addOrReplace(
+            MementoStones.Stone(
                 name = name,
-                kind = MementoAnchors.Kind.FORGET,
+                kind = MementoStones.Kind.FORGET,
                 dimension = world.registryKey,
                 pos = pos,
                 radius = radius,
                 days = daysToMaturity,
                 state =
                     if (daysToMaturity == 0)
-                        MementoAnchors.WitherstoneState.MATURED
+                        MementoStones.WitherstoneState.MATURED
                     else
-                        MementoAnchors.WitherstoneState.MATURING,
+                        MementoStones.WitherstoneState.MATURING,
                 createdGameTime = world.time
             )
         )
@@ -227,10 +227,10 @@ object Commands {
         val pos = BlockPos.ofFloored(src.position)
         val world = src.world
 
-        MementoAnchors.addOrReplace(
-            MementoAnchors.Anchor(
+        MementoStones.addOrReplace(
+            MementoStones.Stone(
                 name = name,
-                kind = MementoAnchors.Kind.REMEMBER,
+                kind = MementoStones.Kind.REMEMBER,
                 dimension = world.registryKey,
                 pos = pos,
                 radius = radius,
@@ -248,10 +248,10 @@ object Commands {
     }
 
     private fun remove(src: ServerCommandSource, name: String): Int {
-        val removed = MementoAnchors.remove(name)
+        val removed = MementoStones.remove(name)
 
         // Safe no-op if no group exists
-        ChunkGroupForgetting.discardGroup(name)
+        RenewalBatchForgetting.discardGroup(name)
 
         src.sendFeedback(
             { Text.literal(if (removed) "Removed '$name'" else "No such stone '$name'") },
@@ -265,26 +265,26 @@ object Commands {
         name: String,
         value: Int
     ): Int {
-        val anchor = MementoAnchors.get(name)
+        val stone = MementoStones.get(name)
             ?: return error(src, "No such witherstone '$name'")
 
-        if (anchor.kind != MementoAnchors.Kind.FORGET) {
+        if (stone.kind != MementoStones.Kind.FORGET) {
             return error(src, "'$name' is not a witherstone")
         }
 
         // Re-arming: matured -> maturing must discard derived group
-        if (anchor.state == MementoAnchors.WitherstoneState.MATURED && value > 0) {
-            ChunkGroupForgetting.discardGroup(name)
+        if (stone.state == MementoStones.WitherstoneState.MATURED && value > 0) {
+            RenewalBatchForgetting.discardGroup(name)
         }
 
-        MementoAnchors.addOrReplace(
-            anchor.copy(
+        MementoStones.addOrReplace(
+            stone.copy(
                 days = value,
                 state =
                     if (value == 0)
-                        MementoAnchors.WitherstoneState.MATURED
+                        MementoStones.WitherstoneState.MATURED
                     else
-                        MementoAnchors.WitherstoneState.MATURING
+                        MementoStones.WitherstoneState.MATURING
             )
         )
 
@@ -300,10 +300,10 @@ object Commands {
         name: String,
         radius: Int
     ): Int {
-        val anchor = MementoAnchors.get(name)
+        val stone = MementoStones.get(name)
             ?: return error(src, "No such stone '$name'")
 
-        MementoAnchors.addOrReplace(anchor.copy(radius = radius))
+        MementoStones.addOrReplace(stone.copy(radius = radius))
 
         src.sendFeedback(
             { Text.literal("Stone '$name' radius set to $radius") },
@@ -317,7 +317,7 @@ object Commands {
         src: ServerCommandSource,
         name: String
     ): Int {
-        val stone = MementoAnchors.get(name)
+        val stone = MementoStones.get(name)
             ?: run {
                 src.sendError(Text.literal("No stone found with name '$name'"))
                 return 0
@@ -325,8 +325,8 @@ object Commands {
 
         val stoneLabel =
             when (stone.kind) {
-                MementoAnchors.Kind.FORGET -> "Witherstone"
-                MementoAnchors.Kind.REMEMBER -> "Lorestone"
+                MementoStones.Kind.FORGET -> "Witherstone"
+                MementoStones.Kind.REMEMBER -> "Lorestone"
             }
 
         src.sendFeedback(
@@ -339,8 +339,8 @@ object Commands {
             false
         )
 
-        if (stone.kind == MementoAnchors.Kind.FORGET) {
-            val state = stone.state ?: MementoAnchors.WitherstoneState.MATURING
+        if (stone.kind == MementoStones.Kind.FORGET) {
+            val state = stone.state ?: MementoStones.WitherstoneState.MATURING
             val days = stone.days
 
             src.sendFeedback(
@@ -348,12 +348,12 @@ object Commands {
                 false
             )
 
-            if (state == MementoAnchors.WitherstoneState.MATURING && days != null && days > 0) {
+            if (state == MementoStones.WitherstoneState.MATURING && days != null && days > 0) {
                 src.sendFeedback(
                     { Text.literal("Waiting for stone maturity trigger: NIGHTLY_TICK (days remaining: $days).") },
                     false
                 )
-            } else if (state == MementoAnchors.WitherstoneState.MATURED) {
+            } else if (state == MementoStones.WitherstoneState.MATURED) {
                 src.sendFeedback(
                     { Text.literal("Stone is matured. Derived chunk groups are created on stone maturity triggers: SERVER_START, NIGHTLY_TICK, COMMAND.") },
                     false
@@ -361,8 +361,8 @@ object Commands {
             }
         }
 
-        val group = ChunkGroupForgetting.getGroupByAnchorName(name)
-        if (group == null) {
+        val batch = RenewalBatchForgetting.getBatchByStoneName(name)
+        if (batch == null) {
             src.sendFeedback(
                 { Text.literal("Chunk group: none derived yet.") },
                 false
@@ -370,18 +370,18 @@ object Commands {
             return 1
         }
 
-        val reports = ChunkInspection.inspectGroup(src.server, group)
+        val reports = ChunkInspection.inspectBatch(src.server, batch)
         val loaded = reports.filter { it.isLoaded }
         val loadedCount = loaded.size
         val total = reports.size
         val unloadedCount = (total - loadedCount).coerceAtLeast(0)
 
         src.sendFeedback(
-            { Text.literal("Chunk group: state=${group.state}, chunks=$total, loaded=$loadedCount, unloaded=$unloadedCount") },
+            { Text.literal("Renewal batch: state=${batch.state}, chunks=$total, loaded=$loadedCount, unloaded=$unloadedCount") },
             false
         )
 
-        if (group.state == ch.oliverlanz.memento.domain.land.GroupState.BLOCKED) {
+        if (batch.state == ch.oliverlanz.memento.domain.land.RenewalBatchState.BLOCKED) {
             src.sendFeedback(
                 { Text.literal("Waiting for chunk renewal trigger: CHUNK_UNLOAD (loaded chunks prevent atomic renewal).") },
                 false
@@ -418,10 +418,10 @@ object Commands {
     }
 
 fun list(
-        kind: MementoAnchors.Kind?,
+        kind: MementoStones.Kind?,
         src: ServerCommandSource
     ): Int {
-        val stones = MementoAnchors.list()
+        val stones = MementoStones.list()
             .filter { kind == null || it.kind == kind }
 
         if (stones.isEmpty()) {
@@ -431,7 +431,7 @@ fun list(
 
         stones.forEach { a ->
             val extra =
-                if (a.kind == MementoAnchors.Kind.FORGET)
+                if (a.kind == MementoStones.Kind.FORGET)
                     " daysToMaturity=${a.days}"
                 else
                     ""
