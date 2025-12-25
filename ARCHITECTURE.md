@@ -1,156 +1,279 @@
-# Memento: Natural Renewal — Architecture
+# Memento – Architecture
 
-This document describes the **current, implemented architecture** of Memento.
+This document describes the architectural foundations of **Memento**, a server-side Minecraft mod for **Fabric / Minecraft 1.21.10**, written in **Kotlin**.
 
-It focuses on:
-- invariants
+It captures **concepts, invariants, and design decisions** that are not obvious from reading the code alone and must remain stable even as the codebase evolves.
+
+This document intentionally avoids gameplay framing, implementation details, and user-facing instructions. Those belong in `README.md` and `STORY.md`.
+
+---
+
+## 1. Scope and Constraints
+
+### 1.1 Technical Scope
+
+- Memento is a **purely server-side** mod.
+- It modifies **world mechanics**, not client gameplay.
+- No client mod is required.
+- Fabric is used as a loader, but no Fabric-specific assumptions are embedded in the core design.
+- The architecture is intentionally portable to other loaders.
+
+### 1.2 Execution Environment
+
+- Minecraft version: **1.21.10**
+- Language: **Kotlin**
+- Loader: **Fabric**
+- Execution model: Minecraft server tick loop, chunk ticketing, and chunk lifecycle events
+
+---
+
+## 2. Problem Framing
+
+### 2.1 What Memento Is Trying to Achieve
+
+The primary objective of Memento is:
+
+> **Gradual, natural renewal of the world in the outskirts**, where chunks are least memorable and least interacted with.
+
+Renewal must:
+- preserve important, inhabited areas
+- avoid disruptive or unsafe operations
+- integrate with Minecraft’s existing chunk lifecycle
+
+### 2.2 Secondary Objective: Operator-Controlled Renewal
+
+A secondary objective exists to support **manual and controlled renewal**:
+
+- Players or operators may explicitly mark areas for renewal
+- This provides protection and control for important locations
+- This path exists primarily to:
+  - exercise and validate the core mechanics
+  - support edge cases near inhabited areas
+
+From an engineering perspective, **most development effort focuses on this secondary objective**, even though it is not the primary purpose of the mod.
+
+This distinction is intentional and must not be confused.
+
+---
+
+## 3. Best-Effort Execution and Operator Control
+
+### 3.1 Best-Effort as a Design Principle
+
+Minecraft does not expose a safe or deterministic API for forcibly unloading chunks.
+
+As a result:
+- Chunk renewal cannot be performed eagerly or deterministically
+- Renewal must be **deferred** until chunks naturally unload
+- Execution timing is **non-deterministic** and **best-effort**
+
+Correctness applies to:
+- *which* chunks are renewed  
+not:
+- *when* they are renewed
+
+This is a foundational architectural decision.
+
+---
+
+### 3.2 Levels of Operator Control
+
+The architecture explicitly assumes increasing levels of operator intervention:
+
+1. **Leave the Area**
+   - Natural chunk unload
+   - Expected to work in outskirts
+   - Primary path for automatic renewal
+
+2. **Log Users Out**
+   - Forces player-held chunks to unload
+   - Useful near inhabited areas
+   - Operator-controlled
+
+3. **Restart the Server**
+   - Guarantees all chunks unload
+   - Heavy-handed but safe
+   - Always available as a last resort
+
+Because these control levels exist, the system:
+- must tolerate delayed execution
+- must persist intent across restarts
+- must never rely on forced unload logic
+
+---
+
+## 4. Core Concepts
+
+### 4.1 Stones
+
+A **Stone** is a persistent, in-world marker representing *intent*.
+
+Stones do **not** directly perform chunk operations.
+
+There are multiple stone types, each with distinct semantics.
+
+#### Lorestone
+- Protects an area from renewal
+- Defines a radius of preservation
+- Has no automated lifecycle
+
+#### Witherstone
+- Represents intent to renew an area
+- Has an automated lifecycle
+- Produces exactly one renewal operation
+
+---
+
+### 4.2 Renewal Batches
+
+A **RenewalBatch** represents the execution of renewal for a set of chunks.
+
+Characteristics:
+- Derived from a single matured Witherstone
+- Groups all chunks within the defined radius
+- Progresses independently of the originating Witherstone
+- Operates purely based on observed chunk lifecycle events
+
+A RenewalBatch is the **unit of execution**.
+
+---
+
+## 5. Chunk Lifecycle and Renewal Strategy
+
+### 5.1 Minecraft Chunk Model (Relevant Aspects)
+
+- Chunks are loaded and unloaded based on ticketing
+- Players, entities, and systems hold tickets
+- Forced unload is unsafe and may cause race conditions
+- Chunk unload events are observable and reliable
+
+### 5.2 Chosen Renewal Strategy
+
+Memento renews chunks only when:
+- all chunks in a batch are fully unloaded
+- the server naturally initiates a load afterward
+
+At that point:
+- the load is intercepted
+- the chunk is regenerated instead of loaded from disk
+
+This approach:
+- avoids forced unload
+- avoids race conditions
+- aligns with Minecraft’s execution model
+
+---
+
+## 6. Lifecycle Model and Invariants
+
+### 6.1 Witherstone Lifecycle (Intent Lifecycle)
+
+Purpose:
+- Represent **explicit intent** to renew an area
+
+Characteristics:
+- Independent of chunk load state
+- Driven by time and operator action
+- Produces exactly one RenewalBatch
+- Consumed only after successful renewal
+
+Typical states:
+- PLACED
+- MATURING
+- MATURED
+- CONSUMED
+
+**Invariant:**  
+> The Witherstone lifecycle governs intent, not execution.
+
+---
+
+### 6.2 RenewalBatch Lifecycle (Execution Lifecycle)
+
+Purpose:
+- Manage **safe and deferred execution** of renewal
+
+Characteristics:
+- Exists independently after derivation
+- Driven solely by observed chunk events
+- Can be delayed indefinitely without breaking correctness
+
+Typical states:
+- DERIVED
+- BLOCKED (one or more chunks loaded)
+- FREE (all chunks unloaded)
+- RENEWING
+- RENEWED
+
+**Invariant:**  
+> The RenewalBatch lifecycle governs execution, not intent.
+
+---
+
+### 6.3 Relationship Between the Two Lifecycles
+
+- A matured Witherstone creates **exactly one** RenewalBatch
+- After creation:
+  - the Witherstone no longer drives execution
+  - the RenewalBatch progresses autonomously
+- Successful completion:
+  - consumes the originating Witherstone
+- Delays or failures:
+  - do not roll back Witherstone state
+
+**Architectural Rule:**  
+> Intent and execution must never be coupled to the same lifecycle.
+
+---
+
+## 7. Triggers and Observability
+
+Triggers in Memento are **observational**, not causal.
+
+Examples:
+- time crossing the nightly threshold
+- server startup state reconciliation
+- chunk unload events
+- chunk load attempts
+
+Triggers:
+- may fire multiple times
+- must be idempotent
+- must never assume ordering or exclusivity
+
+This design ensures:
+- restart safety
+- resilience to partial progress
+- correctness under repeated evaluation
+
+---
+
+## 8. Persistence and Recovery
+
+- Stones and RenewalBatches are persisted
+- State is reconstructed on server startup
+- Pending renewal is resumed naturally
+- No special recovery mode is required
+
+Persistence exists to:
+- preserve intent
+- tolerate restarts
+- support best-effort execution
+
+---
+
+## 9. Architectural Stability
+
+This document defines:
+- concepts
 - lifecycles
-- triggers
-- and deliberate constraints
+- invariants
+- execution philosophy
 
----
+It intentionally does **not** define:
+- class structures
+- method names
+- threading strategies
+- code-level optimizations
 
-## Foundational Constraints
-
-These are non-negotiable:
-
-- Server-side only
-- Vanilla client compatibility
-- No forced chunk loading or unloading
-- Deterministic behavior
-- Explicit operator control
-
----
-
-## Core Model: Two Lifecycles
-
-Memento is built around **two distinct lifecycles**:
-
-1. **Witherstone Lifecycle** — Time & Intent
-2. **Land (chunk group) lifecycle** — space & permission
-
-They intersect, but they are not the same.
-
----
-
-## Witherstone Lifecycle (Time-Based)
-
-- Witherstones mature when `daysToMaturity` reaches `0`
-- Maturation derives a chunk group and marks it for forgetting
-- Regeneration may only proceed when *all* chunks are unloaded
-- Setting `daysToMaturity` from `0 → N` rewinds the lifecycle:
-  - the derived group is discarded
-  - no regeneration may proceed
-
-### States
-
-The Witherstone Lifecycle is represented explicitly in code and persisted (`WitherstoneState`).
-
-1. **Maturing**
-   - Influence builds over world days
-   - No world mutation occurs
-
-2. **Matured**
-   - Time to maturity has elapsed
-   - The surrounding land is marked for forgetting
-   - No chunk data is discarded yet
-
-3. **Consumed**
-   - Forgetting has completed
-   - The Witherstone is removed
-
-A matured Witherstone **permits forgetting**,
-but does not perform it directly.
-
----
-
-## Land / Chunk Group Lifecycle (Space-Based)
-
-Chunk groups are **derived**, ephemeral structures.
-They only exist meaningfully after a Witherstone matures.
-
-### States
-
-The Witherstone Lifecycle is represented explicitly in code and persisted (`WitherstoneState`).
-
-1. **Marked**
-   - Land is subject to forgetting
-
-2. **Blocked**
-   - One or more affected chunks are still loaded
-
-3. **Free**
-   - All affected chunks are unloaded
-   - Forgetting is now safe
-
-4. **Forgetting**
-   - Chunk data is discarded
-   - Regeneration is executed atomically
-
-5. **Renewed**
-   - New world state generated
-   - Group discarded
-
----
-
-## Invariants
-
-- Forgetting is atomic per group
-- No partial regeneration
-- No forced unloads
-- No retries or polling
-- Forgetting begins only on chunk unload
-- Witherstone removal happens only after renewal
-
----
-
-## Triggers
-
-### World Day Change
-
-- Detected via day index (`timeOfDay / 24000`)
-- Advances Witherstone maturation
-- Independent of sleep or `/time set`
-
-### Chunk Unload
-
-- Evaluates whether marked land is now free
-- Triggers forgetting when safe
-
----
-
-## Observability
-
-### WARN conditions (intentional)
-
-Warnings are reserved for cases that are unexpected or operationally significant:
-
-- Nightly tick sees a Witherstone already matured and still present → renewal has been blocked for more than one day
-- Server start derives a group from a matured Witherstone and the group is immediately BLOCKED → something is loading chunks early (spawn chunks, forced chunks, or other mods)
-
-High-signal lifecycle events are reported to:
-
-- server logs
-- operator chat (OP ≥ 2)
-
-Messages describe **world facts**, not engine mechanics.
-
----
-
-## Explicitly Out of Scope
-
-- Client-side mods
-- Heuristic or AI-driven decisions
-- Forced chunk management
-- Partial regeneration strategies
-
----
-
-## Architectural Values
-
-- Clarity over cleverness
-- Intent over automation
-- Safety over speed
-- Semantics that survive time
-
-The code is written to reflect these values directly.
+Any refactoring must preserve the invariants described here.
