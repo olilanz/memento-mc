@@ -2,27 +2,18 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Run Fabric Server",
+      "label": "Gradle: build",
       "type": "shell",
-      "command": "./gradlew runServer",
+      "command": "./gradlew build",
       "group": {
         "kind": "build",
         "isDefault": true
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared"
-      },
-      "problemMatcher": []
+      }
     },
     {
-      "label": "Stop Fabric Server",
+      "label": "Gradle: runServer (debug)",
       "type": "shell",
-      "command": "pkill -f net.minecraft.server.Main || true",
-      "presentation": {
-        "reveal": "never",
-        "panel": "shared"
-      }
+      "command": "./gradlew runServer --debug-jvm"
     }
   ]
 }
