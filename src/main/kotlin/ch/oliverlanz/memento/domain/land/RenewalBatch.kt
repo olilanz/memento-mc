@@ -23,4 +23,21 @@ data class RenewalBatch(
     val radiusChunks: Int,
     val chunks: List<ChunkPos>,
     var state: RenewalBatchState = RenewalBatchState.MARKED
-)
+) {
+
+    /**
+     * Handle chunk unload events.
+     * @param chunkPos The position of the unloaded chunk.
+     */
+    fun onChunkUnloaded(chunkPos: ChunkPos) {
+        // Logic for handling chunk unload
+    }
+
+    /**
+     * Handle chunk load events.
+     * @param chunkPos The position of the loaded chunk.
+     */
+    fun onChunkLoaded(chunkPos: ChunkPos) {
+        // Logic for handling chunk load
+    }
+}

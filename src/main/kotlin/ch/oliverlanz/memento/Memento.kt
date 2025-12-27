@@ -5,27 +5,29 @@ import ch.oliverlanz.memento.infrastructure.MementoPersistence
 import ch.oliverlanz.memento.infrastructure.MementoConstants
 import ch.oliverlanz.memento.infrastructure.MementoDebug
 import ch.oliverlanz.memento.application.stone.WitherstoneLifecycle
+import ch.oliverlanz.memento.domain.stones.StoneRegister
+import ch.oliverlanz.memento.domain.land.RenewalTracker
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld
+import net.minecraft.util.math.ChunkPos
 
 /**
  * Mod entry point and lifecycle wiring.
- *
- * Key mental model:
- * - Witherstone anchors mature over world-days (Overworld day index).
- * - When an anchor matures, its derived chunk group is *marked for forgetting*.
- * - A marked group may only renew when *all its chunks are unloaded*.
- * - Unload does not regenerate; it only creates the opportunity.
- * - Regeneration happens on the subsequent load, via the storage mixin.
  */
 object Memento : ModInitializer {
 
+    const val NEW_MODE = true
+
     override fun onInitialize() {
         MementoDebug.info(null, "Memento initializing")
+
+        if (NEW_MODE) {
+            initializeShadowComponents()
+        }
 
         // Commands
         Commands.register()
@@ -33,7 +35,6 @@ object Memento : ModInitializer {
         // Load persisted anchors + state, and rebuild derived group marks.
         ServerLifecycleEvents.SERVER_STARTED.register { server ->
             MementoDebug.info(server, "Loading anchors and state")
-
 
             // Attach server reference for mixin-driven renewal observations.
             WitherstoneLifecycle.attachServer(server)
@@ -89,5 +90,20 @@ object Memento : ModInitializer {
 
         // Budgeted regeneration work (chunk queue processing).
         WitherstoneLifecycle.tick(server)
+    }
+
+    private fun initializeShadowComponents() {
+        ServerLifecycleEvents.SERVER_STARTED.register { server ->
+            MementoPersistence.load(server)
+            StoneRegister.advanceTime()
+        }
+
+        ServerChunkEvents.CHUNK_UNLOAD.register { world, chunk ->
+            RenewalTracker.onChunkUnloaded(ChunkPos(chunk.pos.x, chunk.pos.z))
+        }
+
+        ServerChunkEvents.CHUNK_LOAD.register { world, chunk ->
+            RenewalTracker.onChunkLoaded(ChunkPos(chunk.pos.x, chunk.pos.z))
+        }
     }
 }
