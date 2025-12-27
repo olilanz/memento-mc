@@ -8,33 +8,12 @@
       "group": {
         "kind": "build",
         "isDefault": true
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared"
-      },
-      "problemMatcher": []
+      }
     },
     {
-      "label": "Gradle: runServer",
+      "label": "Gradle: runServer (debug)",
       "type": "shell",
-      "command": "./gradlew runServer",
-      "group": "test",
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared"
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "Gradle: stopServer",
-      "type": "shell",
-      "command": "pkill -f net.minecraft.server.Main || true",
-      "presentation": {
-        "reveal": "never",
-        "panel": "shared"
-      },
-      "problemMatcher": []
+      "command": "./gradlew runServer --debug-jvm"
     }
   ]
 }

@@ -2,11 +2,18 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "type": "java",
       "name": "Attach to Fabric Server",
+      "type": "java",
       "request": "attach",
       "hostName": "localhost",
-      "port": 34209
+      "port": 5005
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Run + Attach (Fabric Server)",
+      "preLaunchTask": "Gradle: runServer (debug)",
+      "configurations": ["Attach to Fabric Server"]
     }
   ]
 }

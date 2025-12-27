@@ -11,13 +11,14 @@
       ]
     }
   },
-  "forwardPorts": [25565, 5005],
+  "forwardPorts": [25565],
   "portsAttributes": {
     "25565": {
       "label": "Minecraft Server"
     },
     "5005": {
-      "label": "JVM Debug"
+      "label": "JVM Debug",
+      "onAutoForward": "ignore"
     }
   },
   "mounts": [

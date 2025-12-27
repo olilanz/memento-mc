@@ -1,0 +1,12 @@
+[
+  {
+    "key": "shift+ctrl+b",
+    "command": "workbench.action.tasks.runTask",
+    "args": "Gradle: build"
+  },
+  {
+    "key": "shift+ctrl+r",
+    "command": "workbench.action.tasks.runTask",
+    "args": "Gradle: runServer (debug)"
+  }
+]
