@@ -1,93 +1,94 @@
 package ch.oliverlanz.memento.domain.stones
 
-import ch.oliverlanz.memento.domain.events.StoneMatured
-import ch.oliverlanz.memento.domain.events.StoneRemoved
-import ch.oliverlanz.memento.domain.events.RenewalBatchCompleted
+import net.minecraft.util.math.BlockPos
+import org.slf4j.LoggerFactory
 
 /**
- * StoneRegister is the authoritative registry for all stones.
+ * New-generation stone register.
  *
- * Responsibilities:
- * - Own stone instances (Stone / Witherstone / Lorestone)
- * - Enforce identity uniqueness (by name)
- * - Own stone lifecycle progression (monotonic)
- * - Emit lifecycle events
+ * This register is currently OBSERVATIONAL ONLY.
+ * It mirrors legacy behavior but does not influence gameplay.
  *
- * Notes:
- * - Stones themselves do NOT encode lifecycle state
- * - All mutation is centralized here
+ * Responsibilities (current slice):
+ * - Accept add / remove calls
+ * - Maintain in-memory integrity
+ * - Emit explicit, structured logs
+ *
+ * NOT YET:
+ * - persistence
+ * - lifecycle decisions
+ * - authority
  */
 object StoneRegister {
 
+    private val log = LoggerFactory.getLogger("memento")
+
     private val stones: MutableMap<String, Stone> = mutableMapOf()
 
+    init {
+        log.info("[STONE-REGISTER] initialized (empty)")
+    }
+
     /**
-     * Register a new stone.
-     *
-     * @throws IllegalArgumentException if a stone with the same name already exists
+     * Add a stone to the register.
+     * Mirrors legacy add semantics.
      */
     fun add(stone: Stone) {
-        require(!stones.containsKey(stone.name)) {
-            "Stone with name '${stone.name}' is already registered"
-        }
-        stones[stone.name] = stone
-    }
+        val replaced = stones.put(stone.name, stone) != null
 
-    /**
-     * Remove a stone explicitly.
-     * Emits a StoneRemoved event if the stone existed.
-     */
-    fun remove(stoneName: String) {
-        val removed = stones.remove(stoneName)
-        if (removed != null) {
-            emitEvent(StoneRemoved(stoneName))
-        }
-    }
+        log.info(
+            buildString {
+                append("[STONE-REGISTER] ")
+                append(if (replaced) "replace" else "add")
+                append(" ${stone::class.simpleName} '${stone.name}'\n")
+                append("  pos=${formatPos(stone.position)}\n")
+                append("  radius=${stone.radius}")
 
-    /**
-     * Advance stone lifecycle based on external time progression.
-     *
-     * NOTE:
-     * - Actual maturity tracking is expected to be added here later
-     * - This method currently only demonstrates the event boundary
-     */
-    fun advanceTime() {
-        stones.values.forEach { stone ->
-            if (stone is Witherstone) {
-                // Lifecycle tracking logic will live here
-                // When maturity threshold is reached:
-                // emitEvent(StoneMatured(stone.name))
+                if (stone is Witherstone) {
+                    append("\n  maturesInDays=${stone.daysToMaturity}")
+                }
             }
+        )
+    }
+
+    /**
+     * Remove a stone explicitly (admin action or consumption).
+     */
+    fun remove(name: String, reason: RemoveReason = RemoveReason.EXPLICIT) {
+        val removed = stones.remove(name)
+
+        if (removed != null) {
+            log.info(
+                "[STONE-REGISTER] remove '${removed.name}' (reason=$reason)"
+            )
+        } else {
+            log.warn(
+                "[STONE-REGISTER] remove '$name' requested, but no such stone exists"
+            )
         }
     }
 
     /**
-     * Handle completion of a renewal batch.
-     * Consumes the originating stone.
+     * Enumerate stones (used for future inspect commands).
      */
-    fun onRenewalBatchCompleted(event: RenewalBatchCompleted) {
-        val stone = stones.remove(event.stoneName)
-        if (stone != null) {
-            emitEvent(StoneRemoved(stone.name))
-        }
+    fun list(): Collection<Stone> {
+        log.info("[STONE-REGISTER] list -> ${stones.size} stone(s)")
+        return stones.values.toList()
     }
 
     /**
-     * Expose inspection data for all stones.
-     * Used by /memento inspect.
+     * Lookup by name.
      */
-    fun list(): Map<String, Stone> =
-        stones.toMap()
+    fun get(name: String): Stone? =
+        stones[name]
 
-    /**
-     * Emit a domain event.
-     *
-     * NOTE:
-     * This is intentionally minimal and synchronous.
-     * Wiring to the real event system happens elsewhere.
-     */
-    private fun emitEvent(event: Any) {
-        println("[StoneRegister] Event emitted: $event")
-        // Forward to existing event bus when wired
+    // ---------------------------------------------------------------------
+
+    enum class RemoveReason {
+        EXPLICIT,
+        CONSUMED
     }
+
+    private fun formatPos(pos: BlockPos): String =
+        "(${pos.x},${pos.y},${pos.z})"
 }

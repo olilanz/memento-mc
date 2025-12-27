@@ -1,6 +1,6 @@
 package ch.oliverlanz.memento.application.land
 
-import ch.oliverlanz.memento.domain.land.RenewalBatch
+import ch.oliverlanz.memento.domain.renewal.RenewalBatch
 import net.minecraft.entity.EntityType
 import net.minecraft.entity.ItemEntity
 import net.minecraft.entity.mob.MobEntity

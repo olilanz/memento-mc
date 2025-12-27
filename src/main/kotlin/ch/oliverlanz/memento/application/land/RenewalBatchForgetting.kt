@@ -2,8 +2,8 @@ package ch.oliverlanz.memento.application.land
 
 import ch.oliverlanz.memento.application.MementoStones
 import ch.oliverlanz.memento.application.stone.StoneMaturityTrigger
-import ch.oliverlanz.memento.domain.land.RenewalBatch
-import ch.oliverlanz.memento.domain.land.RenewalBatchState
+import ch.oliverlanz.memento.domain.renewal.RenewalBatch
+import ch.oliverlanz.memento.domain.renewal.RenewalBatchState
 import ch.oliverlanz.memento.infrastructure.MementoDebug
 import ch.oliverlanz.memento.application.stone.WitherstoneLifecycle
 import net.minecraft.registry.RegistryKey

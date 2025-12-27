@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.domain.land
+package ch.oliverlanz.memento.domain.renewal
 
 import net.minecraft.registry.RegistryKey
 import net.minecraft.util.math.BlockPos

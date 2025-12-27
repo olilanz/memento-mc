@@ -6,7 +6,10 @@ import ch.oliverlanz.memento.infrastructure.MementoConstants
 import ch.oliverlanz.memento.infrastructure.MementoDebug
 import ch.oliverlanz.memento.application.stone.WitherstoneLifecycle
 import ch.oliverlanz.memento.domain.stones.StoneRegister
-import ch.oliverlanz.memento.domain.land.RenewalTracker
+import ch.oliverlanz.memento.domain.renewal.RenewalTracker
+import ch.oliverlanz.memento.domain.renewal.advanceTime
+import ch.oliverlanz.memento.domain.renewal.onChunkLoaded
+import ch.oliverlanz.memento.domain.renewal.onChunkUnloaded
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
@@ -95,15 +98,15 @@ object Memento : ModInitializer {
     private fun initializeShadowComponents() {
         ServerLifecycleEvents.SERVER_STARTED.register { server ->
             MementoPersistence.load(server)
-            StoneRegister.advanceTime()
+            advanceTime(server.ticks.toLong())
         }
 
         ServerChunkEvents.CHUNK_UNLOAD.register { world, chunk ->
-            RenewalTracker.onChunkUnloaded(ChunkPos(chunk.pos.x, chunk.pos.z))
+            onChunkUnloaded(ChunkPos(chunk.pos.x, chunk.pos.z))
         }
 
         ServerChunkEvents.CHUNK_LOAD.register { world, chunk ->
-            RenewalTracker.onChunkLoaded(ChunkPos(chunk.pos.x, chunk.pos.z))
+            onChunkLoaded(ChunkPos(chunk.pos.x, chunk.pos.z))
         }
     }
 }
