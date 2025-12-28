@@ -1,5 +1,8 @@
 package ch.oliverlanz.memento.application.land
 
+import ch.oliverlanz.memento.application.land.inspect.RenewalBatchView
+import ch.oliverlanz.memento.application.land.inspect.RenewalBatchViewSnapshot
+
 import ch.oliverlanz.memento.application.MementoStones
 import ch.oliverlanz.memento.application.stone.StoneMaturityTrigger
 import ch.oliverlanz.memento.domain.renewal.RenewalBatch
@@ -59,7 +62,15 @@ object RenewalBatchForgetting {
 
     fun getBatchByStoneName(stoneName: String): RenewalBatch? = batchesByStoneName[stoneName]
 
-    fun snapshotBatches(): List<RenewalBatch> = batchesByStoneName.values.toList()
+    fun snapshotBatches(): List<RenewalBatchView> =
+        batchesByStoneName.map { (name, batch) ->
+            RenewalBatchViewSnapshot(
+                name = name,
+                dimension = batch.dimension,
+                chunks = batch.chunks.toSet(),
+                state = batch.state,
+            )
+        }
 
     /**
      * Commands operate stone-first and only carry the stone name.

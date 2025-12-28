@@ -1,41 +1,35 @@
 package ch.oliverlanz.memento.domain.renewal
 
+import net.minecraft.registry.RegistryKey
+import net.minecraft.server.MinecraftServer
 import net.minecraft.util.math.ChunkPos
+import net.minecraft.world.World
 
 /**
- * Adapter hooks for RenewalTracker.
- *
- * These functions exist solely to preserve the existing call surface
- * used by Memento.kt while routing events into the new, observational
- * RenewalTracker.
- *
- * IMPORTANT:
- * - No authority
- * - No decisions
- * - No persistence
- * - Observability only
+ * Adapter hooks used by Memento.kt.
+ * Keeps the call surface small and shadow-only.
  */
 
-/**
- * Observes time progression.
- * Legacy logic remains authoritative elsewhere.
- */
 fun advanceTime(tick: Long) {
-    RenewalTracker.advanceTime(tick)
+    // For now: time is observed, but we primarily key off explicit triggers.
+    // Still useful to keep the hook stable.
+    // (If you later want: periodic sanity logs or drift detection.)
 }
 
-/**
- * Observes chunk load events.
- * Dimension is intentionally omitted at this stage.
- */
-fun onChunkLoaded(chunk: ChunkPos) {
-    RenewalTracker.onChunkLoaded(chunk)
+fun onChunkUnloaded(
+    server: MinecraftServer,
+    dimension: RegistryKey<World>,
+    chunk: ChunkPos,
+    gameTime: Long,
+) {
+    RenewalTracker.onChunkUnloadedObserved(server, dimension, chunk, gameTime)
 }
 
-/**
- * Observes chunk unload events.
- * Dimension is intentionally omitted at this stage.
- */
-fun onChunkUnloaded(chunk: ChunkPos) {
-    RenewalTracker.onChunkUnloaded(chunk)
+fun onChunkLoaded(
+    server: MinecraftServer,
+    dimension: RegistryKey<World>,
+    chunk: ChunkPos,
+    gameTime: Long,
+) {
+    RenewalTracker.onChunkLoadedObserved(server, dimension, chunk, gameTime)
 }

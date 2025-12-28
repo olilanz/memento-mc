@@ -1,22 +1,19 @@
 package ch.oliverlanz.memento
 
-import ch.oliverlanz.memento.infrastructure.MementoState
-import ch.oliverlanz.memento.infrastructure.MementoPersistence
-import ch.oliverlanz.memento.infrastructure.MementoConstants
-import ch.oliverlanz.memento.infrastructure.MementoDebug
 import ch.oliverlanz.memento.application.stone.WitherstoneLifecycle
-import ch.oliverlanz.memento.domain.stones.StoneRegister
-import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.advanceTime
 import ch.oliverlanz.memento.domain.renewal.onChunkLoaded
 import ch.oliverlanz.memento.domain.renewal.onChunkUnloaded
+import ch.oliverlanz.memento.infrastructure.MementoConstants
+import ch.oliverlanz.memento.infrastructure.MementoDebug
+import ch.oliverlanz.memento.infrastructure.MementoPersistence
+import ch.oliverlanz.memento.infrastructure.MementoState
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld
-import net.minecraft.util.math.ChunkPos
 
 /**
  * Mod entry point and lifecycle wiring.
@@ -71,7 +68,7 @@ object Memento : ModInitializer {
             onServerTick(server)
         }
 
-        // Unload trigger: every unload is a chance for marked land to become free for forgetting.
+        // Unload trigger (legacy authoritative): every unload is a chance for marked land to become free for forgetting.
         ServerChunkEvents.CHUNK_UNLOAD.register { world, chunk ->
             WitherstoneLifecycle.onChunkUnloaded(world.server, world, chunk.pos)
         }
@@ -97,16 +94,28 @@ object Memento : ModInitializer {
 
     private fun initializeShadowComponents() {
         ServerLifecycleEvents.SERVER_STARTED.register { server ->
+            // Shadow components should not own persistence; we load to ensure they can inspect immediately.
             MementoPersistence.load(server)
             advanceTime(server.ticks.toLong())
         }
 
+        // Shadow unload/load observers (dimension-aware).
         ServerChunkEvents.CHUNK_UNLOAD.register { world, chunk ->
-            onChunkUnloaded(ChunkPos(chunk.pos.x, chunk.pos.z))
+            onChunkUnloaded(
+                server = world.server,
+                dimension = world.registryKey,
+                chunk = chunk.pos,
+                gameTime = world.time,
+            )
         }
 
         ServerChunkEvents.CHUNK_LOAD.register { world, chunk ->
-            onChunkLoaded(ChunkPos(chunk.pos.x, chunk.pos.z))
+            onChunkLoaded(
+                server = world.server,
+                dimension = world.registryKey,
+                chunk = chunk.pos,
+                gameTime = world.time,
+            )
         }
     }
 }
