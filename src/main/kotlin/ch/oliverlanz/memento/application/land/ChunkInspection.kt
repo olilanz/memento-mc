@@ -1,6 +1,9 @@
 package ch.oliverlanz.memento.application.land
 
-import ch.oliverlanz.memento.domain.land.RenewalBatch
+import ch.oliverlanz.memento.application.land.inspect.RenewalBatchViewSnapshot
+import ch.oliverlanz.memento.domain.renewal.RenewalBatch
+
+import ch.oliverlanz.memento.application.land.inspect.RenewalBatchView
 import net.minecraft.entity.EntityType
 import net.minecraft.entity.ItemEntity
 import net.minecraft.entity.mob.MobEntity
@@ -44,10 +47,24 @@ object ChunkInspection {
         val summary: String
     )
 
-    fun inspectBatch(
-        server: MinecraftServer,
-        batch: RenewalBatch
-    ): List<ChunkReport> {
+    
+/**
+ * Legacy compatibility overload: Commands may still pass a concrete RenewalBatch.
+ * Convert to the stable view projection and delegate to the view-based inspector.
+ */
+fun inspectBatch(server: MinecraftServer, batch: RenewalBatch) {
+    inspectBatch(
+        server,
+        RenewalBatchViewSnapshot(
+            name = batch.anchorName,
+            dimension = batch.dimension,
+            chunks = batch.chunks.toSet(),
+            state = batch.state,
+        )
+    )
+}
+
+fun inspectBatch(server: MinecraftServer, batch: RenewalBatchView): List<ChunkReport> {
         val world = server.getWorld(batch.dimension) ?: return emptyList()
 
         return batch.chunks

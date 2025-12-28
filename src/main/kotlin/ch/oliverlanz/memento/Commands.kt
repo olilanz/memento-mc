@@ -3,6 +3,7 @@ package ch.oliverlanz.memento
 import ch.oliverlanz.memento.infrastructure.MementoConstants
 import ch.oliverlanz.memento.application.MementoStones
 import ch.oliverlanz.memento.application.land.RenewalBatchForgetting
+import ch.oliverlanz.memento.application.land.inspect.RenewalBatchView
 import ch.oliverlanz.memento.application.land.ChunkInspection
 import com.mojang.brigadier.CommandDispatcher
 import com.mojang.brigadier.arguments.IntegerArgumentType
@@ -15,6 +16,10 @@ import net.minecraft.text.Text
 import net.minecraft.util.math.BlockPos
 
 object Commands {
+
+
+private fun findBatchViewByName(name: String): RenewalBatchView? =
+    RenewalBatchForgetting.snapshotBatches().firstOrNull { it.name == name }
 
     fun register() {
         CommandRegistrationCallback.EVENT.register { dispatcher, _, _ ->
@@ -59,8 +64,8 @@ object Commands {
                                 addWitherstone(
                                     ctx.source,
                                     StringArgumentType.getString(ctx, "name"),
-                                    MementoConstants.DEFAULT_RADIUS_CHUNKS,
-                                    MementoConstants.DEFAULT_FORGET_DAYS
+                                    MementoConstants.DEFAULT_CHUNKS_RADIUS,
+                                    MementoConstants.DEFAULT_DAYS_TO_MATURITY
                                 )
                             }
                             .then(argument("radius", IntegerArgumentType.integer(1, 10))
@@ -69,7 +74,7 @@ object Commands {
                                         ctx.source,
                                         StringArgumentType.getString(ctx, "name"),
                                         IntegerArgumentType.getInteger(ctx, "radius"),
-                                        MementoConstants.DEFAULT_FORGET_DAYS
+                                        MementoConstants.DEFAULT_DAYS_TO_MATURITY
                                     )
                                 }
                                 .then(argument("daysToMaturity", IntegerArgumentType.integer(0, 10))
@@ -93,7 +98,7 @@ object Commands {
                                 addLorestone(
                                     ctx.source,
                                     StringArgumentType.getString(ctx, "name"),
-                                    MementoConstants.DEFAULT_RADIUS_CHUNKS
+                                    MementoConstants.DEFAULT_CHUNKS_RADIUS
                                 )
                             }
                             .then(argument("radius", IntegerArgumentType.integer(1, 10))
@@ -210,6 +215,7 @@ object Commands {
                         MementoStones.WitherstoneState.MATURING,
                 createdGameTime = world.time
             )
+
         )
 
         src.sendFeedback(
@@ -361,7 +367,7 @@ object Commands {
             }
         }
 
-        val batch = RenewalBatchForgetting.getBatchByStoneName(name)
+        val batch = findBatchViewByName(name)
         if (batch == null) {
             src.sendFeedback(
                 { Text.literal("Chunk group: none derived yet.") },
@@ -381,7 +387,7 @@ object Commands {
             false
         )
 
-        if (batch.state == ch.oliverlanz.memento.domain.land.RenewalBatchState.BLOCKED) {
+        if (batch.state == ch.oliverlanz.memento.domain.renewal.RenewalBatchState.BLOCKED) {
             src.sendFeedback(
                 { Text.literal("Waiting for chunk renewal trigger: CHUNK_UNLOAD (loaded chunks prevent atomic renewal).") },
                 false

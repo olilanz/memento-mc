@@ -16,10 +16,10 @@ object MementoConstants {
     const val REQUIRED_OP_LEVEL: Int = 2
 
     /** Default radius (in chunks) used by /memento anchor when omitted. */
-    const val DEFAULT_RADIUS_CHUNKS: Int = 2
+    const val DEFAULT_CHUNKS_RADIUS: Int = 2
 
     /** Default days used by /memento anchor forget when omitted. */
-    const val DEFAULT_FORGET_DAYS: Int = 1
+    const val DEFAULT_DAYS_TO_MATURITY: Int = 1
 
     /** Minecraft Overworld day length in ticks. */
     const val OVERWORLD_DAY_TICKS: Long = 24_000L

@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.domain.land
+package ch.oliverlanz.memento.domain.renewal
 
 /**
  * Lifecycle state of a derived RenewalBatch.
