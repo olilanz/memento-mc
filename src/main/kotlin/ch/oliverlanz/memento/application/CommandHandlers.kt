@@ -34,7 +34,13 @@ object CommandHandlers {
                 MementoStones.Kind.REMEMBER -> "lorestone"
             }
             src.sendFeedback(
-                { Text.literal("- ${s.name} ($label) r=${s.radius}").formatted(Formatting.GRAY) },
+                { Text.literal(buildString {
+                    append("- ${s.name} ($label) r=${s.radius}")
+                    if (s.kind == MementoStones.Kind.FORGET) {
+                        append(" d=${s.days}")
+                        s.state?.let { append(" state=${it.name.lowercase()}") }
+                    }
+                }).formatted(Formatting.GRAY) },
                 false
             )
         }

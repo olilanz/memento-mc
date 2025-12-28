@@ -68,18 +68,32 @@ MementoDebug.info(null, "Initializing Memento...")
         }
 
         // Nightly checkpoint (03:00), aligned with constants.
+        //
+        // NOTE: /time set and /time add can jump time, so equality checks on timeOfDay are not robust.
+        // We instead process "once per overworld day" as soon as the day has reached the checkpoint tick.
         val overworld: ServerWorld = server.overworld
-        val dayTime = overworld.timeOfDay % 24000L
-        val isNightlyCheckpoint = dayTime == MementoConstants.RENEWAL_CHECKPOINT_TICK
+        val timeOfDay = overworld.timeOfDay
+        val overworldDay = timeOfDay / 24000L
+        val dayTick = timeOfDay % 24000L
 
-        if (isNightlyCheckpoint) {
-            if (LEGACY_MODE) {
-                WitherstoneLifecycle.ageAnchorsOnce(server)
-                WitherstoneLifecycle.sweep(server)
+        val state = MementoState.get()
+        val checkpointReached = dayTick >= MementoConstants.RENEWAL_CHECKPOINT_TICK
+        val hasUnprocessedDays = overworldDay > state.lastProcessedOverworldDay
+
+        if (checkpointReached && hasUnprocessedDays) {
+            // Process any missed days (e.g. server slept through night, or admin time jump).
+            for (day in (state.lastProcessedOverworldDay + 1)..overworldDay) {
+                if (LEGACY_MODE) {
+                    WitherstoneLifecycle.ageAnchorsOnce(server)
+                    WitherstoneLifecycle.sweep(server)
+                }
+                if (NEW_MODE) {
+                    StoneRegisterHooks.onNightlyCheckpoint()
+                }
             }
-            if (NEW_MODE) {
-                StoneRegisterHooks.onNightlyCheckpoint()
-            }
+
+            MementoState.set(MementoState.State(lastProcessedOverworldDay = overworldDay))
+            MementoState.save(server)
         }
     }
 
