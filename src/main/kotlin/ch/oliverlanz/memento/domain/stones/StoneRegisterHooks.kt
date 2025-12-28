@@ -30,8 +30,8 @@ object StoneRegisterHooks {
         StoneRegister.detach()
     }
 
-    fun onNightlyCheckpoint() {
-        StoneRegister.advanceDay()
+    fun onNightlyCheckpoint(days: Int) {
+        StoneRegister.advanceDays(days, WitherstoneTransitionTrigger.NIGHTLY_CHECKPOINT)
     }
 
     fun onAdminTimeAdjustment() {

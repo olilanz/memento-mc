@@ -87,7 +87,6 @@ object StoneRegister {
             daysToMaturity = MementoConstants.DEFAULT_DAYS_TO_MATURITY,
             state = WitherstoneState.MATURING,
         )
-        val isNew = existing == null
 
         // Apply updates (shadow-only; explicit, deterministic)
         stone.radius = radius
@@ -104,20 +103,6 @@ object StoneRegister {
         ).also { it.radius = stone.radius }
 
         stones[name] = replaced
-
-        // Creation is treated as a lifecycle transition for observability.
-        if (isNew) {
-            StoneDomainEvents.publish(
-                WitherstoneStateTransition(
-                    stoneName = replaced.name,
-                    dimension = replaced.dimension,
-                    position = replaced.position,
-                    from = WitherstoneState.PLACED,
-                    to = replaced.state,
-                    trigger = trigger,
-                )
-            )
-        }
 
         // Operator may force maturity by setting daysToMaturity <= 0.
         evaluate(trigger = trigger)
@@ -138,33 +123,8 @@ object StoneRegister {
 
     fun remove(name: String) {
         requireInitialized()
-
-        val removed = stones[name]
-        if (removed is Witherstone && removed.state != WitherstoneState.CONSUMED) {
-            // Operator removal is a terminal transition, observed as CONSUMED.
-            StoneDomainEvents.publish(
-                WitherstoneStateTransition(
-                    stoneName = removed.name,
-                    dimension = removed.dimension,
-                    position = removed.position,
-                    from = removed.state,
-                    to = WitherstoneState.CONSUMED,
-                    trigger = WitherstoneTransitionTrigger.OPERATOR,
-                )
-            )
-        }
-
         stones.remove(name)
         persist()
-    }
-
-    /**
-     * Explicit "advance day" entrypoint (nightly checkpoint).
-     *
-     * Alias for ageOnce(...) with the checkpoint trigger.
-     */
-    fun advanceDay() {
-        ageOnce(WitherstoneTransitionTrigger.NIGHTLY_CHECKPOINT)
     }
 
     /**
@@ -175,6 +135,18 @@ object StoneRegister {
      * - Decrement daysToMaturity for MATURING Witherstones
      * - Evaluate maturity transitions
      */
+
+    /**
+     * Advance the register by N days (used for time jumps / catch-up).
+     *
+     * Emits transitions as stones cross lifecycle boundaries.
+     */
+    fun advanceDays(days: Int, trigger: WitherstoneTransitionTrigger) {
+        requireInitialized()
+        require(days >= 0) { "days must be >= 0" }
+        repeat(days) { ageOnce(trigger) }
+    }
+
     fun ageOnce(trigger: WitherstoneTransitionTrigger) {
         requireInitialized()
 

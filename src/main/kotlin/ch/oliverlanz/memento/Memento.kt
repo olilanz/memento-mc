@@ -69,30 +69,37 @@ MementoDebug.info(null, "Initializing Memento...")
 
         // Nightly checkpoint (03:00), aligned with constants.
         //
-        // NOTE: /time set and /time add can jump time, so equality checks on timeOfDay are not robust.
-        // We instead process "once per overworld day" as soon as the day has reached the checkpoint tick.
+        // We process at most once per overworld day. This remains robust under:
+        // - /time add (jumps)
+        // - /time set
+        // - sleeping
         val overworld: ServerWorld = server.overworld
         val timeOfDay = overworld.timeOfDay
         val overworldDay = timeOfDay / 24000L
         val dayTick = timeOfDay % 24000L
 
         val state = MementoState.get()
-        val checkpointReached = dayTick >= MementoConstants.RENEWAL_CHECKPOINT_TICK
-        val hasUnprocessedDays = overworldDay > state.lastProcessedOverworldDay
 
-        if (checkpointReached && hasUnprocessedDays) {
-            // Process any missed days (e.g. server slept through night, or admin time jump).
-            for (day in (state.lastProcessedOverworldDay + 1)..overworldDay) {
-                if (LEGACY_MODE) {
+        // If we're before the checkpoint tick, the latest checkpoint that could have happened
+        // is from the previous day. This makes full-day time jumps behave sensibly.
+        val targetDayToProcess =
+            if (dayTick >= MementoConstants.RENEWAL_CHECKPOINT_TICK) overworldDay else (overworldDay - 1)
+
+        if (targetDayToProcess > state.lastProcessedOverworldDay) {
+            val daysToProcess = (targetDayToProcess - state.lastProcessedOverworldDay).toInt()
+
+            if (LEGACY_MODE) {
+                repeat(daysToProcess) {
                     WitherstoneLifecycle.ageAnchorsOnce(server)
                     WitherstoneLifecycle.sweep(server)
                 }
-                if (NEW_MODE) {
-                    StoneRegisterHooks.onNightlyCheckpoint()
-                }
             }
 
-            MementoState.set(MementoState.State(lastProcessedOverworldDay = overworldDay))
+            if (NEW_MODE) {
+                StoneRegisterHooks.onNightlyCheckpoint(daysToProcess)
+            }
+
+            MementoState.set(MementoState.State(lastProcessedOverworldDay = targetDayToProcess))
             MementoState.save(server)
         }
     }
