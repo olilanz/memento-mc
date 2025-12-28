@@ -169,7 +169,7 @@ No client-side installation is required.
 
 ## Further documentation
 
-* **STORY.md** — in-world explanation of memory and forgetting
+* **RENEWAL_MODEL.md** — in-world explanation of memory and forgetting
 * **ARCHITECTURE.md** — internal design and invariants
 * **DEVELOPMENT.md** — build and development environment
 
