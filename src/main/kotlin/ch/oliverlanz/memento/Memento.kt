@@ -1,6 +1,7 @@
 package ch.oliverlanz.memento
 
 import ch.oliverlanz.memento.application.stone.WitherstoneLifecycle
+import ch.oliverlanz.memento.domain.stones.StoneRegisterHooks
 import ch.oliverlanz.memento.domain.renewal.advanceTime
 import ch.oliverlanz.memento.domain.renewal.onChunkLoaded
 import ch.oliverlanz.memento.domain.renewal.onChunkUnloaded
@@ -15,87 +16,98 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld
 
-/**
- * Mod entry point and lifecycle wiring.
- */
 object Memento : ModInitializer {
 
-    const val NEW_MODE = true
+    private const val MOD_ID = "memento"
+
+    // Legacy mode remains authoritative.
+    internal const val LEGACY_MODE = true
+
+    // Shadow mode for new-generation components.
+    internal const val NEW_MODE = true
 
     override fun onInitialize() {
-        MementoDebug.info(null, "Memento initializing")
-
-        if (NEW_MODE) {
-            initializeShadowComponents()
-        }
-
-        // Commands
+        
         Commands.register()
+MementoDebug.info(null, "Initializing Memento...")
 
-        // Load persisted anchors + state, and rebuild derived group marks.
+        initializeLegacyComponents()
+        initializeShadowComponents()
+    }
+
+    private fun initializeLegacyComponents() {
         ServerLifecycleEvents.SERVER_STARTED.register { server ->
-            MementoDebug.info(server, "Loading anchors and state")
-
-            // Attach server reference for mixin-driven renewal observations.
-            WitherstoneLifecycle.attachServer(server)
-
-            MementoPersistence.load(server)
             MementoState.load(server)
-
-            // Rebuild marked groups from already-matured anchors (daysRemaining == 0).
-            WitherstoneLifecycle.rebuildMarkedGroups(server)
-
-            // Initialize day tracking if this is a fresh world/state.
-            val overworld = server.getWorld(ServerWorld.OVERWORLD)
-            if (overworld != null) {
-                val currentDay = overworld.timeOfDay / MementoConstants.OVERWORLD_DAY_TICKS
-                if (MementoState.get().lastProcessedOverworldDay < 0 && currentDay >= 0) {
-                    MementoState.set(MementoState.State(lastProcessedOverworldDay = currentDay))
-                    MementoState.save(server)
-                }
-            }
+            MementoPersistence.load(server)
+            WitherstoneLifecycle.attachServer(server)
         }
 
-        // Persist state on shutdown.
         ServerLifecycleEvents.SERVER_STOPPING.register { server ->
             WitherstoneLifecycle.detachServer(server)
             MementoPersistence.save(server)
             MementoState.save(server)
+            if (NEW_MODE) {
+                StoneRegisterHooks.onServerStopping()
+            }
         }
 
-        // Day-change trigger: mature anchors once per Overworld day, then sweep.
         ServerTickEvents.END_SERVER_TICK.register { server ->
             onServerTick(server)
-        }
-
-        // Unload trigger (legacy authoritative): every unload is a chance for marked land to become free for forgetting.
-        ServerChunkEvents.CHUNK_UNLOAD.register { world, chunk ->
-            WitherstoneLifecycle.onChunkUnloaded(world.server, world, chunk.pos)
         }
     }
 
     private fun onServerTick(server: MinecraftServer) {
-        val overworld = server.getWorld(ServerWorld.OVERWORLD) ?: return
-
-        val dayIndex = overworld.timeOfDay / MementoConstants.OVERWORLD_DAY_TICKS
-        val last = MementoState.get().lastProcessedOverworldDay
-        if (dayIndex != last) {
-            // Record first, so we never double-run on the same index.
-            MementoState.set(MementoState.State(lastProcessedOverworldDay = dayIndex))
-            MementoState.save(server)
-
-            WitherstoneLifecycle.ageAnchorsOnce(server)
-            WitherstoneLifecycle.sweep(server)
+        // Primary: legacy lifecycle tick (authoritative)
+        if (LEGACY_MODE) {
+            WitherstoneLifecycle.tick(server)
         }
 
-        // Budgeted regeneration work (chunk queue processing).
-        WitherstoneLifecycle.tick(server)
+        // Shadow: keep derived state time-aware for observability only
+        if (NEW_MODE) {
+            advanceTime(server.ticks.toLong())
+        }
+
+        // Nightly checkpoint (03:00), aligned with constants.
+        //
+        // We process at most once per overworld day. This remains robust under:
+        // - /time add (jumps)
+        // - /time set
+        // - sleeping
+        val overworld: ServerWorld = server.overworld
+        val timeOfDay = overworld.timeOfDay
+        val overworldDay = timeOfDay / 24000L
+        val dayTick = timeOfDay % 24000L
+
+        val state = MementoState.get()
+
+        // If we're before the checkpoint tick, the latest checkpoint that could have happened
+        // is from the previous day. This makes full-day time jumps behave sensibly.
+        val targetDayToProcess =
+            if (dayTick >= MementoConstants.RENEWAL_CHECKPOINT_TICK) overworldDay else (overworldDay - 1)
+
+        if (targetDayToProcess > state.lastProcessedOverworldDay) {
+            val daysToProcess = (targetDayToProcess - state.lastProcessedOverworldDay).toInt()
+
+            if (LEGACY_MODE) {
+                repeat(daysToProcess) {
+                    WitherstoneLifecycle.ageAnchorsOnce(server)
+                    WitherstoneLifecycle.sweep(server)
+                }
+            }
+
+            if (NEW_MODE) {
+                StoneRegisterHooks.onNightlyCheckpoint(daysToProcess)
+            }
+
+            MementoState.set(MementoState.State(lastProcessedOverworldDay = targetDayToProcess))
+            MementoState.save(server)
+        }
     }
 
     private fun initializeShadowComponents() {
         ServerLifecycleEvents.SERVER_STARTED.register { server ->
-            // Shadow components should not own persistence; we load to ensure they can inspect immediately.
-            MementoPersistence.load(server)
+            // Shadow components are non-authoritative. They may load their own persistence for inspection/verification.
+            StoneRegisterHooks.onServerStarted(server)
             advanceTime(server.ticks.toLong())
         }
 
