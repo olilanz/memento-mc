@@ -1,146 +1,28 @@
 package ch.oliverlanz.memento.application.stone
 
-import ch.oliverlanz.memento.application.MementoStones
-import ch.oliverlanz.memento.application.land.RenewalBatchForgetting
-import ch.oliverlanz.memento.domain.renewal.RenewalTracker
-import ch.oliverlanz.memento.infrastructure.MementoDebug
-import ch.oliverlanz.memento.infrastructure.MementoPersistence
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
-import net.minecraft.server.world.ServerWorld
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
 
 /**
- * Coordinates the lifecycle of Witherstones.
+ * Legacy lifecycle (kept for reference).
  *
- * Responsibilities:
- * - Evaluate stone maturity (time-based)
- * - Delegate land / renewal-batch lifecycle to [RenewalBatchForgetting]
- *
- * NOTE: Shadow RenewalTracker is wired here ONLY for observability.
+ * This branch treats the domain implementation as authoritative. If anything calls into this
+ * object, that is a wiring bug and should be fixed.
  */
 object WitherstoneLifecycle {
 
-    @Volatile
-    private var server: MinecraftServer? = null
+    @JvmStatic
+    fun legacyInvoked(): Nothing = error("Legacy WitherstoneLifecycle invoked. New domain implementation should be authoritative.")
 
-    fun currentServerOrNull(): MinecraftServer? = server
-
-    fun attachServer(server: MinecraftServer) {
-        this.server = server
-        MementoDebug.info(server, "WitherstoneLifecycle attached")
-    }
-
-    fun detachServer(server: MinecraftServer) {
-        if (this.server === server) {
-            this.server = null
-        }
-    }
-
-    /**
-     * Called after persistence is loaded on SERVER_START.
-     * Rebuilds derived chunk groups for already-matured witherstones.
-     */
-    fun rebuildMarkedGroups(server: MinecraftServer) {
-        RenewalBatchForgetting.rebuildFromAnchors(
-            server = server,
-            stones = snapshotStones(),
-            trigger = StoneMaturityTrigger.SERVER_START,
-        )
-
-        // Shadow: rebuild derived batches in parallel (observability only).
-        RenewalTracker.rebuildFromMaturedWitherstones(
-            server = server,
-            stones = maturedWitherstonesForTracker(),
-            trigger = StoneMaturityTrigger.SERVER_START.name,
-        )
-
-        // Startup reconciliation: on an existing world, no "day rollover" happens at boot.
-        // We must therefore explicitly re-evaluate loaded/unloaded chunk facts so FREE groups can be queued immediately.
-        RenewalBatchForgetting.refreshAllReadiness(server)
-    }
-
-    /**
-     * Called once per overworld day transition.
-     */
-    fun ageAnchorsOnce(server: MinecraftServer) {
-        val maturedCount = MementoStones.ageOnce(server)
-        if (maturedCount > 0) {
-            MementoDebug.info(server, "Stone maturity trigger=NIGHTLY_TICK → $maturedCount stone(s) matured")
-        }
-
-        // After maturity changes, rebuild derived groups so operators can inspect immediately.
-        RenewalBatchForgetting.rebuildFromAnchors(
-            server = server,
-            stones = snapshotStones(),
-            trigger = StoneMaturityTrigger.NIGHTLY_TICK,
-        )
-
-        // Shadow: rebuild derived batches in parallel (observability only).
-        RenewalTracker.rebuildFromMaturedWitherstones(
-            server = server,
-            stones = maturedWitherstonesForTracker(),
-            trigger = StoneMaturityTrigger.NIGHTLY_TICK.name,
-        )
-    }
-
-    /**
-     * Best-effort tick-time sweep/re-evaluation.
-     */
-    fun sweep(server: MinecraftServer) {
-        RenewalBatchForgetting.refreshAllReadiness(server)
-    }
-
-    fun onChunkUnloaded(server: MinecraftServer, world: ServerWorld, pos: ChunkPos) {
-        RenewalBatchForgetting.onChunkUnloaded(server, world, pos)
-    }
-
-    /**
-     * Terminal action: once a WITHERSTONE-driven chunk group has completed renewal, the stone is consumed
-     * (removed from persistence) and the derived group can be discarded.
-     *
-     * Lorestone/REMEMBER anchors are never consumed automatically.
-     */
-    fun onRenewalBatchRenewed(server: MinecraftServer, stoneName: String) {
-        val a = MementoStones.get(stoneName) ?: return
-        if (a.kind != MementoStones.Kind.FORGET) return
-
-        // Witherstone is one-shot: remove it from persistence so it cannot re-trigger.
-        val removed = MementoStones.remove(stoneName)
-        if (removed) {
-            MementoPersistence.save(server)
-            MementoDebug.info(server, "Witherstone '$stoneName' consumed (removed) after successful renewal")
-        }
-    }
-
-    fun tick(server: MinecraftServer) {
-        RenewalBatchForgetting.tick(server)
-    }
-
-    fun isChunkRenewalQueued(dimension: RegistryKey<World>, pos: ChunkPos): Boolean =
-        RenewalBatchForgetting.isChunkRenewalQueued(dimension, pos)
-
+    @JvmStatic
     fun onChunkRenewalObserved(server: MinecraftServer, dimension: RegistryKey<World>, pos: ChunkPos) {
-        RenewalBatchForgetting.onChunkRenewalObserved(server, dimension, pos)
+        legacyInvoked()
     }
 
-    private fun snapshotStones(): Map<String, MementoStones.Stone> =
-        MementoStones.list().associateBy { it.name }
-
-    private fun maturedWitherstonesForTracker(): List<RenewalTracker.MaturedWitherstone> {
-        val stones = MementoStones.list()
-            .filter { it.kind == MementoStones.Kind.FORGET && it.state == MementoStones.WitherstoneState.MATURED }
-
-        return stones.map { s ->
-            val chunks = MementoStones.computeChunksInRadius(s.pos, s.radius).toList()
-            RenewalTracker.MaturedWitherstone(
-                name = s.name,
-                dimension = s.dimension,
-                pos = s.pos,
-                radiusChunks = s.radius,
-                chunks = chunks,
-            )
-        }
+    @JvmStatic
+    fun shouldForget(server: MinecraftServer, dimension: RegistryKey<World>, pos: ChunkPos): Boolean {
+        legacyInvoked()
     }
 }

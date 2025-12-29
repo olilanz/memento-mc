@@ -1,39 +1,34 @@
 package ch.oliverlanz.memento.infrastructure.chunk
 
-import ch.oliverlanz.memento.application.stone.WitherstoneLifecycle
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
+import org.slf4j.LoggerFactory
 
 /**
  * Central predicate used by VersionedChunkStorageMixin.
+ *
+ * In the current branch, legacy forgetting logic has been unwired. The new renewal tracker
+ * will take over this predicate in a dedicated slice.
  */
 object ChunkForgetPredicate {
 
+    private val log = LoggerFactory.getLogger("memento")
+
+    @Volatile
+    private var warned = false
+
     /**
      * Predicate used by the mixin. Keep this signature stable.
-     *
-     * Some mixin injection points don't have direct access to MinecraftServer. In that case we
-     * fall back to the currently attached server (if any). If none is attached we do nothing.
      */
     @JvmStatic
-    fun shouldForget(dimension: RegistryKey<World>, pos: ChunkPos): Boolean {
-        val server = WitherstoneLifecycle.currentServerOrNull() ?: return false
-        return shouldForget(server, dimension, pos)
-    }
-
-    @JvmStatic
     fun shouldForget(server: MinecraftServer, dimension: RegistryKey<World>, pos: ChunkPos): Boolean {
-        // If the chunk is queued (in-flight) for renewal, we both:
-        //  - return true to force regeneration (read empty NBT)
-        //  - emit an observation that this renewal actually happened
-        if (!WitherstoneLifecycle.isChunkRenewalQueued(dimension, pos)) {
-            return false
+        if (!warned) {
+            warned = true
+            log.warn("ChunkForgetPredicate currently returns false for all chunks (new RenewalTracker not wired yet).")
         }
-
-        WitherstoneLifecycle.onChunkRenewalObserved(server, dimension, pos)
-        return true
+        return false
     }
 
     /**

@@ -1,200 +1,189 @@
 package ch.oliverlanz.memento.application
 
 import ch.oliverlanz.memento.domain.events.WitherstoneTransitionTrigger
+import ch.oliverlanz.memento.domain.stones.Lorestone
+import ch.oliverlanz.memento.domain.stones.Stone
 import ch.oliverlanz.memento.domain.stones.StoneRegister
+import ch.oliverlanz.memento.domain.stones.Witherstone
 import net.minecraft.server.command.ServerCommandSource
 import net.minecraft.text.Text
 import net.minecraft.util.Formatting
 
 /**
- * Application layer: command execution logic.
+ * Application-layer command handlers.
  *
- * Notes:
- * - Legacy MementoStones remains authoritative.
- * - Shadow StoneRegister is mirrored passively for observability and future handover.
+ * Commands.kt defines the authoritative command grammar.
+ * This file contains the execution logic and delegates to the domain layer
+ * (StoneRegister + RenewalTracker).
  */
 object CommandHandlers {
 
-    fun list(kind: MementoStones.Kind?, src: ServerCommandSource): Int {
-        val stones = MementoStones.list()
-            .filter { kind == null || it.kind == kind }
+    fun list(kind: MementoStones.Kind?, source: ServerCommandSource): Int {
+        val stones = StoneRegister.list()
+            .filter { stone ->
+                when (kind) {
+                    null -> true
+                    MementoStones.Kind.FORGET -> stone is Witherstone
+                    MementoStones.Kind.REMEMBER -> stone is Lorestone
+                }
+            }
+            .sortedBy { it.name }
 
         if (stones.isEmpty()) {
-            src.sendFeedback({ Text.literal("No stones found.") }, false)
+            source.sendFeedback({ Text.literal("No stones registered.").formatted(Formatting.GRAY) }, false)
             return 1
         }
 
-        src.sendFeedback(
-            { Text.literal("Stones (${stones.size}):").formatted(Formatting.YELLOW) },
-            false
-        )
-        stones.forEach { s ->
-            val label = when (s.kind) {
-                MementoStones.Kind.FORGET -> "witherstone"
-                MementoStones.Kind.REMEMBER -> "lorestone"
-            }
-            src.sendFeedback(
-                { Text.literal(buildString {
-                    append("- ${s.name} ($label) r=${s.radius}")
-                    if (s.kind == MementoStones.Kind.FORGET) {
-                        append(" d=${s.days}")
-                        s.state?.let { append(" state=${it.name.lowercase()}") }
-                    }
-                }).formatted(Formatting.GRAY) },
-                false
-            )
+        source.sendFeedback({ Text.literal("Registered stones (${stones.size}):").formatted(Formatting.GOLD) }, false)
+        stones.forEach { stone ->
+            source.sendFeedback({ Text.literal(" - ${formatStoneLine(stone)}") }, false)
         }
         return 1
     }
 
-    fun inspect(src: ServerCommandSource, name: String): Int {
-        val s = MementoStones.get(name) ?: return error(src, "No such stone '$name'.")
-        val label = when (s.kind) {
-            MementoStones.Kind.FORGET -> "WITHERSTONE"
-            MementoStones.Kind.REMEMBER -> "LORESTONE"
+    fun inspect(source: ServerCommandSource, name: String): Int {
+        val stone = StoneRegister.get(name)
+        if (stone == null) {
+            source.sendError(Text.literal("No stone named '$name'."))
+            return 0
         }
 
-        src.sendFeedback({ Text.literal("Stone '${s.name}'").formatted(Formatting.YELLOW) }, false)
-        src.sendFeedback({ Text.literal("Type: $label").formatted(Formatting.GRAY) }, false)
-        src.sendFeedback({ Text.literal("Dimension: ${s.dimension.value}").formatted(Formatting.GRAY) }, false)
-        src.sendFeedback({ Text.literal("Position: ${s.pos.x}, ${s.pos.y}, ${s.pos.z}").formatted(Formatting.GRAY) }, false)
-        src.sendFeedback({ Text.literal("Radius: ${s.radius}").formatted(Formatting.GRAY) }, false)
-
-        if (s.kind == MementoStones.Kind.FORGET) {
-            src.sendFeedback({ Text.literal("DaysToMaturity: ${s.days}").formatted(Formatting.GRAY) }, false)
-            src.sendFeedback({ Text.literal("State: ${s.state}").formatted(Formatting.GRAY) }, false)
+        val lines = formatStoneInspect(stone)
+        source.sendFeedback({ Text.literal(lines.first()).formatted(Formatting.GOLD) }, false)
+        lines.drop(1).forEach { line ->
+            source.sendFeedback({ Text.literal(line).formatted(Formatting.GRAY) }, false)
         }
-
-        src.sendFeedback({ Text.literal("CreatedGameTime: ${s.createdGameTime}").formatted(Formatting.GRAY) }, false)
         return 1
     }
 
-    fun addWitherstone(src: ServerCommandSource, name: String, radius: Int, daysToMaturity: Int): Int {
-        val world = src.world
-        val pos = src.playerOrThrow.blockPos
-        val now = world.time
-
-        MementoStones.addOrReplace(
-            MementoStones.Stone(
-                name = name,
-                kind = MementoStones.Kind.FORGET,
-                dimension = world.registryKey,
-                pos = pos,
-                radius = radius,
-                days = daysToMaturity,
-                state = if (daysToMaturity == 0) MementoStones.WitherstoneState.MATURED else MementoStones.WitherstoneState.MATURING,
-                createdGameTime = now
-            )
-        )
+    fun addWitherstone(source: ServerCommandSource, name: String, radius: Int, daysToMaturity: Int): Int {
+        val player = source.playerOrThrow
+        val dim = source.world.registryKey
+        val pos = player.blockPos
 
         StoneRegister.addOrReplaceWitherstone(
             name = name,
-            dimension = world.registryKey,
+            dimension = dim,
             position = pos,
             radius = radius,
             daysToMaturity = daysToMaturity,
             trigger = WitherstoneTransitionTrigger.OPERATOR
         )
 
-        src.sendFeedback({ Text.literal("Witherstone '$name' added.").formatted(Formatting.GREEN) }, false)
+        source.sendFeedback(
+            { Text.literal("Witherstone '$name' registered at ${pos.x},${pos.y},${pos.z} (r=$radius, days=$daysToMaturity).").formatted(Formatting.GREEN) },
+            false
+        )
         return 1
     }
 
-    fun addLorestone(src: ServerCommandSource, name: String, radius: Int): Int {
-        val world = src.world
-        val pos = src.playerOrThrow.blockPos
-        val now = world.time
-
-        MementoStones.addOrReplace(
-            MementoStones.Stone(
-                name = name,
-                kind = MementoStones.Kind.REMEMBER,
-                dimension = world.registryKey,
-                pos = pos,
-                radius = radius,
-                days = null,
-                state = null,
-                createdGameTime = now
-            )
-        )
+    fun addLorestone(source: ServerCommandSource, name: String, radius: Int): Int {
+        val player = source.playerOrThrow
+        val dim = source.world.registryKey
+        val pos = player.blockPos
 
         StoneRegister.addOrReplaceLorestone(
             name = name,
-            dimension = world.registryKey,
+            dimension = dim,
             position = pos,
             radius = radius
         )
 
-        src.sendFeedback({ Text.literal("Lorestone '$name' added.").formatted(Formatting.GREEN) }, false)
+        source.sendFeedback(
+            { Text.literal("Lorestone '$name' registered at ${pos.x},${pos.y},${pos.z} (r=$radius).").formatted(Formatting.GREEN) },
+            false
+        )
         return 1
     }
 
-    fun remove(src: ServerCommandSource, name: String): Int {
-        if (!MementoStones.remove(name)) {
-            return error(src, "No such stone '$name'.")
+    fun remove(source: ServerCommandSource, name: String): Int {
+        val existing = StoneRegister.get(name)
+        if (existing == null) {
+            source.sendError(Text.literal("No stone named '$name'."))
+            return 0
         }
 
         StoneRegister.remove(name)
 
-        src.sendFeedback({ Text.literal("Stone '$name' removed.").formatted(Formatting.GREEN) }, false)
+        source.sendFeedback({ Text.literal("Removed ${existing.javaClass.simpleName.lowercase()} '$name'.").formatted(Formatting.YELLOW) }, false)
         return 1
     }
 
-    fun setRadius(src: ServerCommandSource, name: String, value: Int): Int {
-        val stone = MementoStones.get(name) ?: return error(src, "No such stone '$name'.")
+    fun setRadius(source: ServerCommandSource, name: String, value: Int): Int {
+        val stone = StoneRegister.get(name)
+        if (stone == null) {
+            source.sendError(Text.literal("No stone named '$name'."))
+            return 0
+        }
 
-        MementoStones.addOrReplace(stone.copy(radius = value))
-
-        when (stone.kind) {
-            MementoStones.Kind.FORGET -> StoneRegister.addOrReplaceWitherstone(
+        when (stone) {
+            is Witherstone -> StoneRegister.addOrReplaceWitherstone(
                 name = stone.name,
                 dimension = stone.dimension,
-                position = stone.pos,
+                position = stone.position,
                 radius = value,
-                daysToMaturity = stone.days ?: 0,
+                daysToMaturity = stone.daysToMaturity,
                 trigger = WitherstoneTransitionTrigger.OPERATOR
             )
-            MementoStones.Kind.REMEMBER -> StoneRegister.addOrReplaceLorestone(
+            is Lorestone -> StoneRegister.addOrReplaceLorestone(
                 name = stone.name,
                 dimension = stone.dimension,
-                position = stone.pos,
+                position = stone.position,
                 radius = value
             )
         }
 
-        src.sendFeedback({ Text.literal("Radius updated for '$name'.").formatted(Formatting.GREEN) }, false)
+        source.sendFeedback({ Text.literal("Updated radius for '$name' to $value.").formatted(Formatting.GREEN) }, false)
         return 1
     }
 
-    fun setDaysToMaturity(src: ServerCommandSource, name: String, value: Int): Int {
-        val stone = MementoStones.get(name) ?: return error(src, "No such witherstone '$name'.")
-
-        if (stone.kind != MementoStones.Kind.FORGET) {
-            return error(src, "'$name' is not a witherstone.")
+    fun setDaysToMaturity(source: ServerCommandSource, name: String, value: Int): Int {
+        val stone = StoneRegister.get(name)
+        if (stone == null) {
+            source.sendError(Text.literal("No stone named '$name'."))
+            return 0
         }
-
-        MementoStones.addOrReplace(
-            stone.copy(
-                days = value,
-                state = if (value == 0) MementoStones.WitherstoneState.MATURED else MementoStones.WitherstoneState.MATURING
-            )
-        )
+        if (stone !is Witherstone) {
+            source.sendError(Text.literal("'$name' is not a witherstone."))
+            return 0
+        }
 
         StoneRegister.addOrReplaceWitherstone(
             name = stone.name,
             dimension = stone.dimension,
-            position = stone.pos,
+            position = stone.position,
             radius = stone.radius,
             daysToMaturity = value,
             trigger = WitherstoneTransitionTrigger.OPERATOR
         )
 
-        src.sendFeedback({ Text.literal("daysToMaturity updated for '$name'.").formatted(Formatting.GREEN) }, false)
+        source.sendFeedback({ Text.literal("Updated daysToMaturity for '$name' to $value.").formatted(Formatting.GREEN) }, false)
         return 1
     }
 
-    private fun error(src: ServerCommandSource, msg: String): Int {
-        src.sendError(Text.literal(msg))
-        return 0
-    }
+    private fun formatStoneLine(stone: Stone): String =
+        when (stone) {
+            is Witherstone ->
+                "witherstone '${stone.name}' dim=${stone.dimension} pos=(${stone.position.x},${stone.position.y},${stone.position.z}) r=${stone.radius} days=${stone.daysToMaturity} state=${stone.state}"
+            is Lorestone ->
+                "lorestone '${stone.name}' dim=${stone.dimension} pos=(${stone.position.x},${stone.position.y},${stone.position.z}) r=${stone.radius}"
+        }
+
+    private fun formatStoneInspect(stone: Stone): List<String> =
+        when (stone) {
+            is Witherstone -> listOf(
+                "Witherstone '${stone.name}'",
+                "dimension: ${stone.dimension}",
+                "position: (${stone.position.x},${stone.position.y},${stone.position.z})",
+                "radius: ${stone.radius}",
+                "daysToMaturity: ${stone.daysToMaturity}",
+                "state: ${stone.state}",
+            )
+            is Lorestone -> listOf(
+                "Lorestone '${stone.name}'",
+                "dimension: ${stone.dimension}",
+                "position: (${stone.position.x},${stone.position.y},${stone.position.z})",
+                "radius: ${stone.radius}",
+            )
+        }
 }
