@@ -50,8 +50,18 @@ object StoneRegisterPersistence {
                     "WITHERSTONE" -> {
                         val days = obj["daysToMaturity"]?.asInt ?: MementoConstants.DEFAULT_DAYS_TO_MATURITY
                         val stateStr = obj["state"]?.asString ?: WitherstoneState.MATURING.name
-                        val state = runCatching { WitherstoneState.valueOf(stateStr) }
+                        val persistedState = runCatching { WitherstoneState.valueOf(stateStr) }
                             .getOrDefault(WitherstoneState.MATURING)
+
+                        // Persistence must never bypass the lifecycle state machine.
+                        // We reconstruct a *consistent* state from persisted fields and allow StoneRegister.evaluate(...)
+                        // (trigger=SERVER_START) to perform any required forward transitions (e.g., MATURING -> MATURED).
+                        val state = when {
+                            persistedState == WitherstoneState.CONSUMED -> WitherstoneState.CONSUMED
+                            days > 0 -> WitherstoneState.MATURING
+                            persistedState == WitherstoneState.MATURED -> WitherstoneState.MATURED
+                            else -> WitherstoneState.MATURING
+                        }
 
                         val s = Witherstone(
                             name = name,
