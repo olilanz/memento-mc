@@ -24,10 +24,11 @@ object RenewalTrackerHooks {
     }
 
     fun onChunkLoaded(world: RegistryKey<World>, pos: ChunkPos) {
-        tracker?.onChunkLoaded(world, pos)
+        // dimension intentionally ignored for now (single-world assumption)
+        RenewalTracker.observeChunkLoaded(pos)
     }
 
     fun onChunkUnloaded(world: RegistryKey<World>, pos: ChunkPos) {
-        tracker?.onChunkUnloaded(world, pos)
+        RenewalTracker.observeChunkUnloaded(pos)
     }
 }
