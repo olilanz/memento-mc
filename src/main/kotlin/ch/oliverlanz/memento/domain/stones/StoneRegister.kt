@@ -21,6 +21,8 @@ import net.minecraft.world.World
  */
 object StoneRegister {
 
+    private val log = org.slf4j.LoggerFactory.getLogger("memento")
+
     private val stones = linkedMapOf<String, Stone>()
 
     private var server: MinecraftServer? = null
@@ -37,11 +39,15 @@ object StoneRegister {
 
         val loaded = StoneRegisterPersistence.load(server)
 
+        log.info("[STONE] persistence loaded count={}", loaded.size)
+
         stones.clear()
         for (s in loaded) {
             // Enforce name uniqueness: ignore duplicates on disk (first wins).
             if (!stones.containsKey(s.name)) stones[s.name] = s
         }
+
+        log.info("[STONE] register after load count={}", stones.size)
 
         // Startup reconciliation: persisted state may already indicate maturity.
         evaluate(trigger = WitherstoneTransitionTrigger.SERVER_START)

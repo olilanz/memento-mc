@@ -22,9 +22,16 @@ object StoneRegisterPersistence {
 
     private val gson = GsonBuilder().setPrettyPrinting().create()
 
+    private val log = org.slf4j.LoggerFactory.getLogger("memento")
+
     fun load(server: MinecraftServer): List<Stone> {
         val file = filePath(server)
-        if (!Files.exists(file)) return emptyList()
+        if (!Files.exists(file)) {
+            log.info("[STONE] no persistence file present at {}", file)
+            return emptyList()
+        }
+
+        log.info("[STONE] loading persistence file {}", file)
 
         return try {
             val json = Files.readString(file, StandardCharsets.UTF_8)
@@ -74,6 +81,7 @@ object StoneRegisterPersistence {
                     }
                 }
             }
+            log.info("[STONE] parsed persistence entries count={}", out.size)
             out
         } catch (t: Throwable) {
             MementoDebug.warn(server, "StoneRegister load failed, starting empty: ${t.message}")

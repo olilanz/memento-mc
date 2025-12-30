@@ -39,11 +39,14 @@ object WitherstoneRenewalBridge {
     }
 
     fun reconcileAfterStoneRegisterAttached(reason: String) {
-        for (s in StoneRegister.list()) {
+        val all = StoneRegister.list()
+        log.info("[BRIDGE] reconcile start reason={} stonesInRegister={}", reason, all.size)
+        for (s in all) {
             val w = s as? Witherstone ?: continue
             if (!w.isMatured()) continue
             upsertBatchFor(w, reason = reason)
         }
+        log.info("[BRIDGE] reconcile done reason={}", reason)
     }
 
     private fun onWitherstoneTransition(e: WitherstoneStateTransition) {

@@ -24,29 +24,44 @@ object Memento : ModInitializer {
         val renewer = ProactiveRenewer(chunksPerTick = 1)
         RenewalTracker.subscribe(renewer::onRenewalEvent)
 
+        // -----------------------------------------------------------------
+        // Server lifecycle wiring
+        // -----------------------------------------------------------------
+
         ServerLifecycleEvents.SERVER_STARTED.register(ServerLifecycleEvents.ServerStarted { server ->
-    // Attach logging & bridges BEFORE startup reconciliation emits transitions.
-    RenewalTrackerLogging.attachOnce()
-    WitherstoneRenewalBridge.attach()
+            // IMPORTANT: Attach all observers / bridges BEFORE StoneRegister.attach(),
+            // because attach() performs startup reconciliation which may emit transitions.
+            RenewalTrackerLogging.attachOnce()
+            WitherstoneRenewalBridge.attach()
 
-    StoneRegisterHooks.onServerStarted(server)
-    // Now that StoneRegister has loaded persisted stones, reconcile matured stones into renewal batches.
-    WitherstoneRenewalBridge.reconcileAfterStoneRegisterAttached(reason = "startup_post_attach")
-    renewer.attach(server)
-})
+            StoneRegisterHooks.onServerStarted(server)
 
-ServerLifecycleEvents.SERVER_STOPPING.register(ServerLifecycleEvents.ServerStopping {
-    renewer.detach()
-    WitherstoneRenewalBridge.detach()
-    RenewalTrackerLogging.detach()
-    StoneRegisterHooks.onServerStopping()
-})
+            // Some stones may already be persisted as MATURED. Startup reconciliation may therefore be a no-op.
+            // Reconcile AFTER StoneRegister is attached to ensure renewal batches exist for already-matured stones.
+            WitherstoneRenewalBridge.reconcileAfterStoneRegisterAttached(reason = "startup_post_attach")
 
-ServerTickEvents.END_SERVER_TICK.register(ServerTickEvents.EndTick {
+            renewer.attach(server)
+        })
+
+        ServerLifecycleEvents.SERVER_STOPPING.register(ServerLifecycleEvents.ServerStopping {
+            renewer.detach()
+            WitherstoneRenewalBridge.detach()
+            RenewalTrackerLogging.detach()
+            StoneRegisterHooks.onServerStopping()
+        })
+
+        // -----------------------------------------------------------------
+        // Execution loop
+        // -----------------------------------------------------------------
+
+        ServerTickEvents.END_SERVER_TICK.register(ServerTickEvents.EndTick {
             renewer.tick()
         })
 
+        // -----------------------------------------------------------------
         // Chunk lifecycle -> RenewalTracker (observational)
+        // -----------------------------------------------------------------
+
         ServerChunkEvents.CHUNK_LOAD.register(ServerChunkEvents.Load { world, chunk ->
             RenewalTrackerHooks.onChunkLoaded(world.registryKey, chunk.pos)
         })
