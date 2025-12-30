@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.application.land
+package ch.oliverlanz.memento.application.inspection
 
 object ChunkInspection {
 

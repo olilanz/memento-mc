@@ -1,26 +1,33 @@
-
 package ch.oliverlanz.memento.domain.renewal
 
-import net.minecraft.util.math.ChunkPos
 import net.minecraft.registry.RegistryKey
 import net.minecraft.world.World
+import net.minecraft.util.math.ChunkPos
 
 /**
- * Adapter layer between Minecraft events and authoritative RenewalTracker.
- * Observability only – no lifecycle decisions here.
+ * Hooks that bridge infrastructure-level events (chunk load/unload)
+ * into the RenewalTracker domain model.
+ *
+ * This component is purely observational.
+ * It does NOT tick, schedule, or perform renewal.
  */
 object RenewalTrackerHooks {
 
-    fun onChunkUnloaded(world: RegistryKey<World>, pos: ChunkPos) {
-        val chunkKey = "${'$'}{pos.x},${'$'}{pos.z}"
-        // batchName resolution is legacy/temporary; kept simple for now
-        RenewalTracker.snapshot().forEach { batch ->
-            RenewalTracker.onChunkUnloaded(batch.name, chunkKey)
-        }
+    private var tracker: RenewalTracker? = null
+
+    fun attach(tracker: RenewalTracker) {
+        this.tracker = tracker
+    }
+
+    fun detach() {
+        this.tracker = null
     }
 
     fun onChunkLoaded(world: RegistryKey<World>, pos: ChunkPos) {
-        // Intentionally ignored for now.
-        // Loading does not advance authoritative lifecycle at this stage.
+        tracker?.onChunkLoaded(world, pos)
+    }
+
+    fun onChunkUnloaded(world: RegistryKey<World>, pos: ChunkPos) {
+        tracker?.onChunkUnloaded(world, pos)
     }
 }
