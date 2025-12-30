@@ -54,3 +54,15 @@ data class GateAttempted(
     val from: RenewalBatchState,
     val attempted: RenewalBatchState
 ) : RenewalEvent
+
+/**
+ * Successful gate transition.
+ *
+ * This is the boundary that other components may subscribe to for behavior.
+ */
+data class GatePassed(
+    val batchName: String,
+    override val trigger: RenewalTrigger,
+    val from: RenewalBatchState,
+    val to: RenewalBatchState
+) : RenewalEvent

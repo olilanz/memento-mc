@@ -13,6 +13,14 @@ data class RenewalBatch(
     private val unloadedFlags: MutableMap<ChunkPos, Boolean> = chunks.associateWith { false }.toMutableMap()
     private val renewedFlags: MutableMap<ChunkPos, Boolean> = chunks.associateWith { false }.toMutableMap()
 
+    fun nextUnrenewedChunk(): ChunkPos? =
+        renewedFlags.entries
+            .asSequence()
+            .filter { !it.value }
+            .map { it.key }
+            .sortedWith(compareBy<ChunkPos> { it.x }.thenBy { it.z })
+            .firstOrNull()
+
     fun observeUnloaded(pos: ChunkPos) {
         unloadedFlags[pos] = true
     }

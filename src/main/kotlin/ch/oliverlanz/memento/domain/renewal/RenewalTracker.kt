@@ -49,8 +49,13 @@ object RenewalTracker {
             batch.observeUnloaded(pos)
             emit(ChunkObserved(name, RenewalTrigger.CHUNK_UNLOAD, pos, batch.state))
 
-            if (batch.state == RenewalBatchState.WAITING_FOR_UNLOAD && batch.allUnloadedSimultaneously()) {
-                emit(GateAttempted(name, RenewalTrigger.CHUNK_UNLOAD, batch.state, RenewalBatchState.UNLOAD_COMPLETED))
+            if (batch.state == RenewalBatchState.WAITING_FOR_UNLOAD) {
+                if (batch.allUnloadedSimultaneously()) {
+                    transitionGatePassed(batch, RenewalTrigger.CHUNK_UNLOAD, to = RenewalBatchState.UNLOAD_COMPLETED)
+                    transitionGatePassed(batch, RenewalTrigger.CHUNK_UNLOAD, to = RenewalBatchState.QUEUED_FOR_RENEWAL)
+                } else {
+                    emit(GateAttempted(name, RenewalTrigger.CHUNK_UNLOAD, batch.state, RenewalBatchState.UNLOAD_COMPLETED))
+                }
             }
         }
     }
@@ -61,9 +66,20 @@ object RenewalTracker {
             batch.observeLoaded(pos)
             emit(ChunkObserved(name, RenewalTrigger.CHUNK_LOAD, pos, batch.state))
 
-            if (batch.state == RenewalBatchState.QUEUED_FOR_RENEWAL && batch.allRenewedAtLeastOnce()) {
-                emit(GateAttempted(name, RenewalTrigger.CHUNK_LOAD, batch.state, RenewalBatchState.RENEWAL_COMPLETE))
+            if (batch.state == RenewalBatchState.QUEUED_FOR_RENEWAL) {
+                if (batch.allRenewedAtLeastOnce()) {
+                    transitionGatePassed(batch, RenewalTrigger.CHUNK_LOAD, to = RenewalBatchState.RENEWAL_COMPLETE)
+                } else {
+                    emit(GateAttempted(name, RenewalTrigger.CHUNK_LOAD, batch.state, RenewalBatchState.RENEWAL_COMPLETE))
+                }
             }
         }
+    }
+
+    private fun transitionGatePassed(batch: RenewalBatch, trigger: RenewalTrigger, to: RenewalBatchState) {
+        val from = batch.state
+        if (from == to) return
+        batch.state = to
+        emit(GatePassed(batch.name, trigger, from, to))
     }
 }
