@@ -44,7 +44,7 @@ object StoneRegister {
         }
 
         // Startup reconciliation: persisted state may already indicate maturity.
-        evaluate(trigger = WitherstoneTransitionTrigger.SERVER_STARTUP)
+        evaluate(trigger = WitherstoneTransitionTrigger.SERVER_START)
 
         persist()
     }

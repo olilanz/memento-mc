@@ -76,6 +76,7 @@ class ProactiveRenewer(
             if (batch.state != RenewalBatchState.QUEUED_FOR_RENEWAL) continue
 
             val next = batch.nextUnrenewedChunk() ?: continue
+            log.info("[RENEW] batch='{}' selecting chunk=({}, {}) for reload", batch.name, next.x, next.z)
             val world = s.getWorld(batch.dimension) ?: continue
 
             if (reloadChunkBestEffort(world, next)) {

@@ -8,6 +8,7 @@ import ch.oliverlanz.memento.domain.stones.Witherstone
 import net.minecraft.server.command.ServerCommandSource
 import net.minecraft.text.Text
 import net.minecraft.util.Formatting
+import org.slf4j.LoggerFactory
 
 /**
  * Application-layer command handlers.
@@ -17,6 +18,8 @@ import net.minecraft.util.Formatting
  * (StoneRegister + RenewalTracker).
  */
 object CommandHandlers {
+
+    private val log = LoggerFactory.getLogger("memento")
 
     fun list(kind: MementoStones.Kind?, source: ServerCommandSource): Int {
         val stones = StoneRegister.list()
@@ -57,6 +60,7 @@ object CommandHandlers {
     }
 
     fun addWitherstone(source: ServerCommandSource, name: String, radius: Int, daysToMaturity: Int): Int {
+        log.info("[CMD] addWitherstone name='{}' radius={} daysToMaturity={} by={}", name, radius, daysToMaturity, source.name)
         val player = source.playerOrThrow
         val dim = source.world.registryKey
         val pos = player.blockPos
@@ -67,7 +71,7 @@ object CommandHandlers {
             position = pos,
             radius = radius,
             daysToMaturity = daysToMaturity,
-            trigger = WitherstoneTransitionTrigger.OPERATOR
+            trigger = WitherstoneTransitionTrigger.OP_COMMAND
         )
 
         source.sendFeedback(
@@ -78,6 +82,7 @@ object CommandHandlers {
     }
 
     fun addLorestone(source: ServerCommandSource, name: String, radius: Int): Int {
+        log.info("[CMD] addLorestone name='{}' radius={} by={}", name, radius, source.name)
         val player = source.playerOrThrow
         val dim = source.world.registryKey
         val pos = player.blockPos
@@ -97,6 +102,7 @@ object CommandHandlers {
     }
 
     fun remove(source: ServerCommandSource, name: String): Int {
+        log.info("[CMD] removeStone name='{}' by={}", name, source.name)
         val existing = StoneRegister.get(name)
         if (existing == null) {
             source.sendError(Text.literal("No stone named '$name'."))
@@ -110,6 +116,7 @@ object CommandHandlers {
     }
 
     fun setRadius(source: ServerCommandSource, name: String, value: Int): Int {
+        log.info("[CMD] setRadius name='{}' radius={} by={}", name, value, source.name)
         val stone = StoneRegister.get(name)
         if (stone == null) {
             source.sendError(Text.literal("No stone named '$name'."))
@@ -123,7 +130,7 @@ object CommandHandlers {
                 position = stone.position,
                 radius = value,
                 daysToMaturity = stone.daysToMaturity,
-                trigger = WitherstoneTransitionTrigger.OPERATOR
+                trigger = WitherstoneTransitionTrigger.OP_COMMAND
             )
             is Lorestone -> StoneRegister.addOrReplaceLorestone(
                 name = stone.name,
@@ -138,6 +145,7 @@ object CommandHandlers {
     }
 
     fun setDaysToMaturity(source: ServerCommandSource, name: String, value: Int): Int {
+        log.info("[CMD] setDaysToMaturity name='{}' daysToMaturity={} by={}", name, value, source.name)
         val stone = StoneRegister.get(name)
         if (stone == null) {
             source.sendError(Text.literal("No stone named '$name'."))
@@ -154,7 +162,7 @@ object CommandHandlers {
             position = stone.position,
             radius = stone.radius,
             daysToMaturity = value,
-            trigger = WitherstoneTransitionTrigger.OPERATOR
+            trigger = WitherstoneTransitionTrigger.OP_COMMAND
         )
 
         source.sendFeedback({ Text.literal("Updated daysToMaturity for '$name' to $value.").formatted(Formatting.GREEN) }, false)

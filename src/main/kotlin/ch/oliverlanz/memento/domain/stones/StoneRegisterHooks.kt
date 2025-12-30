@@ -18,6 +18,7 @@ object StoneRegisterHooks {
     private var loggingAttached = false
 
     fun onServerStarted(server: MinecraftServer) {
+        log.info("[STONE] attach trigger=SERVER_START")
         StoneRegister.attach(server)
         attachLoggingOnce()
     }
@@ -31,11 +32,13 @@ object StoneRegisterHooks {
     }
 
     fun onNightlyCheckpoint(days: Int) {
-        StoneRegister.advanceDays(days, WitherstoneTransitionTrigger.NIGHTLY_CHECKPOINT)
+        log.info("[STONE] maturity check trigger=NIGHTLY_TICK days={}", days)
+        StoneRegister.advanceDays(days, WitherstoneTransitionTrigger.NIGHTLY_TICK)
     }
 
     fun onAdminTimeAdjustment() {
-        StoneRegister.evaluate(WitherstoneTransitionTrigger.ADMIN_TIME_ADJUSTMENT)
+        log.info("[STONE] maturity check trigger=OP_COMMAND")
+        StoneRegister.evaluate(WitherstoneTransitionTrigger.OP_COMMAND)
     }
 
     private fun attachLoggingOnce() {

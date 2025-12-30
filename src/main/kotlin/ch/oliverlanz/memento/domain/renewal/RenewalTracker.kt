@@ -17,6 +17,10 @@ object RenewalTracker {
         subscribers.add(handler)
     }
 
+    fun unsubscribe(handler: (RenewalEvent) -> Unit) {
+        subscribers.remove(handler)
+    }
+
     fun snapshotBatches(): List<RenewalBatch> = batchesByName.values.toList()
 
     private fun emit(event: RenewalEvent) {
