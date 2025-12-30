@@ -1,35 +1,26 @@
+
 package ch.oliverlanz.memento.domain.renewal
 
-import net.minecraft.registry.RegistryKey
-import net.minecraft.server.MinecraftServer
 import net.minecraft.util.math.ChunkPos
+import net.minecraft.registry.RegistryKey
 import net.minecraft.world.World
 
 /**
- * Adapter hooks used by Memento.kt.
- * Keeps the call surface small and shadow-only.
+ * Adapter layer between Minecraft events and authoritative RenewalTracker.
+ * Observability only – no lifecycle decisions here.
  */
+object RenewalTrackerHooks {
 
-fun advanceTime(tick: Long) {
-    // For now: time is observed, but we primarily key off explicit triggers.
-    // Still useful to keep the hook stable.
-    // (If you later want: periodic sanity logs or drift detection.)
-}
+    fun onChunkUnloaded(world: RegistryKey<World>, pos: ChunkPos) {
+        val chunkKey = "${'$'}{pos.x},${'$'}{pos.z}"
+        // batchName resolution is legacy/temporary; kept simple for now
+        RenewalTracker.snapshot().forEach { batch ->
+            RenewalTracker.onChunkUnloaded(batch.name, chunkKey)
+        }
+    }
 
-fun onChunkUnloaded(
-    server: MinecraftServer,
-    dimension: RegistryKey<World>,
-    chunk: ChunkPos,
-    gameTime: Long,
-) {
-    RenewalTracker.onChunkUnloadedObserved(server, dimension, chunk, gameTime)
-}
-
-fun onChunkLoaded(
-    server: MinecraftServer,
-    dimension: RegistryKey<World>,
-    chunk: ChunkPos,
-    gameTime: Long,
-) {
-    RenewalTracker.onChunkLoadedObserved(server, dimension, chunk, gameTime)
+    fun onChunkLoaded(world: RegistryKey<World>, pos: ChunkPos) {
+        // Intentionally ignored for now.
+        // Loading does not advance authoritative lifecycle at this stage.
+    }
 }

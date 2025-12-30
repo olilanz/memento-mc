@@ -1,43 +1,27 @@
+
 package ch.oliverlanz.memento.domain.renewal
 
-import net.minecraft.registry.RegistryKey
-import net.minecraft.util.math.BlockPos
-import net.minecraft.util.math.ChunkPos
-import net.minecraft.world.World
-
-/**
- * Derived (non-persisted) group of chunks scheduled for regeneration.
- *
- * This is a pure domain object:
- * - no Fabric callbacks
- * - no ticking
- * - no persistence
- *
- * Lifecycle is represented by [state], but transitions are still
- * orchestrated by application services (for now).
- */
-data class RenewalBatch(
-    val anchorName: String,
-    val dimension: RegistryKey<World>,
-    val stonePos: BlockPos,
-    val radiusChunks: Int,
-    val chunks: List<ChunkPos>,
-    var state: RenewalBatchState = RenewalBatchState.MARKED
+class RenewalBatch(
+    val name: String,
+    private val chunks: Set<String>
 ) {
+    enum class State { MARKED, BLOCKED, FREE, FORGETTING, RENEWED }
 
-    /**
-     * Handle chunk unload events.
-     * @param chunkPos The position of the unloaded chunk.
-     */
-    fun onChunkUnloaded(chunkPos: ChunkPos) {
-        // Logic for handling chunk unload
+    var state: State = State.MARKED
+        private set
+
+    private val unloaded = mutableSetOf<String>()
+    private val renewed = mutableSetOf<String>()
+
+    fun onChunkUnloaded(chunk: String) {
+        if (chunk !in chunks) return
+        unloaded += chunk
+        if (unloaded.size == chunks.size) state = State.FREE else state = State.BLOCKED
     }
 
-    /**
-     * Handle chunk load events.
-     * @param chunkPos The position of the loaded chunk.
-     */
-    fun onChunkLoaded(chunkPos: ChunkPos) {
-        // Logic for handling chunk load
+    fun onChunkRenewed(chunk: String) {
+        if (state != State.FORGETTING) return
+        renewed += chunk
+        if (renewed.size == chunks.size) state = State.RENEWED
     }
 }
