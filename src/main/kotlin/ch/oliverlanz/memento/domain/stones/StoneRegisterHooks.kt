@@ -18,10 +18,12 @@ object StoneRegisterHooks {
     private var loggingAttached = false
 
     fun onServerStarted(server: MinecraftServer) {
-        log.info("[STONE] attach trigger=SERVER_START")
-        StoneRegister.attach(server)
-        attachLoggingOnce()
-    }
+    // Subscribe to domain events BEFORE attach(), so we observe startup reconciliation transitions.
+    attachLoggingOnce()
+    log.info("[STONE] attach trigger=SERVER_START")
+    StoneRegister.attach(server)
+        logLoadedSnapshot()
+}
 
     fun onServerStopping() {
         if (loggingAttached) {
@@ -47,7 +49,26 @@ object StoneRegisterHooks {
         loggingAttached = true
     }
 
-    private fun logTransition(e: WitherstoneStateTransition) {
+    
+    private fun logLoadedSnapshot() {
+        val stones = StoneRegister.list()
+        log.info("[STONE] loaded count={}", stones.size)
+        for (s in stones) {
+            val w = s as? Witherstone ?: continue
+            val pos = "(${w.position.x},${w.position.y},${w.position.z})"
+            log.info(
+                "[STONE] loaded witherstone='{}' dim='{}' pos={} state={} days={} r={}",
+                w.name,
+                w.dimension.value.toString(),
+                pos,
+                w.state.name,
+                w.daysToMaturity,
+                w.radius,
+            )
+        }
+    }
+
+private fun logTransition(e: WitherstoneStateTransition) {
         val pos = "(${e.position.x},${e.position.y},${e.position.z})"
         log.info(
             "[STONE] witherstone='{}' dim='{}' pos={} {} -> {} trigger={}",

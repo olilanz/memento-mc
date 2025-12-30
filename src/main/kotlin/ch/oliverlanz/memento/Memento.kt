@@ -1,6 +1,7 @@
 package ch.oliverlanz.memento
 
 import ch.oliverlanz.memento.application.renewal.ProactiveRenewer
+import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerLogging
@@ -24,18 +25,24 @@ object Memento : ModInitializer {
         RenewalTracker.subscribe(renewer::onRenewalEvent)
 
         ServerLifecycleEvents.SERVER_STARTED.register(ServerLifecycleEvents.ServerStarted { server ->
-            StoneRegisterHooks.onServerStarted(server)
-            RenewalTrackerLogging.attachOnce()
-            renewer.attach(server)
-        })
+    // Attach logging & bridges BEFORE startup reconciliation emits transitions.
+    RenewalTrackerLogging.attachOnce()
+    WitherstoneRenewalBridge.attach()
 
-        ServerLifecycleEvents.SERVER_STOPPING.register(ServerLifecycleEvents.ServerStopping {
-            renewer.detach()
-            RenewalTrackerLogging.detach()
-            StoneRegisterHooks.onServerStopping()
-        })
+    StoneRegisterHooks.onServerStarted(server)
+    // Now that StoneRegister has loaded persisted stones, reconcile matured stones into renewal batches.
+    WitherstoneRenewalBridge.reconcileAfterStoneRegisterAttached(reason = "startup_post_attach")
+    renewer.attach(server)
+})
 
-        ServerTickEvents.END_SERVER_TICK.register(ServerTickEvents.EndTick {
+ServerLifecycleEvents.SERVER_STOPPING.register(ServerLifecycleEvents.ServerStopping {
+    renewer.detach()
+    WitherstoneRenewalBridge.detach()
+    RenewalTrackerLogging.detach()
+    StoneRegisterHooks.onServerStopping()
+})
+
+ServerTickEvents.END_SERVER_TICK.register(ServerTickEvents.EndTick {
             renewer.tick()
         })
 
