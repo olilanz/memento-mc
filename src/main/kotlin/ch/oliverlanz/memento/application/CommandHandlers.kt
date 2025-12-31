@@ -21,13 +21,15 @@ object CommandHandlers {
 
     private val log = LoggerFactory.getLogger("memento")
 
-    fun list(kind: MementoStones.Kind?, source: ServerCommandSource): Int {
+    enum class StoneKind { WITHERSTONE, LORESTONE }
+
+    fun list(kind: StoneKind?, source: ServerCommandSource): Int {
         val stones = StoneRegister.list()
             .filter { stone ->
                 when (kind) {
                     null -> true
-                    MementoStones.Kind.FORGET -> stone is Witherstone
-                    MementoStones.Kind.REMEMBER -> stone is Lorestone
+                    StoneKind.WITHERSTONE -> stone is Witherstone
+                    StoneKind.LORESTONE -> stone is Lorestone
                 }
             }
             .sortedBy { it.name }

@@ -3,6 +3,7 @@ package ch.oliverlanz.memento
 import ch.oliverlanz.memento.application.renewal.ProactiveRenewer
 import ch.oliverlanz.memento.application.renewal.RenewalInitialObserver
 import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge
+import ch.oliverlanz.memento.application.stone.OverworldDayObserver
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerLogging
@@ -24,6 +25,8 @@ object Memento : ModInitializer {
 
         val renewer = ProactiveRenewer(chunksPerTick = 1)
         val initialObserver = RenewalInitialObserver()
+        val dayObserver = OverworldDayObserver()
+
         RenewalTracker.subscribe(renewer::onRenewalEvent)
         RenewalTracker.subscribe(initialObserver::onRenewalEvent)
 
@@ -39,6 +42,7 @@ object Memento : ModInitializer {
 
             initialObserver.attach(server)
             renewer.attach(server)
+            dayObserver.attach(server)
 
             StoneRegisterHooks.onServerStarted(server)
 
@@ -51,6 +55,7 @@ object Memento : ModInitializer {
         ServerLifecycleEvents.SERVER_STOPPING.register(ServerLifecycleEvents.ServerStopping {
             renewer.detach()
             initialObserver.detach()
+            dayObserver.detach()
             WitherstoneRenewalBridge.detach()
             RenewalTrackerLogging.detach()
             StoneRegisterHooks.onServerStopping()
@@ -61,7 +66,11 @@ object Memento : ModInitializer {
         // -----------------------------------------------------------------
 
         ServerTickEvents.END_SERVER_TICK.register(ServerTickEvents.EndTick {
+            // Renewal work (paced)
             renewer.tick()
+
+            // Stone maturity work (day-index based)
+            dayObserver.tick()
         })
 
         // -----------------------------------------------------------------

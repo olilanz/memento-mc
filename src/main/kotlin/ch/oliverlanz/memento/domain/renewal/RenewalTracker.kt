@@ -90,10 +90,17 @@ object RenewalTracker {
     fun observeChunkLoaded(pos: ChunkPos) {
         for ((name, batch) in batchesByName) {
             if (!batch.chunks.contains(pos)) continue
+
+            // Loads after a batch is complete are expected but not interesting for observability.
+            if (batch.state == RenewalBatchState.RENEWAL_COMPLETE) continue
+
             batch.observeLoaded(pos)
-            if (batch.state >= RenewalBatchState.QUEUED_FOR_RENEWAL) {
+
+            // Renewal evidence is only recorded once the batch has entered QUEUED_FOR_RENEWAL.
+            if (batch.state == RenewalBatchState.QUEUED_FOR_RENEWAL) {
                 batch.observeRenewed(pos)
             }
+
             emit(ChunkObserved(name, RenewalTrigger.CHUNK_LOAD, pos, batch.state))
 
             if (batch.state == RenewalBatchState.QUEUED_FOR_RENEWAL) {
