@@ -18,23 +18,33 @@ import java.nio.file.Path
 
 object StoneRegisterPersistence {
 
-    private const val FILE_NAME = "memento_stone_register.json"
-
     private val gson = GsonBuilder().setPrettyPrinting().create()
 
     private val log = org.slf4j.LoggerFactory.getLogger("memento")
 
     fun load(server: MinecraftServer): List<Stone> {
-        val file = filePath(server)
-        if (!Files.exists(file)) {
-            log.info("[STONE] no persistence file present at {}", file)
-            return emptyList()
+        val rootPath = server.getSavePath(WorldSavePath.ROOT)
+
+        val seedFile = rootPath.resolve(MementoConstants.STONE_REGISTER_SEED_FILE)
+        val primaryFile = rootPath.resolve(MementoConstants.STONE_REGISTER_FILE)
+
+        val fileToLoad = when {
+            Files.exists(seedFile) -> {
+                log.info("[STONE] loading seed persistence file {}", seedFile)
+                seedFile
+            }
+            Files.exists(primaryFile) -> {
+                log.info("[STONE] loading persistence file {}", primaryFile)
+                primaryFile
+            }
+            else -> {
+                log.info("[STONE] no persistence file present at {}", primaryFile)
+                return emptyList()
+            }
         }
 
-        log.info("[STONE] loading persistence file {}", file)
-
         return try {
-            val json = Files.readString(file, StandardCharsets.UTF_8)
+            val json = Files.readString(fileToLoad, StandardCharsets.UTF_8)
             val root = JsonParser.parseString(json).asJsonObject
             val arr = root.getAsJsonArray("stones") ?: JsonArray()
 
@@ -55,8 +65,10 @@ object StoneRegisterPersistence {
 
                 when (type) {
                     "WITHERSTONE" -> {
-                        val days = obj["daysToMaturity"]?.asInt ?: MementoConstants.DEFAULT_DAYS_TO_MATURITY
-                        val stateStr = obj["state"]?.asString ?: WitherstoneState.MATURING.name
+                        val days = obj["daysToMaturity"]?.asInt
+                            ?: MementoConstants.DEFAULT_DAYS_TO_MATURITY
+                        val stateStr = obj["state"]?.asString
+                            ?: WitherstoneState.MATURING.name
                         val state = runCatching { WitherstoneState.valueOf(stateStr) }
                             .getOrDefault(WitherstoneState.MATURING)
 
@@ -81,6 +93,7 @@ object StoneRegisterPersistence {
                     }
                 }
             }
+
             log.info("[STONE] parsed persistence entries count={}", out.size)
             out
         } catch (t: Throwable) {
@@ -90,7 +103,10 @@ object StoneRegisterPersistence {
     }
 
     fun save(server: MinecraftServer, stones: List<Stone>) {
-        val file = filePath(server)
+        val file = server
+            .getSavePath(WorldSavePath.ROOT)
+            .resolve(MementoConstants.STONE_REGISTER_FILE)
+
         val root = JsonObject()
         val arr = JsonArray()
 
@@ -121,7 +137,4 @@ object StoneRegisterPersistence {
         Files.createDirectories(file.parent)
         Files.writeString(file, gson.toJson(root), StandardCharsets.UTF_8)
     }
-
-    private fun filePath(server: MinecraftServer): Path =
-        server.getSavePath(WorldSavePath.ROOT).resolve(FILE_NAME)
 }
