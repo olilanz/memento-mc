@@ -13,6 +13,14 @@ object RenewalTracker {
 
     private val subscribers: MutableList<(RenewalEvent) -> Unit> = mutableListOf()
 
+    /**
+     * Batches that reached a terminal state during an observation pass.
+     *
+     * We defer actual removal until after the current iteration over the batch map completes
+     * to avoid concurrent modification.
+     */
+    private val pendingRetire: MutableMap<String, RenewalTrigger> = mutableMapOf()
+
     fun subscribe(handler: (RenewalEvent) -> Unit) {
         subscribers.add(handler)
     }
@@ -70,6 +78,15 @@ object RenewalTracker {
         }
     }
 
+    private fun flushPendingRetire() {
+        if (pendingRetire.isEmpty()) return
+        val toRemove = pendingRetire.toMap()
+        pendingRetire.clear()
+        for ((name, trigger) in toRemove) {
+            removeBatch(name, trigger)
+        }
+    }
+
     fun observeChunkUnloaded(pos: ChunkPos) {
         for ((name, batch) in batchesByName) {
             if (!batch.chunks.contains(pos)) continue
@@ -111,6 +128,7 @@ object RenewalTracker {
                 }
             }
         }
+        flushPendingRetire()
     }
 
     private fun transitionGatePassed(batch: RenewalBatch, trigger: RenewalTrigger, to: RenewalBatchState) {
@@ -124,6 +142,12 @@ object RenewalTracker {
 
         batch.state = to
         emit(GatePassed(batch.name, trigger, from, to))
+
+        if (to == RenewalBatchState.RENEWAL_COMPLETE) {
+            emit(BatchCompleted(batch.name, trigger, batch.dimension))
+            pendingRetire[batch.name] = trigger
+            return
+        }
 
         // Execution boundary: emit the chunk set exactly once when entering QUEUED_FOR_RENEWAL.
         if (to == RenewalBatchState.QUEUED_FOR_RENEWAL) {

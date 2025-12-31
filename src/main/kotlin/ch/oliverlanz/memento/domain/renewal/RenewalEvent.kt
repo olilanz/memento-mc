@@ -75,6 +75,17 @@ data class GatePassed(
     val to: RenewalBatchState
 ) : RenewalEvent
 
+/**
+ * Terminal event: the batch has completed its lifecycle and will be retired from active tracking.
+ *
+ * Consumers may use this as a cleanup boundary.
+ */
+data class BatchCompleted(
+    val batchName: String,
+    override val trigger: RenewalTrigger,
+    val dimension: net.minecraft.registry.RegistryKey<net.minecraft.world.World>
+) : RenewalEvent
+
 
 /**
  * Batch became ready for renewal execution (all tracked chunks have been unloaded simultaneously).
