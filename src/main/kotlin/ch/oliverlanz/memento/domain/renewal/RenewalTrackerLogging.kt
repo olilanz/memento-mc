@@ -60,8 +60,8 @@ object RenewalTrackerLogging {
                 log.info("[TRACK] batch='{}' completed dim={} trigger={}",
                     e.batchName, e.dimension.value, e.trigger.name)
 
-            is BatchQueuedForRenewal ->
-                log.info("[TRACK] batch='{}' queued for renewal chunks={}",
+            is BatchWaitingForRenewal ->
+                log.info("[TRACK] batch='{}' waiting for renewal chunks={}",
                     e.batchName, e.chunks.size)
         }
     }

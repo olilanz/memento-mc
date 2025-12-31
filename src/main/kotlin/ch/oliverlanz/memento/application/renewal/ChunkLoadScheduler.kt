@@ -1,6 +1,6 @@
 package ch.oliverlanz.memento.application.renewal
 
-import ch.oliverlanz.memento.domain.renewal.BatchQueuedForRenewal
+import ch.oliverlanz.memento.domain.renewal.BatchWaitingForRenewal
 import ch.oliverlanz.memento.domain.renewal.GatePassed
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchState
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
@@ -15,7 +15,7 @@ import org.slf4j.LoggerFactory
 import java.util.ArrayDeque
 
 /**
- * ProactiveRenewer performs renewal work over time.
+ * ChunkLoadScheduler performs renewal work over time.
  *
  * Responsibilities (locked):
  * - React to RenewalTracker's execution boundary events (no polling)
@@ -26,7 +26,7 @@ import java.util.ArrayDeque
  * - It does NOT own the batch lifecycle or correctness
  * - It does NOT infer completion; that is observed via chunk-load events by RenewalTracker
  */
-class ProactiveRenewer(
+class ChunkLoadScheduler(
     private val chunksPerTick: Int,
 ) {
 
@@ -60,7 +60,7 @@ class ProactiveRenewer(
 
     fun onRenewalEvent(e: RenewalEvent) {
         when (e) {
-            is BatchQueuedForRenewal -> {
+            is BatchWaitingForRenewal -> {
                 // Event-driven boundary: build our own work queue from the chunk set.
                 var added = 0
                 for (pos in e.chunks) {
@@ -71,7 +71,7 @@ class ProactiveRenewer(
                     }
                 }
                 if (added > 0) {
-                    log.info("[RENEW] batch='{}' queuedForRenewal chunksAdded={} queueSize={}", e.batchName, added, queue.size)
+                    log.info("[RENEW] batch='{}' waitingForRenewal chunksAdded={} queueSize={}", e.batchName, added, queue.size)
                 }
             }
 

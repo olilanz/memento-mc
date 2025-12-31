@@ -92,7 +92,7 @@ data class BatchCompleted(
  *
  * This is an execution boundary: application/infrastructure components may subscribe and enqueue work.
  */
-data class BatchQueuedForRenewal(
+data class BatchWaitingForRenewal(
     val batchName: String,
     override val trigger: RenewalTrigger,
     val dimension: net.minecraft.registry.RegistryKey<net.minecraft.world.World>,

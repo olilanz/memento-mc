@@ -34,7 +34,7 @@ data class RenewalBatch(
 
 
     /**
-     * Records that this chunk has been observed loaded after the batch entered QUEUED_FOR_RENEWAL.
+     * Records that this chunk has been observed loaded after the batch entered WAITING_FOR_RENEWAL.
      * This is evidence that renewal has happened at least once for this chunk.
      */
     fun observeRenewed(pos: ChunkPos) {

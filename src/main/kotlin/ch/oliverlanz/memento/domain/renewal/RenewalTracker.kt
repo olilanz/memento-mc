@@ -65,7 +65,7 @@ object RenewalTracker {
         if (batch.state == RenewalBatchState.WAITING_FOR_UNLOAD) {
             if (batch.allUnloadedSimultaneously()) {
                 transitionGatePassed(batch, trigger, to = RenewalBatchState.UNLOAD_COMPLETED)
-                transitionGatePassed(batch, trigger, to = RenewalBatchState.QUEUED_FOR_RENEWAL)
+                transitionGatePassed(batch, trigger, to = RenewalBatchState.WAITING_FOR_RENEWAL)
             } else {
                 emit(GateAttempted(batchName, trigger, batch.state, RenewalBatchState.UNLOAD_COMPLETED))
             }
@@ -96,7 +96,7 @@ object RenewalTracker {
             if (batch.state == RenewalBatchState.WAITING_FOR_UNLOAD) {
                 if (batch.allUnloadedSimultaneously()) {
                     transitionGatePassed(batch, RenewalTrigger.CHUNK_UNLOAD, to = RenewalBatchState.UNLOAD_COMPLETED)
-                    transitionGatePassed(batch, RenewalTrigger.CHUNK_UNLOAD, to = RenewalBatchState.QUEUED_FOR_RENEWAL)
+                    transitionGatePassed(batch, RenewalTrigger.CHUNK_UNLOAD, to = RenewalBatchState.WAITING_FOR_RENEWAL)
                 } else {
                     emit(GateAttempted(name, RenewalTrigger.CHUNK_UNLOAD, batch.state, RenewalBatchState.UNLOAD_COMPLETED))
                 }
@@ -113,14 +113,14 @@ object RenewalTracker {
 
             batch.observeLoaded(pos)
 
-            // Renewal evidence is only recorded once the batch has entered QUEUED_FOR_RENEWAL.
-            if (batch.state == RenewalBatchState.QUEUED_FOR_RENEWAL) {
+            // Renewal evidence is only recorded once the batch has entered WAITING_FOR_RENEWAL.
+            if (batch.state == RenewalBatchState.WAITING_FOR_RENEWAL) {
                 batch.observeRenewed(pos)
             }
 
             emit(ChunkObserved(name, RenewalTrigger.CHUNK_LOAD, pos, batch.state))
 
-            if (batch.state == RenewalBatchState.QUEUED_FOR_RENEWAL) {
+            if (batch.state == RenewalBatchState.WAITING_FOR_RENEWAL) {
                 if (batch.allRenewedAtLeastOnce()) {
                     transitionGatePassed(batch, RenewalTrigger.CHUNK_LOAD, to = RenewalBatchState.RENEWAL_COMPLETE)
                 } else {
@@ -135,8 +135,8 @@ object RenewalTracker {
         val from = batch.state
         if (from == to) return
 
-        // When a batch becomes queued for renewal, renewal evidence starts from zero.
-        if (to == RenewalBatchState.QUEUED_FOR_RENEWAL) {
+        // When a batch becomes waiting for renewal, renewal evidence starts from zero.
+        if (to == RenewalBatchState.WAITING_FOR_RENEWAL) {
             batch.resetRenewalEvidence()
         }
 
@@ -149,9 +149,9 @@ object RenewalTracker {
             return
         }
 
-        // Execution boundary: emit the chunk set exactly once when entering QUEUED_FOR_RENEWAL.
-        if (to == RenewalBatchState.QUEUED_FOR_RENEWAL) {
-            emit(BatchQueuedForRenewal(batch.name, trigger, batch.dimension, batch.chunks.toList()))
+        // Execution boundary: emit the chunk set exactly once when entering WAITING_FOR_RENEWAL.
+        if (to == RenewalBatchState.WAITING_FOR_RENEWAL) {
+            emit(BatchWaitingForRenewal(batch.name, trigger, batch.dimension, batch.chunks.toList()))
         }
     }
 }
