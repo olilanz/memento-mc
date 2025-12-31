@@ -21,6 +21,19 @@ data class RenewalBatch(
     }
 
     /**
+     * Applies an initial snapshot of current chunk load state for this batch.
+     *
+     * This is an observation step (not an assumption): chunks that are currently not loaded
+     * are treated as 'unloaded' for the purpose of the unload gate.
+     */
+    fun applyInitialLoadedSnapshot(loadedChunks: Set<ChunkPos>) {
+        for (c in chunks) {
+            unloadedFlags[c] = !loadedChunks.contains(c)
+        }
+    }
+
+
+    /**
      * Records that this chunk has been observed loaded after the batch entered QUEUED_FOR_RENEWAL.
      * This is evidence that renewal has happened at least once for this chunk.
      */

@@ -28,6 +28,14 @@ data class BatchUpdated(
     val chunkCount: Int
 ) : RenewalEvent
 
+
+data class InitialSnapshotApplied(
+    val batchName: String,
+    override val trigger: RenewalTrigger,
+    val loaded: Int,
+    val unloaded: Int
+) : RenewalEvent
+
 data class BatchRemoved(
     val batchName: String,
     override val trigger: RenewalTrigger

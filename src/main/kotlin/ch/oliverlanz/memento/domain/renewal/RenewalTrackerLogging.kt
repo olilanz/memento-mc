@@ -36,6 +36,10 @@ object RenewalTrackerLogging {
                 log.info("[TRACK] batch='{}' state {} -> {} chunks={} trigger={}",
                     e.batchName, e.from.name, e.to.name, e.chunkCount, e.trigger.name)
 
+            is InitialSnapshotApplied ->
+                log.info("[TRACK] batch='{}' initial snapshot loaded={} unloaded={} trigger={}",
+                    e.batchName, e.loaded, e.unloaded, e.trigger.name)
+
             is BatchRemoved ->
                 log.info("[TRACK] batch='{}' removed trigger={}",
                     e.batchName, e.trigger.name)

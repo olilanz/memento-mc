@@ -41,6 +41,29 @@ object RenewalTracker {
         }
     }
 
+
+    /**
+     * Applies an initial observation snapshot of chunk load state for the given batch.
+     *
+     * This is used to establish ground truth for unload gating immediately after batch creation / reattachment,
+     * without requiring a prior load/unload cycle in this server session.
+     */
+    fun applyInitialSnapshot(batchName: String, loadedChunks: Set<ChunkPos>, trigger: RenewalTrigger) {
+        val batch = batchesByName[batchName] ?: return
+
+        batch.applyInitialLoadedSnapshot(loadedChunks)
+        emit(InitialSnapshotApplied(batchName, trigger, loaded = loadedChunks.size, unloaded = batch.chunks.size - loadedChunks.size))
+
+        if (batch.state == RenewalBatchState.WAITING_FOR_UNLOAD) {
+            if (batch.allUnloadedSimultaneously()) {
+                transitionGatePassed(batch, trigger, to = RenewalBatchState.UNLOAD_COMPLETED)
+                transitionGatePassed(batch, trigger, to = RenewalBatchState.QUEUED_FOR_RENEWAL)
+            } else {
+                emit(GateAttempted(batchName, trigger, batch.state, RenewalBatchState.UNLOAD_COMPLETED))
+            }
+        }
+    }
+
     fun removeBatch(name: String, trigger: RenewalTrigger) {
         if (batchesByName.remove(name) != null) {
             emit(BatchRemoved(name, trigger))

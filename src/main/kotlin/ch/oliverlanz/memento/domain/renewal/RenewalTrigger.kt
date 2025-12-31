@@ -10,5 +10,6 @@ enum class RenewalTrigger {
     CHUNK_UNLOAD,
     CHUNK_LOAD,
     PROACTIVE_RENEWAL_TICK,
-    MANUAL
+    MANUAL,
+    INITIAL_SNAPSHOT
 }

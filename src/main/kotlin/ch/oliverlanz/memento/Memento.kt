@@ -1,6 +1,7 @@
 package ch.oliverlanz.memento
 
 import ch.oliverlanz.memento.application.renewal.ProactiveRenewer
+import ch.oliverlanz.memento.application.renewal.RenewalInitialObserver
 import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks
@@ -22,7 +23,9 @@ object Memento : ModInitializer {
         Commands.register()
 
         val renewer = ProactiveRenewer(chunksPerTick = 1)
+        val initialObserver = RenewalInitialObserver()
         RenewalTracker.subscribe(renewer::onRenewalEvent)
+        RenewalTracker.subscribe(initialObserver::onRenewalEvent)
 
         // -----------------------------------------------------------------
         // Server lifecycle wiring
@@ -34,17 +37,20 @@ object Memento : ModInitializer {
             RenewalTrackerLogging.attachOnce()
             WitherstoneRenewalBridge.attach()
 
+            initialObserver.attach(server)
+            renewer.attach(server)
+
             StoneRegisterHooks.onServerStarted(server)
 
             // Some stones may already be persisted as MATURED. Startup reconciliation may therefore be a no-op.
             // Reconcile AFTER StoneRegister is attached to ensure renewal batches exist for already-matured stones.
             WitherstoneRenewalBridge.reconcileAfterStoneRegisterAttached(reason = "startup_post_attach")
 
-            renewer.attach(server)
         })
 
         ServerLifecycleEvents.SERVER_STOPPING.register(ServerLifecycleEvents.ServerStopping {
             renewer.detach()
+            initialObserver.detach()
             WitherstoneRenewalBridge.detach()
             RenewalTrackerLogging.detach()
             StoneRegisterHooks.onServerStopping()
