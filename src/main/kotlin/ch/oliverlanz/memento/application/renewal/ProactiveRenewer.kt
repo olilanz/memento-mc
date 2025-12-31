@@ -1,9 +1,9 @@
 package ch.oliverlanz.memento.application.renewal
 
+import ch.oliverlanz.memento.domain.renewal.BatchQueuedForRenewal
 import ch.oliverlanz.memento.domain.renewal.GatePassed
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchState
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
-import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.stones.StoneRegister
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
@@ -12,28 +12,39 @@ import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
 import net.minecraft.world.chunk.ChunkStatus
 import org.slf4j.LoggerFactory
+import java.util.ArrayDeque
 
 /**
  * ProactiveRenewer performs renewal work over time.
  *
- * Responsibilities:
- * - Listen to RenewalTracker successful transitions
- * - When chunks are queued for renewal, reload one chunk at a time
- * - Rely on Minecraft to regenerate missing chunks (no manual regeneration)
- * - Allow RenewalTracker to observe completion through natural chunk load events
- * - When a batch is complete, consume the corresponding witherstone
+ * Responsibilities (locked):
+ * - React to RenewalTracker's execution boundary events (no polling)
+ * - Own the work queue and pacing
+ * - Request chunk loads (best-effort) to accelerate renewal
+ *
+ * Non-responsibilities:
+ * - It does NOT own the batch lifecycle or correctness
+ * - It does NOT infer completion; that is observed via chunk-load events by RenewalTracker
  */
 class ProactiveRenewer(
-    private val chunksPerTick: Int = 1
+    private val chunksPerTick: Int,
 ) {
 
     private val log = LoggerFactory.getLogger("memento")
 
-    @Volatile
+    private var running: Boolean = false
     private var server: MinecraftServer? = null
 
-    @Volatile
-    private var running: Boolean = false
+    private data class WorkItem(
+        val batchName: String,
+        val dimension: RegistryKey<World>,
+        val pos: ChunkPos,
+    )
+
+    private val queue: ArrayDeque<WorkItem> = ArrayDeque()
+
+    // Used to prevent runaway duplicate queueing.
+    private val queuedKeys: MutableSet<String> = mutableSetOf()
 
     fun attach(server: MinecraftServer) {
         this.server = server
@@ -43,19 +54,37 @@ class ProactiveRenewer(
     fun detach() {
         this.running = false
         this.server = null
+        queue.clear()
+        queuedKeys.clear()
     }
 
     fun onRenewalEvent(e: RenewalEvent) {
         when (e) {
+            is BatchQueuedForRenewal -> {
+                // Event-driven boundary: build our own work queue from the chunk set.
+                var added = 0
+                for (pos in e.chunks) {
+                    val key = key(e.batchName, e.dimension, pos)
+                    if (queuedKeys.add(key)) {
+                        queue.addLast(WorkItem(e.batchName, e.dimension, pos))
+                        added++
+                    }
+                }
+                if (added > 0) {
+                    log.info("[RENEW] batch='{}' queuedForRenewal chunksAdded={} queueSize={}", e.batchName, added, queue.size)
+                }
+            }
+
             is GatePassed -> {
-                // Behavior boundaries:
-                // - When a batch becomes QUEUED_FOR_RENEWAL, ticking will pick it up.
-                // - When a batch becomes RENEWAL_COMPLETE, we finalize by consuming the stone.
                 if (e.to == RenewalBatchState.RENEWAL_COMPLETE) {
+                    // Finalization belongs here (application boundary).
                     StoneRegister.consume(e.batchName)
+                    // Drop any leftover queued work for this batch (best-effort cleanup).
+                    purgeBatch(e.batchName)
                     log.info("[RENEW] batch='{}' completed -> witherstone consumed", e.batchName)
                 }
             }
+
             else -> Unit
         }
     }
@@ -65,31 +94,40 @@ class ProactiveRenewer(
         val s = server ?: return
 
         var budget = chunksPerTick
+        while (budget > 0 && queue.isNotEmpty()) {
+            val item = queue.removeFirst()
+            queuedKeys.remove(key(item.batchName, item.dimension, item.pos))
 
-        // Deterministic iteration order.
-        val batches = RenewalTracker
-            .snapshotBatches()
-            .sortedBy { it.name }
-
-        for (batch in batches) {
-            if (budget <= 0) break
-            if (batch.state != RenewalBatchState.QUEUED_FOR_RENEWAL) continue
-
-            val next = batch.nextUnrenewedChunk() ?: continue
-            log.info("[RENEW] batch='{}' selecting chunk=({}, {}) for reload", batch.name, next.x, next.z)
-            val world = s.getWorld(batch.dimension) ?: continue
-
-            if (reloadChunkBestEffort(world, next)) {
-                budget -= 1
+            val ok = requestChunkLoadBestEffort(s, item.dimension, item.pos)
+            if (!ok) {
+                // simple requeue: try again later
+                val k = key(item.batchName, item.dimension, item.pos)
+                if (queuedKeys.add(k)) {
+                    queue.addLast(item)
+                }
             }
+
+            budget--
         }
     }
 
-    private fun reloadChunkBestEffort(world: ServerWorld, pos: ChunkPos): Boolean {
+    private fun purgeBatch(batchName: String) {
+        if (queue.isEmpty()) return
+        val kept: ArrayDeque<WorkItem> = ArrayDeque(queue.size)
+        for (item in queue) {
+            if (item.batchName != batchName) kept.addLast(item)
+            else queuedKeys.remove(key(item.batchName, item.dimension, item.pos))
+        }
+        queue.clear()
+        queue.addAll(kept)
+    }
+
+    private fun requestChunkLoadBestEffort(server: MinecraftServer, dimension: RegistryKey<World>, pos: ChunkPos): Boolean {
+        val world = server.getWorld(dimension) ?: return false
         return try {
-            // Intentional: this requests generation if the chunk is missing.
-            world.chunkManager.getChunk(pos.x, pos.z, ChunkStatus.FULL, true)
-            log.info("[RENEW] requested chunk load dim='{}' chunk=({}, {})", world.registryKey.value, pos.x, pos.z)
+            // Force a load/generation. The tracker will observe the load event and mark renewal evidence.
+            world.getChunk(pos.x, pos.z, ChunkStatus.FULL, true)
+            log.info("[RENEW] requested load dim='{}' chunk=({}, {})", world.registryKey.value, pos.x, pos.z)
             true
         } catch (t: Throwable) {
             log.warn(
@@ -102,6 +140,9 @@ class ProactiveRenewer(
             false
         }
     }
+
+    private fun key(batchName: String, dim: RegistryKey<World>, pos: ChunkPos): String =
+        batchName + "|" + dim.value.toString() + "|" + pos.x + "," + pos.z
 }
 
 private fun MinecraftServer.getWorld(key: RegistryKey<World>): ServerWorld? =

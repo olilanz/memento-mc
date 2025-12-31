@@ -66,3 +66,16 @@ data class GatePassed(
     val from: RenewalBatchState,
     val to: RenewalBatchState
 ) : RenewalEvent
+
+
+/**
+ * Batch became ready for renewal execution (all tracked chunks have been unloaded simultaneously).
+ *
+ * This is an execution boundary: application/infrastructure components may subscribe and enqueue work.
+ */
+data class BatchQueuedForRenewal(
+    val batchName: String,
+    override val trigger: RenewalTrigger,
+    val dimension: net.minecraft.registry.RegistryKey<net.minecraft.world.World>,
+    val chunks: List<ChunkPos>
+) : RenewalEvent

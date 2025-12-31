@@ -12,22 +12,26 @@ data class RenewalBatch(
 ) {
     private val unloadedFlags: MutableMap<ChunkPos, Boolean> = chunks.associateWith { false }.toMutableMap()
     private val renewedFlags: MutableMap<ChunkPos, Boolean> = chunks.associateWith { false }.toMutableMap()
-
-    fun nextUnrenewedChunk(): ChunkPos? =
-        renewedFlags.entries
-            .asSequence()
-            .filter { !it.value }
-            .map { it.key }
-            .sortedWith(compareBy<ChunkPos> { it.x }.thenBy { it.z })
-            .firstOrNull()
-
     fun observeUnloaded(pos: ChunkPos) {
         unloadedFlags[pos] = true
     }
 
     fun observeLoaded(pos: ChunkPos) {
         unloadedFlags[pos] = false
+    }
+
+    /**
+     * Records that this chunk has been observed loaded after the batch entered QUEUED_FOR_RENEWAL.
+     * This is evidence that renewal has happened at least once for this chunk.
+     */
+    fun observeRenewed(pos: ChunkPos) {
         renewedFlags[pos] = true
+    }
+
+    fun resetRenewalEvidence() {
+        for (c in chunks) {
+            renewedFlags[c] = false
+        }
     }
 
     fun allUnloadedSimultaneously(): Boolean = unloadedFlags.values.all { it }

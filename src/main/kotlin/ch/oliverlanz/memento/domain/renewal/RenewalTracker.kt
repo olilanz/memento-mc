@@ -68,6 +68,9 @@ object RenewalTracker {
         for ((name, batch) in batchesByName) {
             if (!batch.chunks.contains(pos)) continue
             batch.observeLoaded(pos)
+            if (batch.state >= RenewalBatchState.QUEUED_FOR_RENEWAL) {
+                batch.observeRenewed(pos)
+            }
             emit(ChunkObserved(name, RenewalTrigger.CHUNK_LOAD, pos, batch.state))
 
             if (batch.state == RenewalBatchState.QUEUED_FOR_RENEWAL) {
@@ -83,7 +86,18 @@ object RenewalTracker {
     private fun transitionGatePassed(batch: RenewalBatch, trigger: RenewalTrigger, to: RenewalBatchState) {
         val from = batch.state
         if (from == to) return
+
+        // When a batch becomes queued for renewal, renewal evidence starts from zero.
+        if (to == RenewalBatchState.QUEUED_FOR_RENEWAL) {
+            batch.resetRenewalEvidence()
+        }
+
         batch.state = to
         emit(GatePassed(batch.name, trigger, from, to))
+
+        // Execution boundary: emit the chunk set exactly once when entering QUEUED_FOR_RENEWAL.
+        if (to == RenewalBatchState.QUEUED_FOR_RENEWAL) {
+            emit(BatchQueuedForRenewal(batch.name, trigger, batch.dimension, batch.chunks.toList()))
+        }
     }
 }
