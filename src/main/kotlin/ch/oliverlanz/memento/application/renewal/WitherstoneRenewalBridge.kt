@@ -69,7 +69,7 @@ object WitherstoneRenewalBridge {
         )
 
         // RenewalTrigger enum currently doesn't include stone triggers; use MANUAL and log reason explicitly.
-        log.info("[BRIDGE] upsert batch name='{}' reason={} chunks={}", stone.name, reason, chunks.size)
+        log.debug("[BRIDGE] upsert batch name='{}' reason={} chunks={}", stone.name, reason, chunks.size)
         RenewalTracker.upsertBatch(batch, trigger = RenewalTrigger.MANUAL)
     }
 

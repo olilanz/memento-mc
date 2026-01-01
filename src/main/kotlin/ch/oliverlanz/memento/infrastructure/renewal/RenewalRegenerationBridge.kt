@@ -70,7 +70,7 @@ object RenewalRegenerationBridge {
         val dimMap = pendingByDimension.computeIfAbsent(dim) { ConcurrentHashMap() }
         for (l in chunkLongs) dimMap[l] = true
 
-        log.info("[BRIDGE] regeneration armed batch='{}' dim='{}' chunks={}", e.batchName, dim, chunkLongs.size)
+        log.debug("[BRIDGE] regeneration armed batch='{}' dim='{}' chunks={}", e.batchName, dim, chunkLongs.size)
     }
 
     private fun onChunkObserved(e: ChunkObserved) {

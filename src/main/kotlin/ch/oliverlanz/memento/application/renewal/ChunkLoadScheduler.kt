@@ -71,7 +71,7 @@ class ChunkLoadScheduler(
                     }
                 }
                 if (added > 0) {
-                    log.info("[RENEW] batch='{}' waitingForRenewal chunksAdded={} queueSize={}", e.batchName, added, queue.size)
+                    log.debug("[LOADER] batch='{}' waitingForRenewal chunksAdded={} queueSize={}", e.batchName, added, queue.size)
                 }
             }
 
@@ -81,7 +81,7 @@ class ChunkLoadScheduler(
                     StoneRegister.consume(e.batchName)
                     // Drop any leftover queued work for this batch (best-effort cleanup).
                     purgeBatch(e.batchName)
-                    log.info("[RENEW] batch='{}' completed -> witherstone consumed", e.batchName)
+                    log.info("[LOADER] batch='{}' completed -> witherstone consumed", e.batchName)
                 }
             }
 
@@ -127,11 +127,11 @@ class ChunkLoadScheduler(
         return try {
             // Force a load/generation. The tracker will observe the load event and mark renewal evidence.
             world.getChunk(pos.x, pos.z, ChunkStatus.FULL, true)
-            log.info("[RENEW] requested load dim='{}' chunk=({}, {})", world.registryKey.value, pos.x, pos.z)
+            log.debug("[LOADER] requested load dim='{}' chunk=({}, {})", world.registryKey.value, pos.x, pos.z)
             true
         } catch (t: Throwable) {
             log.warn(
-                "[RENEW] failed to request chunk load dim='{}' chunk=({}, {}) err={}",
+                "[LOADER] failed to request chunk load dim='{}' chunk=({}, {}) err={}",
                 world.registryKey.value,
                 pos.x,
                 pos.z,

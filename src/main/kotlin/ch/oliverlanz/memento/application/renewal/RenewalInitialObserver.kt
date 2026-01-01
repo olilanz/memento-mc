@@ -53,7 +53,7 @@ class RenewalInitialObserver {
             world.isChunkLoaded(pos.toLong())
         }.toSet()
 
-        log.info("[BRIDGE] initial snapshot batch='{}' loaded={} unloaded={}",
+        log.debug("[BRIDGE] initial snapshot batch='{}' loaded={} unloaded={}",
             batchName, loaded.size, batch.chunks.size - loaded.size)
 
         RenewalTracker.applyInitialSnapshot(batchName, loadedChunks = loaded, trigger = RenewalTrigger.INITIAL_SNAPSHOT)
