@@ -21,10 +21,9 @@ data class WitherstoneStateTransition(
 )
 
 enum class WitherstoneTransitionTrigger {
-    OPERATOR,
-    NIGHTLY_CHECKPOINT,
-    ADMIN_TIME_ADJUSTMENT,
-    SERVER_STARTUP,
+    SERVER_START,
+    NIGHTLY_TICK,
+    OP_COMMAND,
     RENEWAL_COMPLETED,
 }
 

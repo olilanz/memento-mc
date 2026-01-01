@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.application.land.inspect
+package ch.oliverlanz.memento.application.inspection
 
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchState
 import net.minecraft.registry.RegistryKey

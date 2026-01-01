@@ -1,35 +1,34 @@
 package ch.oliverlanz.memento.domain.renewal
 
 import net.minecraft.registry.RegistryKey
-import net.minecraft.server.MinecraftServer
-import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
+import net.minecraft.util.math.ChunkPos
 
 /**
- * Adapter hooks used by Memento.kt.
- * Keeps the call surface small and shadow-only.
+ * Hooks that bridge infrastructure-level events (chunk load/unload)
+ * into the RenewalTracker domain model.
+ *
+ * This component is purely observational.
+ * It does NOT tick, schedule, or perform renewal.
  */
+object RenewalTrackerHooks {
 
-fun advanceTime(tick: Long) {
-    // For now: time is observed, but we primarily key off explicit triggers.
-    // Still useful to keep the hook stable.
-    // (If you later want: periodic sanity logs or drift detection.)
-}
+    private var tracker: RenewalTracker? = null
 
-fun onChunkUnloaded(
-    server: MinecraftServer,
-    dimension: RegistryKey<World>,
-    chunk: ChunkPos,
-    gameTime: Long,
-) {
-    RenewalTracker.onChunkUnloadedObserved(server, dimension, chunk, gameTime)
-}
+    fun attach(tracker: RenewalTracker) {
+        this.tracker = tracker
+    }
 
-fun onChunkLoaded(
-    server: MinecraftServer,
-    dimension: RegistryKey<World>,
-    chunk: ChunkPos,
-    gameTime: Long,
-) {
-    RenewalTracker.onChunkLoadedObserved(server, dimension, chunk, gameTime)
+    fun detach() {
+        this.tracker = null
+    }
+
+    fun onChunkLoaded(world: RegistryKey<World>, pos: ChunkPos) {
+        // dimension intentionally ignored for now (single-world assumption)
+        RenewalTracker.observeChunkLoaded(pos)
+    }
+
+    fun onChunkUnloaded(world: RegistryKey<World>, pos: ChunkPos) {
+        RenewalTracker.observeChunkUnloaded(pos)
+    }
 }

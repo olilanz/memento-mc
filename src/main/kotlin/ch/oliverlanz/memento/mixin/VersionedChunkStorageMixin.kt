@@ -1,6 +1,6 @@
 package ch.oliverlanz.memento.mixin
 
-import ch.oliverlanz.memento.infrastructure.chunk.ChunkForgetPredicate
+import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
 import net.minecraft.nbt.NbtCompound
 import net.minecraft.registry.RegistryKey
 import net.minecraft.util.math.ChunkPos
@@ -26,14 +26,14 @@ abstract class VersionedChunkStorageMixin {
         at = [At("HEAD")],
         cancellable = true
     )
-    private fun memento_shouldForgetChunk(
+    private fun mementoInterceptChunkNbtLoad(
         chunkPos: ChunkPos,
         cir: CallbackInfoReturnable<CompletableFuture<Optional<NbtCompound>>>
     ) {
         @Suppress("UNCHECKED_CAST")
         val dimensionKey = getStorageKey().dimension() as RegistryKey<World>
 
-        if (ChunkForgetPredicate.shouldForget(dimensionKey, chunkPos)) {
+        if (RenewalRegenerationBridge.shouldRegenerate(dimensionKey, chunkPos)) {
             cir.returnValue = CompletableFuture.completedFuture(Optional.empty())
         }
     }

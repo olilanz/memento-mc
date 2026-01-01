@@ -1,43 +1,62 @@
 package ch.oliverlanz.memento.domain.renewal
 
 import net.minecraft.registry.RegistryKey
-import net.minecraft.util.math.BlockPos
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
 
-/**
- * Derived (non-persisted) group of chunks scheduled for regeneration.
- *
- * This is a pure domain object:
- * - no Fabric callbacks
- * - no ticking
- * - no persistence
- *
- * Lifecycle is represented by [state], but transitions are still
- * orchestrated by application services (for now).
- */
 data class RenewalBatch(
-    val anchorName: String,
+    val name: String,
     val dimension: RegistryKey<World>,
-    val stonePos: BlockPos,
-    val radiusChunks: Int,
-    val chunks: List<ChunkPos>,
-    var state: RenewalBatchState = RenewalBatchState.MARKED
+    val chunks: Set<ChunkPos>,
+    var state: RenewalBatchState
 ) {
+    private val unloadedFlags: MutableMap<ChunkPos, Boolean> = chunks.associateWith { false }.toMutableMap()
+    private val renewedFlags: MutableMap<ChunkPos, Boolean> = chunks.associateWith { false }.toMutableMap()
+    fun observeUnloaded(pos: ChunkPos) {
+        unloadedFlags[pos] = true
+    }
 
-    /**
-     * Handle chunk unload events.
-     * @param chunkPos The position of the unloaded chunk.
-     */
-    fun onChunkUnloaded(chunkPos: ChunkPos) {
-        // Logic for handling chunk unload
+    fun observeLoaded(pos: ChunkPos) {
+        unloadedFlags[pos] = false
     }
 
     /**
-     * Handle chunk load events.
-     * @param chunkPos The position of the loaded chunk.
+     * Applies an initial snapshot of current chunk load state for this batch.
+     *
+     * This is an observation step (not an assumption): chunks that are currently not loaded
+     * are treated as 'unloaded' for the purpose of the unload gate.
      */
-    fun onChunkLoaded(chunkPos: ChunkPos) {
-        // Logic for handling chunk load
+    fun applyInitialLoadedSnapshot(loadedChunks: Set<ChunkPos>) {
+        for (c in chunks) {
+            unloadedFlags[c] = !loadedChunks.contains(c)
+        }
+    }
+
+
+    /**
+     * Records that this chunk has been observed loaded after the batch entered WAITING_FOR_RENEWAL.
+     * This is evidence that renewal has happened at least once for this chunk.
+     */
+    fun observeRenewed(pos: ChunkPos) {
+        renewedFlags[pos] = true
+    }
+
+    fun resetRenewalEvidence() {
+        for (c in chunks) {
+            renewedFlags[c] = false
+        }
+    }
+
+    fun allUnloadedSimultaneously(): Boolean = unloadedFlags.values.all { it }
+
+    fun allRenewedAtLeastOnce(): Boolean = renewedFlags.values.all { it }
+
+    fun resetToNewChunkSet(newChunks: Set<ChunkPos>) {
+        unloadedFlags.clear()
+        renewedFlags.clear()
+        for (c in newChunks) {
+            unloadedFlags[c] = false
+            renewedFlags[c] = false
+        }
     }
 }

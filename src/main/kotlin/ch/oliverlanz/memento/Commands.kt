@@ -1,7 +1,6 @@
 package ch.oliverlanz.memento
 
 import ch.oliverlanz.memento.application.CommandHandlers
-import ch.oliverlanz.memento.application.MementoStones
 import ch.oliverlanz.memento.infrastructure.MementoConstants
 import com.mojang.brigadier.CommandDispatcher
 import com.mojang.brigadier.arguments.IntegerArgumentType
@@ -30,8 +29,8 @@ object Commands {
                  * ====================== */
                 .then(literal("list")
                     .executes { CommandHandlers.list(null, it.source) }
-                    .then(literal("witherstone").executes { CommandHandlers.list(MementoStones.Kind.FORGET, it.source) })
-                    .then(literal("lorestone").executes { CommandHandlers.list(MementoStones.Kind.REMEMBER, it.source) })
+                    .then(literal("witherstone").executes { CommandHandlers.list(CommandHandlers.StoneKind.WITHERSTONE, it.source) })
+                    .then(literal("lorestone").executes { CommandHandlers.list(CommandHandlers.StoneKind.LORESTONE, it.source) })
                 )
 
                 /* ======================
