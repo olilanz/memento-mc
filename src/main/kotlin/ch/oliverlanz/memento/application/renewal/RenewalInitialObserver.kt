@@ -5,7 +5,6 @@ import ch.oliverlanz.memento.domain.renewal.BatchUpdated
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrigger
-import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoading
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld
 import org.slf4j.LoggerFactory
@@ -49,7 +48,9 @@ class RenewalInitialObserver {
         val world: ServerWorld = server.getWorld(batch.dimension) ?: return
 
         val loaded = batch.chunks.filter { pos ->
-            ChunkLoading.isChunkLoadedBestEffort(world, pos)
+            // Best-effort, non-forcing snapshot.
+            // ServerWorld exposes a stable "isChunkLoaded" API (no reflection needed).
+            world.isChunkLoaded(pos.toLong())
         }.toSet()
 
         log.info("[BRIDGE] initial snapshot batch='{}' loaded={} unloaded={}",

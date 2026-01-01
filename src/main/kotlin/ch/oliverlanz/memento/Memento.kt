@@ -8,6 +8,7 @@ import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerLogging
 import ch.oliverlanz.memento.domain.stones.StoneRegisterHooks
+import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
@@ -29,6 +30,7 @@ object Memento : ModInitializer {
 
         RenewalTracker.subscribe(scheduler::onRenewalEvent)
         RenewalTracker.subscribe(initialObserver::onRenewalEvent)
+        RenewalTracker.subscribe(RenewalRegenerationBridge::onRenewalEvent)
 
         // -----------------------------------------------------------------
         // Server lifecycle wiring
@@ -57,6 +59,7 @@ object Memento : ModInitializer {
             initialObserver.detach()
             dayObserver.detach()
             WitherstoneRenewalBridge.detach()
+            RenewalRegenerationBridge.clear()
             RenewalTrackerLogging.detach()
             StoneRegisterHooks.onServerStopping()
         })
