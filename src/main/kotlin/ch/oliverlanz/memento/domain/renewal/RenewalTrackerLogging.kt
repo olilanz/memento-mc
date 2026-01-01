@@ -49,7 +49,7 @@ object RenewalTrackerLogging {
                     e.batchName, e.chunk.x, e.chunk.z, e.state.name, e.trigger.name)
 
             is GateAttempted ->
-                log.info("[LOADER] batch='{}' gate attempted from={} attempted={} trigger={}",
+                log.debug("[LOADER] batch='{}' gate attempted from={} attempted={} trigger={}",
                     e.batchName, e.from.name, e.attempted.name, e.trigger.name)
 
             is GatePassed ->
