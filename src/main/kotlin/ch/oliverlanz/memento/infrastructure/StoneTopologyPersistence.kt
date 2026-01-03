@@ -67,17 +67,15 @@ object StoneTopologyPersistence {
                     "WITHERSTONE" -> {
                         val days = obj["daysToMaturity"]?.asInt
                             ?: MementoConstants.DEFAULT_DAYS_TO_MATURITY
-                        val stateStr = obj["state"]?.asString
-                            ?: WitherstoneState.MATURING.name
-                        val state = runCatching { WitherstoneState.valueOf(stateStr) }
-                            .getOrDefault(WitherstoneState.MATURING)
 
+                        // NOTE: Witherstone.state is derived from daysToMaturity and runtime evaluation.
+                        // We intentionally do NOT persist or restore the derived state.
                         val s = Witherstone(
                             name = name,
                             dimension = dimensionKey,
                             position = BlockPos(x, y, z),
                             daysToMaturity = days,
-                            state = state
+                            state = WitherstoneState.MATURING,
                         )
                         s.radius = radius
                         out.add(s)
@@ -115,9 +113,7 @@ object StoneTopologyPersistence {
             when (s) {
                 is Witherstone -> {
                     obj.addProperty("type", "WITHERSTONE")
-                    obj.addProperty("daysToMaturity", s.daysToMaturity)
-                    obj.addProperty("state", s.state.name)
-                }
+                    obj.addProperty("daysToMaturity", s.daysToMaturity)                }
                 is Lorestone -> obj.addProperty("type", "LORESTONE")
             }
             obj.addProperty("name", s.name)
