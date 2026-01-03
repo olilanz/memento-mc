@@ -7,11 +7,11 @@ import net.minecraft.server.MinecraftServer
 import org.slf4j.LoggerFactory
 
 /**
- * Adapter hooks for wiring StoneRegister into the mod runtime.
+ * Adapter hooks for wiring StoneTopology into the mod runtime.
  *
  * Keeps the integration surface small and avoids entangling legacy and shadow implementations.
  */
-object StoneRegisterHooks {
+object StoneTopologyHooks {
 
     private val log = LoggerFactory.getLogger("memento")
 
@@ -21,7 +21,7 @@ object StoneRegisterHooks {
     // Subscribe to domain events BEFORE attach(), so we observe startup reconciliation transitions.
     attachLoggingOnce()
     log.info("[STONE] attach trigger=SERVER_START")
-    StoneRegister.attach(server)
+    StoneTopology.attach(server)
         logLoadedSnapshot()
 }
 
@@ -30,17 +30,17 @@ object StoneRegisterHooks {
             StoneDomainEvents.unsubscribeFromWitherstoneTransitions(::logTransition)
             loggingAttached = false
         }
-        StoneRegister.detach()
+        StoneTopology.detach()
     }
 
     fun onNightlyCheckpoint(days: Int) {
         log.info("[STONE] maturity check trigger=NIGHTLY_TICK days={}", days)
-        StoneRegister.advanceDays(days, WitherstoneTransitionTrigger.NIGHTLY_TICK)
+        StoneTopology.advanceDays(days, WitherstoneTransitionTrigger.NIGHTLY_TICK)
     }
 
     fun onAdminTimeAdjustment() {
         log.info("[STONE] maturity check trigger=OP_COMMAND")
-        StoneRegister.evaluate(WitherstoneTransitionTrigger.OP_COMMAND)
+        StoneTopology.evaluate(WitherstoneTransitionTrigger.OP_COMMAND)
     }
 
     private fun attachLoggingOnce() {
@@ -51,7 +51,7 @@ object StoneRegisterHooks {
 
     
     private fun logLoadedSnapshot() {
-        val stones = StoneRegister.list()
+        val stones = StoneTopology.list()
         log.info("[STONE] loaded count={}", stones.size)
         for (s in stones) {
             val w = s as? Witherstone ?: continue

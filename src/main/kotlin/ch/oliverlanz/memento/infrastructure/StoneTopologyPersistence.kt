@@ -16,7 +16,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 
-object StoneRegisterPersistence {
+object StoneTopologyPersistence {
 
     private val gson = GsonBuilder().setPrettyPrinting().create()
 
@@ -25,8 +25,8 @@ object StoneRegisterPersistence {
     fun load(server: MinecraftServer): List<Stone> {
         val rootPath = server.getSavePath(WorldSavePath.ROOT)
 
-        val seedFile = rootPath.resolve(MementoConstants.STONE_REGISTER_SEED_FILE)
-        val primaryFile = rootPath.resolve(MementoConstants.STONE_REGISTER_FILE)
+        val seedFile = rootPath.resolve(MementoConstants.STONE_TOPOLOGY_SEED_FILE)
+        val primaryFile = rootPath.resolve(MementoConstants.STONE_TOPOLOGY_FILE)
 
         val fileToLoad = when {
             Files.exists(seedFile) -> {
@@ -97,7 +97,7 @@ object StoneRegisterPersistence {
             log.info("[STONE] parsed persistence entries count={}", out.size)
             out
         } catch (t: Throwable) {
-            MementoDebug.warn(server, "StoneRegister load failed, starting empty: ${t.message}")
+            MementoDebug.warn(server, "StoneTopology load failed, starting empty: ${t.message}")
             emptyList()
         }
     }
@@ -105,7 +105,7 @@ object StoneRegisterPersistence {
     fun save(server: MinecraftServer, stones: List<Stone>) {
         val file = server
             .getSavePath(WorldSavePath.ROOT)
-            .resolve(MementoConstants.STONE_REGISTER_FILE)
+            .resolve(MementoConstants.STONE_TOPOLOGY_FILE)
 
         val root = JsonObject()
         val arr = JsonArray()

@@ -4,7 +4,7 @@ import ch.oliverlanz.memento.domain.events.StoneDomainEvents
 import ch.oliverlanz.memento.domain.events.WitherstoneStateTransition
 import ch.oliverlanz.memento.domain.events.WitherstoneTransitionTrigger
 import ch.oliverlanz.memento.infrastructure.MementoConstants
-import ch.oliverlanz.memento.infrastructure.StoneRegisterPersistence
+import ch.oliverlanz.memento.infrastructure.StoneTopologyPersistence
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
 import net.minecraft.util.math.BlockPos
@@ -19,7 +19,7 @@ import net.minecraft.world.World
  * - Lifecycle transitions are explicit and observable via structured events.
  * - Persistence is overwrite-on-change (no dirty state by design).
  */
-object StoneRegister {
+object StoneTopology {
 
     private val log = org.slf4j.LoggerFactory.getLogger("memento")
 
@@ -37,7 +37,7 @@ object StoneRegister {
         this.server = server
         initialized = true
 
-        val loaded = StoneRegisterPersistence.load(server)
+        val loaded = StoneTopologyPersistence.load(server)
 
         log.info("[STONE] persistence loaded count={}", loaded.size)
 
@@ -238,10 +238,10 @@ object StoneRegister {
 
     private fun persist() {
         val s = server ?: return
-        StoneRegisterPersistence.save(s, stones.values.toList())
+        StoneTopologyPersistence.save(s, stones.values.toList())
     }
 
     private fun requireInitialized() {
-        check(initialized) { "StoneRegister not attached. Call StoneRegister.attach(server) on SERVER_STARTED." }
+        check(initialized) { "StoneTopology not attached. Call StoneTopology.attach(server) on SERVER_STARTED." }
     }
 }

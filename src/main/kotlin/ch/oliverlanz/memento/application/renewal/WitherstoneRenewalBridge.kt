@@ -6,7 +6,7 @@ import ch.oliverlanz.memento.domain.renewal.RenewalBatch
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchState
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrigger
-import ch.oliverlanz.memento.domain.stones.StoneRegister
+import ch.oliverlanz.memento.domain.stones.StoneTopology
 import ch.oliverlanz.memento.domain.stones.Witherstone
 import net.minecraft.util.math.ChunkPos
 import org.slf4j.LoggerFactory
@@ -16,7 +16,7 @@ import org.slf4j.LoggerFactory
  * - listens to Witherstone maturity transitions
  * - creates/updates a RenewalBatch in RenewalTracker
  *
- * Keeps RenewalTracker passive and StoneRegister authoritative.
+ * Keeps RenewalTracker passive and StoneTopology authoritative.
  */
 object WitherstoneRenewalBridge {
 
@@ -38,8 +38,8 @@ object WitherstoneRenewalBridge {
         attached = false
     }
 
-    fun reconcileAfterStoneRegisterAttached(reason: String) {
-        val all = StoneRegister.list()
+    fun reconcileAfterStoneTopologyAttached(reason: String) {
+        val all = StoneTopology.list()
         log.info("[BRIDGE] reconcile start reason={} stonesInRegister={}", reason, all.size)
         for (s in all) {
             val w = s as? Witherstone ?: continue
@@ -53,7 +53,7 @@ object WitherstoneRenewalBridge {
         // We care only about MATURED transitions (attempts are observable elsewhere).
         if (e.to.name != "MATURED") return
 
-        val stone = StoneRegister.get(e.stoneName) as? Witherstone ?: return
+        val stone = StoneTopology.get(e.stoneName) as? Witherstone ?: return
         if (!stone.isMatured()) return
 
         upsertBatchFor(stone, reason = "transition_${e.trigger.name}")

@@ -1,6 +1,6 @@
 package ch.oliverlanz.memento.application.stone
 
-import ch.oliverlanz.memento.domain.stones.StoneRegisterHooks
+import ch.oliverlanz.memento.domain.stones.StoneTopologyHooks
 import ch.oliverlanz.memento.infrastructure.MementoState
 import ch.oliverlanz.memento.infrastructure.MementoState.State
 import net.minecraft.server.MinecraftServer
@@ -49,7 +49,7 @@ class OverworldDayObserver {
         val deltaDays = (currentDay - lastDay).toInt()
         log.info("[STONE] overworld day advanced from={} to={} days={}", lastDay, currentDay, deltaDays)
 
-        StoneRegisterHooks.onNightlyCheckpoint(deltaDays)
+        StoneTopologyHooks.onNightlyCheckpoint(deltaDays)
 
         MementoState.set(State(lastProcessedOverworldDay = currentDay))
         MementoState.save(server)

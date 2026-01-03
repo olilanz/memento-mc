@@ -3,7 +3,7 @@ package ch.oliverlanz.memento.application
 import ch.oliverlanz.memento.domain.events.WitherstoneTransitionTrigger
 import ch.oliverlanz.memento.domain.stones.Lorestone
 import ch.oliverlanz.memento.domain.stones.Stone
-import ch.oliverlanz.memento.domain.stones.StoneRegister
+import ch.oliverlanz.memento.domain.stones.StoneTopology
 import ch.oliverlanz.memento.domain.stones.Witherstone
 import net.minecraft.server.command.ServerCommandSource
 import net.minecraft.text.Text
@@ -15,7 +15,7 @@ import org.slf4j.LoggerFactory
  *
  * Commands.kt defines the authoritative command grammar.
  * This file contains the execution logic and delegates to the domain layer
- * (StoneRegister + RenewalTracker).
+ * (StoneTopology + RenewalTracker).
  */
 object CommandHandlers {
 
@@ -24,7 +24,7 @@ object CommandHandlers {
     enum class StoneKind { WITHERSTONE, LORESTONE }
 
     fun list(kind: StoneKind?, source: ServerCommandSource): Int {
-        val stones = StoneRegister.list()
+        val stones = StoneTopology.list()
             .filter { stone ->
                 when (kind) {
                     null -> true
@@ -47,7 +47,7 @@ object CommandHandlers {
     }
 
     fun inspect(source: ServerCommandSource, name: String): Int {
-        val stone = StoneRegister.get(name)
+        val stone = StoneTopology.get(name)
         if (stone == null) {
             source.sendError(Text.literal("No stone named '$name'."))
             return 0
@@ -67,7 +67,7 @@ object CommandHandlers {
         val dim = source.world.registryKey
         val pos = player.blockPos
 
-        StoneRegister.addOrReplaceWitherstone(
+        StoneTopology.addOrReplaceWitherstone(
             name = name,
             dimension = dim,
             position = pos,
@@ -89,7 +89,7 @@ object CommandHandlers {
         val dim = source.world.registryKey
         val pos = player.blockPos
 
-        StoneRegister.addOrReplaceLorestone(
+        StoneTopology.addOrReplaceLorestone(
             name = name,
             dimension = dim,
             position = pos,
@@ -105,13 +105,13 @@ object CommandHandlers {
 
     fun remove(source: ServerCommandSource, name: String): Int {
         log.info("[CMD] removeStone name='{}' by={}", name, source.name)
-        val existing = StoneRegister.get(name)
+        val existing = StoneTopology.get(name)
         if (existing == null) {
             source.sendError(Text.literal("No stone named '$name'."))
             return 0
         }
 
-        StoneRegister.remove(name)
+        StoneTopology.remove(name)
 
         source.sendFeedback({ Text.literal("Removed ${existing.javaClass.simpleName.lowercase()} '$name'.").formatted(Formatting.YELLOW) }, false)
         return 1
@@ -119,14 +119,14 @@ object CommandHandlers {
 
     fun setRadius(source: ServerCommandSource, name: String, value: Int): Int {
         log.info("[CMD] setRadius name='{}' radius={} by={}", name, value, source.name)
-        val stone = StoneRegister.get(name)
+        val stone = StoneTopology.get(name)
         if (stone == null) {
             source.sendError(Text.literal("No stone named '$name'."))
             return 0
         }
 
         when (stone) {
-            is Witherstone -> StoneRegister.addOrReplaceWitherstone(
+            is Witherstone -> StoneTopology.addOrReplaceWitherstone(
                 name = stone.name,
                 dimension = stone.dimension,
                 position = stone.position,
@@ -134,7 +134,7 @@ object CommandHandlers {
                 daysToMaturity = stone.daysToMaturity,
                 trigger = WitherstoneTransitionTrigger.OP_COMMAND
             )
-            is Lorestone -> StoneRegister.addOrReplaceLorestone(
+            is Lorestone -> StoneTopology.addOrReplaceLorestone(
                 name = stone.name,
                 dimension = stone.dimension,
                 position = stone.position,
@@ -148,7 +148,7 @@ object CommandHandlers {
 
     fun setDaysToMaturity(source: ServerCommandSource, name: String, value: Int): Int {
         log.info("[CMD] setDaysToMaturity name='{}' daysToMaturity={} by={}", name, value, source.name)
-        val stone = StoneRegister.get(name)
+        val stone = StoneTopology.get(name)
         if (stone == null) {
             source.sendError(Text.literal("No stone named '$name'."))
             return 0
@@ -158,7 +158,7 @@ object CommandHandlers {
             return 0
         }
 
-        StoneRegister.addOrReplaceWitherstone(
+        StoneTopology.addOrReplaceWitherstone(
             name = stone.name,
             dimension = stone.dimension,
             position = stone.position,
