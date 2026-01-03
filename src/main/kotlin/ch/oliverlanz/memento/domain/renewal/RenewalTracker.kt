@@ -130,6 +130,9 @@ object RenewalTracker {
 
                 // Locked execution boundary: once unload gate is passed, the batch becomes ready for renewal.
                 transition(batch, RenewalBatchState.WAITING_FOR_RENEWAL, RenewalTrigger.CHUNK_UNLOAD)
+
+                // New execution phase: start collecting renewal evidence from scratch.
+                batch.resetRenewalEvidence()
                 emit(
                     BatchWaitingForRenewal(
                         batchName = batch.name,
@@ -154,10 +157,20 @@ object RenewalTracker {
             batch.observeLoaded(pos)
             emit(ChunkObserved(batchName = batch.name, trigger = RenewalTrigger.CHUNK_LOAD, chunk = pos, state = batch.state))
 
-            // Conservative: if a chunk re-loads while we were waiting for renewal, reset the unload gate.
-            if (batch.state == RenewalBatchState.WAITING_FOR_RENEWAL || batch.state == RenewalBatchState.UNLOAD_COMPLETED) {
-                transition(batch, RenewalBatchState.WAITING_FOR_UNLOAD, RenewalTrigger.CHUNK_LOAD)
-            }
+            // If a chunk loads while we are waiting for renewal, treat it as renewal evidence.
+// This is intentionally compatible with ChunkLoadScheduler forcing loads as a completion signal.
+if (batch.state == RenewalBatchState.WAITING_FOR_RENEWAL) {
+    batch.observeRenewed(pos)
+
+    if (batch.allRenewedAtLeastOnce()) {
+        transition(batch, RenewalBatchState.RENEWAL_COMPLETE, RenewalTrigger.CHUNK_LOAD)
+        emit(BatchCompleted(batchName = batch.name, trigger = RenewalTrigger.CHUNK_LOAD, dimension = batch.dimension))
+
+        // Retire from active tracking (terminal state).
+        batches.remove(batch.name)
+    }
+}
+
         }
     }
 

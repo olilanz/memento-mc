@@ -22,6 +22,7 @@ object StoneTopologyHooks {
     attachLoggingOnce()
     log.info("[STONE] attach trigger=SERVER_START")
     StoneTopology.attach(server)
+        StoneTopology.evaluate(WitherstoneTransitionTrigger.SERVER_START)
         logLoadedSnapshot()
 }
 
