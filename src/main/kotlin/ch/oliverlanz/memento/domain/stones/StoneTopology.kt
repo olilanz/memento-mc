@@ -9,6 +9,11 @@ import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
 import net.minecraft.util.math.BlockPos
 import net.minecraft.world.World
+import ch.oliverlanz.memento.domain.renewal.RenewalBatch
+import ch.oliverlanz.memento.domain.renewal.RenewalBatchState
+import ch.oliverlanz.memento.domain.renewal.RenewalTracker
+import ch.oliverlanz.memento.domain.renewal.RenewalTrigger
+import net.minecraft.util.math.ChunkPos
 
 /**
  * New-generation stone register (shadow).
@@ -114,6 +119,14 @@ object StoneTopology {
         evaluate(trigger = trigger)
 
         persist()
+
+
+        // If the witherstone is already matured, its derived renewal intent must reflect the latest topology
+        // (including Lorestone protection). This keeps batch shape deterministic under operator edits.
+        val updated = stones[name] as? Witherstone
+        if (updated != null && updated.state == WitherstoneState.MATURED) {
+            rebuildBatchDefinitionForWitherstone(updated, reason = "witherstone_upsert")
+        }
     }
 
     fun addOrReplaceLorestone(
@@ -123,14 +136,32 @@ object StoneTopology {
         radius: Int,
     ) {
         requireInitialized()
+
         stones[name] = Lorestone(name = name, dimension = dimension, position = position).also { it.radius = radius }
         persist()
+
+        // Lorestone applies immediately: derived renewal intent must reflect the updated topology.
+        val lore = stones[name] as? Lorestone ?: return
+        rebuildBatchesAffectedByLorestone(lore, reason = "lorestone_upsert")
     }
 
     fun remove(name: String) {
         requireInitialized()
-        stones.remove(name)
+
+        val removed = stones.remove(name)
         persist()
+
+        when (removed) {
+            is Lorestone -> {
+                // Lorestone applies immediately: derived renewal intent must reflect the updated topology.
+                rebuildBatchesAffectedByLorestone(removed, reason = "lorestone_removed")
+            }
+            is Witherstone -> {
+                // Best-effort cleanup: do not leave an orphaned batch behind.
+                RenewalTracker.removeBatch(removed.name, trigger = RenewalTrigger.MANUAL)
+            }
+            null -> Unit
+        }
     }
 
     /**
@@ -234,6 +265,69 @@ object StoneTopology {
                 trigger = trigger,
             )
         )
+    }
+
+
+    /**
+     * Compute the eligible chunk set for a matured witherstone under the current topology.
+     *
+     * Lorestone acts as a protection filter: protected chunks are excluded from the derived renewal intent,
+     * but non-protected chunks remain eligible even when influences overlap partially.
+     */
+    fun eligibleChunksFor(witherstone: Witherstone): Set<ChunkPos> {
+        requireInitialized()
+        val center = ChunkPos(witherstone.position.x shr 4, witherstone.position.z shr 4)
+        val r = witherstone.radius
+
+        val lorestones = stones.values
+            .asSequence()
+            .mapNotNull { it as? Lorestone }
+            .filter { it.dimension == witherstone.dimension }
+            .toList()
+
+        val out = LinkedHashSet<ChunkPos>()
+        for (dx in -r..r) {
+            for (dz in -r..r) {
+                val candidate = ChunkPos(center.x + dx, center.z + dz)
+                val protected = lorestones.any { StoneSpatial.containsChunk(it, candidate) }
+                if (!protected) out.add(candidate)
+            }
+        }
+        return out
+    }
+
+    private fun rebuildBatchDefinitionForWitherstone(witherstone: Witherstone, reason: String) {
+        val chunks = eligibleChunksFor(witherstone)
+        // Replace intent deterministically. Tracker does not care whether this is new or rebuilt.
+        RenewalTracker.upsertBatchDefinition(
+            name = witherstone.name,
+            dimension = witherstone.dimension,
+            chunks = chunks,
+            trigger = RenewalTrigger.SYSTEM
+        )
+        log.info("[STONE] renewal intent reconciled witherstone='{}' reason={} chunks={}", witherstone.name, reason, chunks.size)
+    }
+
+    private fun rebuildBatchesAffectedByLorestone(lorestone: Lorestone, reason: String) {
+        // Find matured witherstones whose *influence area* overlaps the lorestone (same dimension).
+        // Chunk-level protection is applied when computing eligible chunks.
+        val affected = stones.values
+            .asSequence()
+            .mapNotNull { it as? Witherstone }
+            .filter { it.dimension == lorestone.dimension }
+            .filter { it.state == WitherstoneState.MATURED }
+            .filter { StoneSpatial.overlaps(it, lorestone) }
+            .toList()
+
+        if (affected.isEmpty()) {
+            log.debug("[STONE] lorestone topology change reason={} lorestone='{}' affectedWitherstones=0", reason, lorestone.name)
+            return
+        }
+
+        log.info("[STONE] lorestone topology change reason={} lorestone='{}' affectedWitherstones={}", reason, lorestone.name, affected.size)
+        for (w in affected) {
+            rebuildBatchDefinitionForWitherstone(w, reason = "lorestone_${reason}")
+        }
     }
 
     private fun persist() {
