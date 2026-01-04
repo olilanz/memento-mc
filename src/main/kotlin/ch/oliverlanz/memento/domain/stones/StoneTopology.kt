@@ -1,6 +1,8 @@
 package ch.oliverlanz.memento.domain.stones
 
 import ch.oliverlanz.memento.domain.events.StoneDomainEvents
+import ch.oliverlanz.memento.domain.events.StoneCreated
+import ch.oliverlanz.memento.domain.events.StoneKind
 import ch.oliverlanz.memento.domain.events.WitherstoneStateTransition
 import ch.oliverlanz.memento.domain.events.WitherstoneTransitionTrigger
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
@@ -93,6 +95,8 @@ object StoneTopology {
         requireInitialized()
 
         val existing = stones[name] as? Witherstone
+        val wasCreated = existing == null
+
         val stone = existing ?: Witherstone(
             name = name,
             dimension = dimension,
@@ -117,6 +121,18 @@ object StoneTopology {
 
         stones[name] = replaced
 
+if (wasCreated) {
+    StoneDomainEvents.publish(
+        StoneCreated(
+            stoneName = replaced.name,
+            kind = StoneKind.WITHERSTONE,
+            dimension = replaced.dimension,
+            position = replaced.position,
+            radius = replaced.radius,
+        )
+    )
+}
+
         // Operator may force maturity by setting daysToMaturity <= 0.
         evaluate(trigger = trigger)
 
@@ -137,8 +153,24 @@ object StoneTopology {
         radius: Int,
     ) {
         requireInitialized()
+        val previous = stones[name]
+        val wasCreated = previous == null || previous !is Lorestone
+
 
         stones[name] = Lorestone(name = name, dimension = dimension, position = position).also { it.radius = radius }
+
+val createdLore = stones[name] as? Lorestone
+if (wasCreated && createdLore != null) {
+    StoneDomainEvents.publish(
+        StoneCreated(
+            stoneName = createdLore.name,
+            kind = StoneKind.LORESTONE,
+            dimension = createdLore.dimension,
+            position = createdLore.position,
+            radius = createdLore.radius,
+        )
+    )
+}
         persist()
 
         // Lorestone applies immediately: derived renewal intent must reflect the updated topology.

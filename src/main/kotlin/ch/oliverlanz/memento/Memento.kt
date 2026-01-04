@@ -4,6 +4,7 @@ import ch.oliverlanz.memento.application.renewal.ChunkLoadScheduler
 import ch.oliverlanz.memento.application.renewal.RenewalInitialObserver
 import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge
 import ch.oliverlanz.memento.application.stone.OverworldDayObserver
+import ch.oliverlanz.memento.application.visualization.StoneVisualizationEngine
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerLogging
@@ -45,6 +46,7 @@ object Memento : ModInitializer {
             initialObserver.attach(server)
             scheduler.attach(server)
             dayObserver.attach(server)
+            StoneVisualizationEngine.attach(server)
 
             StoneTopologyHooks.onServerStarted(server)
 
@@ -58,6 +60,7 @@ object Memento : ModInitializer {
             scheduler.detach()
             initialObserver.detach()
             dayObserver.detach()
+            StoneVisualizationEngine.detach()
             WitherstoneRenewalBridge.detach()
             RenewalRegenerationBridge.clear()
             RenewalTrackerLogging.detach()
