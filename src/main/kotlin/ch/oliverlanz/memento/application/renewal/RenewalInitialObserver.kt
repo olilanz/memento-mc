@@ -8,7 +8,7 @@ import net.minecraft.server.MinecraftServer
 import org.slf4j.LoggerFactory
 
 /**
- * Applies an initial load snapshot for existing renewal batches on server startup.
+ * Seeds load status for existing renewal batches on server startup.
  *
  * This is an observational convenience to seed unload-gate flags without waiting
  * for fresh unload events after restart.
@@ -46,7 +46,7 @@ class RenewalInitialObserver {
     private fun applyStartupSnapshot() {
         val batches = RenewalTracker.snapshotBatches()
         if (batches.isEmpty()) return
-        log.info("[RENEWAL] Applying initial snapshot to {} batch(es)", batches.size)
+        log.info("[RENEWAL] Seeding batch load status for {} batch(es)", batches.size)
         for (b in batches) {
             applySnapshotForSnapshot(b)
         }
