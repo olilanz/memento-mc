@@ -2,20 +2,18 @@ package ch.oliverlanz.memento.application.renewal
 
 import ch.oliverlanz.memento.domain.events.StoneDomainEvents
 import ch.oliverlanz.memento.domain.events.WitherstoneStateTransition
-import ch.oliverlanz.memento.domain.renewal.RenewalTracker
-import ch.oliverlanz.memento.domain.renewal.RenewalTrigger
 import ch.oliverlanz.memento.domain.stones.StoneTopology
-import ch.oliverlanz.memento.domain.stones.Witherstone
-import net.minecraft.util.math.ChunkPos
+import ch.oliverlanz.memento.domain.stones.WitherstoneState
 import org.slf4j.LoggerFactory
 
 /**
- * Application-layer bridge:
- * - listens to Witherstone maturity transitions
- * - derives / refreshes renewal batch definitions in RenewalTracker
+ * Application-layer wiring:
+ * - listens to Witherstone lifecycle transitions
+ * - triggers topology reconciliation when stones become MATURED
  *
- * Topology semantics (including Lorestone protection) live in StoneTopology.
- * RenewalTracker owns the RenewalBatch lifecycle and state transitions.
+ * Authority:
+ * - StoneTopology is the sole authority for deriving renewal intent (chunk sets).
+ * - RenewalTracker owns RenewalBatch lifecycle and state transitions.
  */
 object WitherstoneRenewalBridge {
 
@@ -35,38 +33,32 @@ object WitherstoneRenewalBridge {
         attached = false
     }
 
+    /**
+     * Called after StoneTopology has been attached (and persistence loaded).
+     *
+     * The bridge does not derive intent itself.
+     * It simply asks the topology to reconcile all currently-matured witherstones.
+     */
     fun reconcileAfterStoneTopologyAttached(reason: String) {
-        val all = StoneTopology.list()
-        log.info("[BRIDGE] reconcile start reason={} stonesInTopology={}", reason, all.size)
-        for (s in all) {
-            val w = s as? Witherstone ?: continue
-            if (!w.isMatured()) continue
-            upsertBatchDefinitionFor(w, reason = reason)
-        }
-        log.info("[BRIDGE] reconcile done reason={}", reason)
+        val count = StoneTopology.reconcileAllMaturedWitherstones(reason)
+        log.info("[BRIDGE] reconcile done reason={} maturedWitherstones={}", reason, count)
     }
 
     private fun onWitherstoneTransition(e: WitherstoneStateTransition) {
         // We care only about MATURED transitions.
-        if (e.to.name != "MATURED") return
+        if (e.to != WitherstoneState.MATURED) return
 
-        val stone = StoneTopology.get(e.stoneName) as? Witherstone ?: return
-        if (!stone.isMatured()) return
-
-        upsertBatchDefinitionFor(stone, reason = "transition_${e.trigger.name}")
-    }
-
-    private fun upsertBatchDefinitionFor(stone: Witherstone, reason: String) {
-        val chunks: Set<ChunkPos> = StoneTopology.eligibleChunksFor(stone)
-        log.debug("[BRIDGE] upsert batch definition name='{}' reason={} chunks={}", stone.name, reason, chunks.size)
-        RenewalTracker.upsertBatchDefinition(
-            name = stone.name,
-            dimension = stone.dimension,
-            chunks = chunks,
-            trigger = RenewalTrigger.SYSTEM
+        val applied = StoneTopology.reconcileRenewalIntentForMaturedWitherstone(
+            stoneName = e.stoneName,
+            reason = "transition_${e.trigger}",
         )
-    }
 
-    private fun Witherstone.isMatured(): Boolean =
-        this.state.name == "MATURED"
+        if (applied) {
+            log.info(
+                "[BRIDGE] matured reconciliation applied witherstone='{}' trigger={}",
+                e.stoneName,
+                e.trigger,
+            )
+        }
+    }
 }
