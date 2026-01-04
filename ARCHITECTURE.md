@@ -160,7 +160,7 @@ Triggers for maturation:
 - administrative time adjustment
 - server startup when persisted state indicates maturity
 
-Once a Witherstone reaches `MATURED`, it produces exactly one **RenewalBatch** and plays no further role.
+Maturity is derived solely from a decrementing day counter; time-of-day is only used to detect day boundaries. Once a Witherstone reaches `MATURED`, it produces exactly one **RenewalBatch** and plays no further role.
 
 ---
 
