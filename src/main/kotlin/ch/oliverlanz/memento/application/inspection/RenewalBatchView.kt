@@ -21,13 +21,3 @@ interface RenewalBatchView {
     val chunks: Set<ChunkPos>
     val state: RenewalBatchState
 }
-
-/**
- * Default snapshot implementation used by legacy adapters.
- */
-data class RenewalBatchViewSnapshot(
-    override val name: String,
-    override val dimension: RegistryKey<World>,
-    override val chunks: Set<ChunkPos>,
-    override val state: RenewalBatchState,
-) : RenewalBatchView
