@@ -2,11 +2,9 @@ package ch.oliverlanz.memento.application.renewal
 
 import ch.oliverlanz.memento.domain.events.StoneDomainEvents
 import ch.oliverlanz.memento.domain.events.WitherstoneStateTransition
-import ch.oliverlanz.memento.domain.renewal.RenewalBatch
-import ch.oliverlanz.memento.domain.renewal.RenewalBatchState
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrigger
-import ch.oliverlanz.memento.domain.stones.StoneRegister
+import ch.oliverlanz.memento.domain.stones.StoneTopology
 import ch.oliverlanz.memento.domain.stones.Witherstone
 import net.minecraft.util.math.ChunkPos
 import org.slf4j.LoggerFactory
@@ -14,9 +12,10 @@ import org.slf4j.LoggerFactory
 /**
  * Application-layer bridge:
  * - listens to Witherstone maturity transitions
- * - creates/updates a RenewalBatch in RenewalTracker
+ * - derives / refreshes renewal batch definitions in RenewalTracker
  *
- * Keeps RenewalTracker passive and StoneRegister authoritative.
+ * Topology semantics (including Lorestone protection) live in StoneTopology.
+ * RenewalTracker owns the RenewalBatch lifecycle and state transitions.
  */
 object WitherstoneRenewalBridge {
 
@@ -26,8 +25,6 @@ object WitherstoneRenewalBridge {
 
     fun attach() {
         if (attached) return
-
-        // Subscribe BEFORE any startup evaluation that might emit transitions.
         StoneDomainEvents.subscribeToWitherstoneTransitions(::onWitherstoneTransition)
         attached = true
     }
@@ -38,51 +35,36 @@ object WitherstoneRenewalBridge {
         attached = false
     }
 
-    fun reconcileAfterStoneRegisterAttached(reason: String) {
-        val all = StoneRegister.list()
-        log.info("[BRIDGE] reconcile start reason={} stonesInRegister={}", reason, all.size)
+    fun reconcileAfterStoneTopologyAttached(reason: String) {
+        val all = StoneTopology.list()
+        log.info("[BRIDGE] reconcile start reason={} stonesInTopology={}", reason, all.size)
         for (s in all) {
             val w = s as? Witherstone ?: continue
             if (!w.isMatured()) continue
-            upsertBatchFor(w, reason = reason)
+            upsertBatchDefinitionFor(w, reason = reason)
         }
         log.info("[BRIDGE] reconcile done reason={}", reason)
     }
 
     private fun onWitherstoneTransition(e: WitherstoneStateTransition) {
-        // We care only about MATURED transitions (attempts are observable elsewhere).
+        // We care only about MATURED transitions.
         if (e.to.name != "MATURED") return
 
-        val stone = StoneRegister.get(e.stoneName) as? Witherstone ?: return
+        val stone = StoneTopology.get(e.stoneName) as? Witherstone ?: return
         if (!stone.isMatured()) return
 
-        upsertBatchFor(stone, reason = "transition_${e.trigger.name}")
+        upsertBatchDefinitionFor(stone, reason = "transition_${e.trigger.name}")
     }
 
-    private fun upsertBatchFor(stone: Witherstone, reason: String) {
-        val chunks = computeChunks(stone)
-        val batch = RenewalBatch(
+    private fun upsertBatchDefinitionFor(stone: Witherstone, reason: String) {
+        val chunks: Set<ChunkPos> = StoneTopology.eligibleChunksFor(stone)
+        log.debug("[BRIDGE] upsert batch definition name='{}' reason={} chunks={}", stone.name, reason, chunks.size)
+        RenewalTracker.upsertBatchDefinition(
             name = stone.name,
             dimension = stone.dimension,
             chunks = chunks,
-            state = RenewalBatchState.WAITING_FOR_UNLOAD
+            trigger = RenewalTrigger.SYSTEM
         )
-
-        // RenewalTrigger enum currently doesn't include stone triggers; use MANUAL and log reason explicitly.
-        log.debug("[BRIDGE] upsert batch name='{}' reason={} chunks={}", stone.name, reason, chunks.size)
-        RenewalTracker.upsertBatch(batch, trigger = RenewalTrigger.MANUAL)
-    }
-
-    private fun computeChunks(stone: Witherstone): Set<ChunkPos> {
-        val center = ChunkPos(stone.position.x shr 4, stone.position.z shr 4)
-        val r = stone.radius
-        val out = LinkedHashSet<ChunkPos>()
-        for (dx in -r..r) {
-            for (dz in -r..r) {
-                out.add(ChunkPos(center.x + dx, center.z + dz))
-            }
-        }
-        return out
     }
 
     private fun Witherstone.isMatured(): Boolean =

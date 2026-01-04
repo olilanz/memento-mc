@@ -8,7 +8,7 @@ import net.minecraft.world.World
 /**
  * Base type for all new-generation (shadow) Memento stones.
  *
- * Stones are mutable entities owned by StoneRegister.
+ * Stones are mutable entities owned by StoneTopology.
  * Identity is stable; selected attributes may evolve over time.
  */
 sealed class Stone protected constructor(
@@ -34,7 +34,7 @@ enum class WitherstoneState {
  * A Witherstone triggers proactive renewal once matured.
  *
  * Radius and daysToMaturity are initialized from constants,
- * but may be amended later by StoneRegister or admin actions.
+ * but may be amended later by StoneTopology or admin actions.
  */
 class Witherstone(
     name: String,

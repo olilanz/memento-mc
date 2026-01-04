@@ -66,13 +66,13 @@ The world feels stable where it matters — and fresh where it doesn’t.
 Natural Renewal introduces two conceptual tools to express intent:
 
 * **Witherstone**
-  Allows land to become forgettable over time.
+  Marks land for renewal over time. When it matures, it schedules chunks in its area for renewal as soon as the server naturally unloads them.
 
 * **Lorestone**
-  Protects land from being forgotten.
+  Protects land from renewal. Any chunks covered by a Lorestone are guaranteed to never be renewed, even if they overlap a Witherstone.
 
-These stones do not force immediate change.
-They guide how memory is treated, allowing renewal to happen safely and deliberately.
+Stones do not force immediate change.
+Renewal only happens when chunks can unload naturally (for example, when players leave an area), keeping the world stable and predictable.
 
 ---
 

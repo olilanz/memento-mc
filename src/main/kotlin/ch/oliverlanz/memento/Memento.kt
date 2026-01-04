@@ -7,7 +7,7 @@ import ch.oliverlanz.memento.application.stone.OverworldDayObserver
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerLogging
-import ch.oliverlanz.memento.domain.stones.StoneRegisterHooks
+import ch.oliverlanz.memento.domain.stones.StoneTopologyHooks
 import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents
@@ -37,7 +37,7 @@ object Memento : ModInitializer {
         // -----------------------------------------------------------------
 
         ServerLifecycleEvents.SERVER_STARTED.register(ServerLifecycleEvents.ServerStarted { server ->
-            // IMPORTANT: Attach all observers / bridges BEFORE StoneRegister.attach(),
+            // IMPORTANT: Attach all observers / bridges BEFORE StoneTopology.attach(),
             // because attach() performs startup reconciliation which may emit transitions.
             RenewalTrackerLogging.attachOnce()
             WitherstoneRenewalBridge.attach()
@@ -46,11 +46,11 @@ object Memento : ModInitializer {
             scheduler.attach(server)
             dayObserver.attach(server)
 
-            StoneRegisterHooks.onServerStarted(server)
+            StoneTopologyHooks.onServerStarted(server)
 
             // Some stones may already be persisted as MATURED. Startup reconciliation may therefore be a no-op.
-            // Reconcile AFTER StoneRegister is attached to ensure renewal batches exist for already-matured stones.
-            WitherstoneRenewalBridge.reconcileAfterStoneRegisterAttached(reason = "startup_post_attach")
+            // Reconcile AFTER StoneTopology is attached to ensure renewal batches exist for already-matured stones.
+            WitherstoneRenewalBridge.reconcileAfterStoneTopologyAttached(reason = "startup_post_attach")
 
         })
 
@@ -61,7 +61,7 @@ object Memento : ModInitializer {
             WitherstoneRenewalBridge.detach()
             RenewalRegenerationBridge.clear()
             RenewalTrackerLogging.detach()
-            StoneRegisterHooks.onServerStopping()
+            StoneTopologyHooks.onServerStopping()
         })
 
         // -----------------------------------------------------------------

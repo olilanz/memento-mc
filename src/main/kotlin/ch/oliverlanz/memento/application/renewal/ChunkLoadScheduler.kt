@@ -4,7 +4,7 @@ import ch.oliverlanz.memento.domain.renewal.BatchWaitingForRenewal
 import ch.oliverlanz.memento.domain.renewal.GatePassed
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchState
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
-import ch.oliverlanz.memento.domain.stones.StoneRegister
+import ch.oliverlanz.memento.domain.stones.StoneTopology
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld
@@ -78,7 +78,7 @@ class ChunkLoadScheduler(
             is GatePassed -> {
                 if (e.to == RenewalBatchState.RENEWAL_COMPLETE) {
                     // Finalization belongs here (application boundary).
-                    StoneRegister.consume(e.batchName)
+                    StoneTopology.consume(e.batchName)
                     // Drop any leftover queued work for this batch (best-effort cleanup).
                     purgeBatch(e.batchName)
                     log.info("[LOADER] batch='{}' completed -> witherstone consumed", e.batchName)

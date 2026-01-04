@@ -12,6 +12,11 @@ object RenewalTrackerLogging {
 
     private val log = LoggerFactory.getLogger("memento")
 
+    private fun triggerLabel(trigger: RenewalTrigger): String = when (trigger) {
+        RenewalTrigger.INITIAL_SNAPSHOT -> "STARTUP"
+        else -> trigger.name
+    }
+
     private var attached = false
 
     fun attachOnce() {
@@ -37,12 +42,14 @@ object RenewalTrackerLogging {
                     e.batchName, e.from.name, e.to.name, e.chunkCount, e.trigger.name)
 
             is InitialSnapshotApplied ->
-                log.info("[LOADER] batch='{}' initial snapshot loaded={} unloaded={} trigger={}",
-                    e.batchName, e.loaded, e.unloaded, e.trigger.name)
+                log.info("[LOADER] batch='{}' status loadedChunks={} unloadedChunks={} trigger={}",
+                    e.batchName, e.loaded, e.unloaded, triggerLabel(e.trigger))
 
             is BatchRemoved ->
-                log.info("[LOADER] batch='{}' removed trigger={}",
-                    e.batchName, e.trigger.name)
+                log.info("[LOADER] batch='{}' {} trigger={}",
+                    e.batchName,
+                    if (e.trigger == RenewalTrigger.MANUAL) "definition removed" else "definition replaced",
+                    triggerLabel(e.trigger))
 
             is ChunkObserved ->
                 log.debug("[LOADER] batch='{}' chunk=({}, {}) observed state={} trigger={}",

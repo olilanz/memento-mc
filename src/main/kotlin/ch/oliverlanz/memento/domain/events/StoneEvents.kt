@@ -6,7 +6,7 @@ import net.minecraft.util.math.BlockPos
 import net.minecraft.world.World
 
 /**
- * Canonical structured event emitted by the shadow StoneRegister.
+ * Canonical structured event emitted by the shadow StoneTopology.
  *
  * Single event type only: lifecycle state transitions.
  * Domain code does not log; logging is attached by subscribers.
@@ -38,7 +38,7 @@ object StoneDomainEvents {
         listeners.remove(listener)
     }
 
-    // Wrappers used by StoneRegisterHooks (kept for readability)
+    // Wrappers used by StoneTopologyHooks (kept for readability)
     fun subscribeToWitherstoneTransitions(listener: (WitherstoneStateTransition) -> Unit) = subscribe(listener)
     fun unsubscribeFromWitherstoneTransitions(listener: (WitherstoneStateTransition) -> Unit) = unsubscribe(listener)
 

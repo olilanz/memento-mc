@@ -16,7 +16,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 
-object StoneRegisterPersistence {
+object StoneTopologyPersistence {
 
     private val gson = GsonBuilder().setPrettyPrinting().create()
 
@@ -25,8 +25,8 @@ object StoneRegisterPersistence {
     fun load(server: MinecraftServer): List<Stone> {
         val rootPath = server.getSavePath(WorldSavePath.ROOT)
 
-        val seedFile = rootPath.resolve(MementoConstants.STONE_REGISTER_SEED_FILE)
-        val primaryFile = rootPath.resolve(MementoConstants.STONE_REGISTER_FILE)
+        val seedFile = rootPath.resolve(MementoConstants.STONE_TOPOLOGY_SEED_FILE)
+        val primaryFile = rootPath.resolve(MementoConstants.STONE_TOPOLOGY_FILE)
 
         val fileToLoad = when {
             Files.exists(seedFile) -> {
@@ -67,17 +67,15 @@ object StoneRegisterPersistence {
                     "WITHERSTONE" -> {
                         val days = obj["daysToMaturity"]?.asInt
                             ?: MementoConstants.DEFAULT_DAYS_TO_MATURITY
-                        val stateStr = obj["state"]?.asString
-                            ?: WitherstoneState.MATURING.name
-                        val state = runCatching { WitherstoneState.valueOf(stateStr) }
-                            .getOrDefault(WitherstoneState.MATURING)
 
+                        // NOTE: Witherstone.state is derived from daysToMaturity and runtime evaluation.
+                        // We intentionally do NOT persist or restore the derived state.
                         val s = Witherstone(
                             name = name,
                             dimension = dimensionKey,
                             position = BlockPos(x, y, z),
                             daysToMaturity = days,
-                            state = state
+                            state = WitherstoneState.MATURING,
                         )
                         s.radius = radius
                         out.add(s)
@@ -97,7 +95,7 @@ object StoneRegisterPersistence {
             log.info("[STONE] parsed persistence entries count={}", out.size)
             out
         } catch (t: Throwable) {
-            MementoDebug.warn(server, "StoneRegister load failed, starting empty: ${t.message}")
+            MementoDebug.warn(server, "StoneTopology load failed, starting empty: ${t.message}")
             emptyList()
         }
     }
@@ -105,7 +103,7 @@ object StoneRegisterPersistence {
     fun save(server: MinecraftServer, stones: List<Stone>) {
         val file = server
             .getSavePath(WorldSavePath.ROOT)
-            .resolve(MementoConstants.STONE_REGISTER_FILE)
+            .resolve(MementoConstants.STONE_TOPOLOGY_FILE)
 
         val root = JsonObject()
         val arr = JsonArray()
@@ -115,9 +113,7 @@ object StoneRegisterPersistence {
             when (s) {
                 is Witherstone -> {
                     obj.addProperty("type", "WITHERSTONE")
-                    obj.addProperty("daysToMaturity", s.daysToMaturity)
-                    obj.addProperty("state", s.state.name)
-                }
+                    obj.addProperty("daysToMaturity", s.daysToMaturity)                }
                 is Lorestone -> obj.addProperty("type", "LORESTONE")
             }
             obj.addProperty("name", s.name)

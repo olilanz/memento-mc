@@ -38,14 +38,14 @@ object MementoConstants {
     const val RENEWAL_CHECKPOINT_TICK: Long = 21_000L
 
     /** Primary persistence file for stones. */
-    const val STONE_REGISTER_FILE: String = "memento_stone_register.json"
+    const val STONE_TOPOLOGY_FILE: String = "memento_stone_topology.json"
 
     /**
      * Optional seed file for developer testing.
      *
      * If present, this file is used for initial loading instead of the
      * primary persistence file. Normal save behavior still overwrites
-     * [STONE_REGISTER_FILE].
+     * [STONE_TOPOLOGY_FILE].
      */
-    const val STONE_REGISTER_SEED_FILE: String = "memento_stone_register_seed.json"
+    const val STONE_TOPOLOGY_SEED_FILE: String = "memento_stone_topology_seed.json"
 }

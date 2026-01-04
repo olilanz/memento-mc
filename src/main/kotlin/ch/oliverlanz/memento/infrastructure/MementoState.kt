@@ -12,7 +12,7 @@ import java.nio.file.Path
  * Tiny persisted state for Memento.
  *
  * Design notes (locked for this slice):
- * - Witherstone anchors age "once per Overworld day".
+ * - Witherstone anchors age once per *Memento day* (03:00 boundary).
  * - Players may sleep and ops may use /time set, which can jump time.
  * - We therefore track the last processed Overworld day index to avoid
  *   decrementing counters twice for the same world day.

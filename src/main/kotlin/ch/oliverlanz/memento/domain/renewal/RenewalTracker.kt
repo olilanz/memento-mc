@@ -1,157 +1,195 @@
 package ch.oliverlanz.memento.domain.renewal
 
+import net.minecraft.registry.RegistryKey
 import net.minecraft.util.math.ChunkPos
+import net.minecraft.world.World
+import java.util.concurrent.ConcurrentHashMap
 
 /**
- * RenewalTracker keeps accounting of active renewal batches and their state transitions.
+ * Tracks and manages RenewalBatch lifecycles.
  *
- * It does NOT perform proactive renewal itself (that is done by an executor/adaptor).
+ * Locked responsibility:
+ * - RenewalBatch is a synchronization primitive (chunks are processed together)
+ * - StoneTopology provides eligible chunk sets
+ * - RenewalTracker owns batch lifecycle + state transitions based on observations
+ *
+ * Domain code does not log. Observability is provided via [RenewalEvent] subscriptions.
  */
 object RenewalTracker {
 
-    private val batchesByName: MutableMap<String, RenewalBatch> = mutableMapOf()
+    /**
+     * Read-only batch projection for inspection / startup snapshotting.
+     *
+     * Intentionally minimal and stable: no mutation, no lifecycle operations.
+     */
+    data class RenewalBatchSnapshot(
+        val name: String,
+        val dimension: RegistryKey<World>,
+        val chunks: Set<ChunkPos>,
+        val state: RenewalBatchState,
+    )
 
-    private val subscribers: MutableList<(RenewalEvent) -> Unit> = mutableListOf()
+    private val batches: MutableMap<String, RenewalBatch> = ConcurrentHashMap()
+    private val listeners = linkedSetOf<(RenewalEvent) -> Unit>()
+
+    fun subscribe(listener: (RenewalEvent) -> Unit) {
+        listeners.add(listener)
+    }
+
+    fun unsubscribe(listener: (RenewalEvent) -> Unit) {
+        listeners.remove(listener)
+    }
 
     /**
-     * Batches that reached a terminal state during an observation pass.
-     *
-     * We defer actual removal until after the current iteration over the batch map completes
-     * to avoid concurrent modification.
+     * Read-only snapshots for inspection/reporting.
      */
-    private val pendingRetire: MutableMap<String, RenewalTrigger> = mutableMapOf()
-
-    fun subscribe(handler: (RenewalEvent) -> Unit) {
-        subscribers.add(handler)
-    }
-
-    fun unsubscribe(handler: (RenewalEvent) -> Unit) {
-        subscribers.remove(handler)
-    }
-
-    fun snapshotBatches(): List<RenewalBatch> = batchesByName.values.toList()
-
-    private fun emit(event: RenewalEvent) {
-        for (h in subscribers) h(event)
-    }
-
-    fun upsertBatch(batch: RenewalBatch, trigger: RenewalTrigger) {
-        val existing = batchesByName[batch.name]
-        if (existing == null) {
-            batchesByName[batch.name] = batch
-            emit(BatchCreated(batch.name, trigger, batch.state, batch.chunks.size))
-        } else {
-            // Keep identity; update flags for new chunk set
-            existing.resetToNewChunkSet(batch.chunks)
-            val from = existing.state
-            existing.state = batch.state
-            emit(BatchUpdated(batch.name, trigger, from, existing.state, existing.chunks.size))
-        }
-    }
-
-
-    /**
-     * Applies an initial observation snapshot of chunk load state for the given batch.
-     *
-     * This is used to establish ground truth for unload gating immediately after batch creation / reattachment,
-     * without requiring a prior load/unload cycle in this server session.
-     */
-    fun applyInitialSnapshot(batchName: String, loadedChunks: Set<ChunkPos>, trigger: RenewalTrigger) {
-        val batch = batchesByName[batchName] ?: return
-
-        batch.applyInitialLoadedSnapshot(loadedChunks)
-        emit(InitialSnapshotApplied(batchName, trigger, loaded = loadedChunks.size, unloaded = batch.chunks.size - loadedChunks.size))
-
-        if (batch.state == RenewalBatchState.WAITING_FOR_UNLOAD) {
-            if (batch.allUnloadedSimultaneously()) {
-                transitionGatePassed(batch, trigger, to = RenewalBatchState.UNLOAD_COMPLETED)
-                transitionGatePassed(batch, trigger, to = RenewalBatchState.WAITING_FOR_RENEWAL)
-            } else {
-                emit(GateAttempted(batchName, trigger, batch.state, RenewalBatchState.UNLOAD_COMPLETED))
+    fun snapshotBatches(): List<RenewalBatchSnapshot> =
+        batches.values
+            .sortedBy { it.name }
+            .map { b ->
+                RenewalBatchSnapshot(
+                    name = b.name,
+                    dimension = b.dimension,
+                    chunks = b.chunks,
+                    state = b.state
+                )
             }
+
+    /**
+     * Create or replace a batch definition.
+     *
+     * Rebuilds are treated as normal upserts: the tracker does not care whether a batch is new.
+     */
+    fun upsertBatchDefinition(
+        name: String,
+        dimension: RegistryKey<World>,
+        chunks: Set<ChunkPos>,
+        trigger: RenewalTrigger
+    ) {
+        val existing = batches.remove(name)
+        if (existing != null) {
+            emit(BatchRemoved(batchName = name, trigger = trigger))
         }
+
+        val batch = RenewalBatch(
+            name = name,
+            dimension = dimension,
+            chunks = chunks,
+            state = RenewalBatchState.WAITING_FOR_UNLOAD
+        )
+        batches[name] = batch
+        emit(
+            BatchCreated(
+                batchName = name,
+                trigger = trigger,
+                state = batch.state,
+                chunkCount = batch.chunks.size
+            )
+        )
     }
 
     fun removeBatch(name: String, trigger: RenewalTrigger) {
-        if (batchesByName.remove(name) != null) {
-            emit(BatchRemoved(name, trigger))
-        }
+        val removed = batches.remove(name) ?: return
+        emit(BatchRemoved(batchName = removed.name, trigger = trigger))
     }
 
-    private fun flushPendingRetire() {
-        if (pendingRetire.isEmpty()) return
-        val toRemove = pendingRetire.toMap()
-        pendingRetire.clear()
-        for ((name, trigger) in toRemove) {
-            removeBatch(name, trigger)
-        }
+    /**
+     * Apply an initial snapshot of loaded chunks for a given batch.
+     *
+     * This is purely observational: it seeds unload-gate flags without assuming gameplay intent.
+     */
+    fun applyInitialSnapshot(batchName: String, loadedChunks: Set<ChunkPos>, trigger: RenewalTrigger) {
+        val batch = batches[batchName] ?: return
+        batch.applyInitialLoadedSnapshot(loadedChunks)
+
+        val unloaded = batch.chunks.count { !loadedChunks.contains(it) }
+        emit(
+            InitialSnapshotApplied(
+                batchName = batchName,
+                trigger = trigger,
+                loaded = loadedChunks.size,
+                unloaded = unloaded
+            )
+        )
     }
 
+    /**
+     * Observational hook: a chunk was observed unloaded.
+     *
+     * Dimension is currently ignored by design (single-world assumption is enforced elsewhere).
+     */
     fun observeChunkUnloaded(pos: ChunkPos) {
-        for ((name, batch) in batchesByName) {
+        for (batch in batches.values) {
             if (!batch.chunks.contains(pos)) continue
-            batch.observeUnloaded(pos)
-            emit(ChunkObserved(name, RenewalTrigger.CHUNK_UNLOAD, pos, batch.state))
 
-            if (batch.state == RenewalBatchState.WAITING_FOR_UNLOAD) {
-                if (batch.allUnloadedSimultaneously()) {
-                    transitionGatePassed(batch, RenewalTrigger.CHUNK_UNLOAD, to = RenewalBatchState.UNLOAD_COMPLETED)
-                    transitionGatePassed(batch, RenewalTrigger.CHUNK_UNLOAD, to = RenewalBatchState.WAITING_FOR_RENEWAL)
-                } else {
-                    emit(GateAttempted(name, RenewalTrigger.CHUNK_UNLOAD, batch.state, RenewalBatchState.UNLOAD_COMPLETED))
-                }
+            batch.observeUnloaded(pos)
+            emit(ChunkObserved(batchName = batch.name, trigger = RenewalTrigger.CHUNK_UNLOAD, chunk = pos, state = batch.state))
+
+            if (batch.state == RenewalBatchState.WAITING_FOR_UNLOAD && batch.allUnloadedSimultaneously()) {
+                transition(batch, RenewalBatchState.UNLOAD_COMPLETED, RenewalTrigger.CHUNK_UNLOAD)
+
+                // Locked execution boundary: once unload gate is passed, the batch becomes ready for renewal.
+                transition(batch, RenewalBatchState.WAITING_FOR_RENEWAL, RenewalTrigger.CHUNK_UNLOAD)
+
+                // New execution phase: start collecting renewal evidence from scratch.
+                batch.resetRenewalEvidence()
+                emit(
+                    BatchWaitingForRenewal(
+                        batchName = batch.name,
+                        trigger = RenewalTrigger.CHUNK_UNLOAD,
+                        dimension = batch.dimension,
+                        chunks = batch.chunks.toList()
+                    )
+                )
             }
         }
     }
 
+    /**
+     * Observational hook: a chunk was observed loaded.
+     *
+     * Dimension is currently ignored by design (single-world assumption is enforced elsewhere).
+     */
     fun observeChunkLoaded(pos: ChunkPos) {
-        for ((name, batch) in batchesByName) {
+        for (batch in batches.values) {
             if (!batch.chunks.contains(pos)) continue
-
-            // Loads after a batch is complete are expected but not interesting for observability.
-            if (batch.state == RenewalBatchState.RENEWAL_COMPLETE) continue
 
             batch.observeLoaded(pos)
+            emit(ChunkObserved(batchName = batch.name, trigger = RenewalTrigger.CHUNK_LOAD, chunk = pos, state = batch.state))
 
-            // Renewal evidence is only recorded once the batch has entered WAITING_FOR_RENEWAL.
-            if (batch.state == RenewalBatchState.WAITING_FOR_RENEWAL) {
-                batch.observeRenewed(pos)
-            }
+            // If a chunk loads while we are waiting for renewal, treat it as renewal evidence.
+// This is intentionally compatible with ChunkLoadScheduler forcing loads as a completion signal.
+if (batch.state == RenewalBatchState.WAITING_FOR_RENEWAL) {
+    batch.observeRenewed(pos)
 
-            emit(ChunkObserved(name, RenewalTrigger.CHUNK_LOAD, pos, batch.state))
+    if (batch.allRenewedAtLeastOnce()) {
+        transition(batch, RenewalBatchState.RENEWAL_COMPLETE, RenewalTrigger.CHUNK_LOAD)
+        emit(BatchCompleted(batchName = batch.name, trigger = RenewalTrigger.CHUNK_LOAD, dimension = batch.dimension))
 
-            if (batch.state == RenewalBatchState.WAITING_FOR_RENEWAL) {
-                if (batch.allRenewedAtLeastOnce()) {
-                    transitionGatePassed(batch, RenewalTrigger.CHUNK_LOAD, to = RenewalBatchState.RENEWAL_COMPLETE)
-                } else {
-                    emit(GateAttempted(name, RenewalTrigger.CHUNK_LOAD, batch.state, RenewalBatchState.RENEWAL_COMPLETE))
-                }
-            }
+        // Retire from active tracking (terminal state).
+        batches.remove(batch.name)
+    }
+}
+
         }
-        flushPendingRetire()
     }
 
-    private fun transitionGatePassed(batch: RenewalBatch, trigger: RenewalTrigger, to: RenewalBatchState) {
+    /**
+     * Startup resumption hook. Currently a no-op, but kept explicit to support wiring.
+     */
+    fun resumeAfterStartup() {
+        // Intentionally no-op for now.
+    }
+
+    private fun transition(batch: RenewalBatch, to: RenewalBatchState, trigger: RenewalTrigger) {
         val from = batch.state
         if (from == to) return
-
-        // When a batch becomes waiting for renewal, renewal evidence starts from zero.
-        if (to == RenewalBatchState.WAITING_FOR_RENEWAL) {
-            batch.resetRenewalEvidence()
-        }
-
         batch.state = to
-        emit(GatePassed(batch.name, trigger, from, to))
+        emit(BatchUpdated(batchName = batch.name, trigger = trigger, from = from, to = to, chunkCount = batch.chunks.size))
+        emit(GatePassed(batchName = batch.name, trigger = trigger, from = from, to = to))
+    }
 
-        if (to == RenewalBatchState.RENEWAL_COMPLETE) {
-            emit(BatchCompleted(batch.name, trigger, batch.dimension))
-            pendingRetire[batch.name] = trigger
-            return
-        }
-
-        // Execution boundary: emit the chunk set exactly once when entering WAITING_FOR_RENEWAL.
-        if (to == RenewalBatchState.WAITING_FOR_RENEWAL) {
-            emit(BatchWaitingForRenewal(batch.name, trigger, batch.dimension, batch.chunks.toList()))
-        }
+    private fun emit(e: RenewalEvent) {
+        for (l in listeners) l(e)
     }
 }
