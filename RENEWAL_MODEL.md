@@ -25,6 +25,7 @@ Natural Renewal introduces the idea that **memory can fade**.
 A chunk’s memory is influenced by three factors:
 
 ### Presence
+
 Player presence is the strongest signal of memory.
 
 Chunks that players inhabit, return to, or meaningfully interact with are
@@ -33,6 +34,7 @@ considered memorable.
 ---
 
 ### Time since last altered
+
 Memory weakens with inactivity.
 
 Chunks that have not been altered for a long time gradually lose significance,
@@ -41,11 +43,15 @@ even if they were once visited.
 ---
 
 ### Proximity to memorable areas
+
 Memory has spatial continuity.
 
 Chunks close to memorable areas inherit stability, while distant chunks are more
 likely to fade. This ensures that renewal does not approach inhabited regions
 abruptly.
+
+Spatial continuity is evaluated in **world space** and then mapped onto chunks.
+The model does not assume square or grid-aligned regions.
 
 ---
 
@@ -74,6 +80,28 @@ Natural renewal progresses where memory is weakest:
 Renewal does not jump across space or bypass memorable land.
 It advances gradually, maintaining spatial coherence.
 
+Candidate areas are derived from continuous world-space evaluation and resolved
+at chunk granularity before renewal is considered.
+
+---
+
+## Influence resolution and eligibility
+
+A chunk may be subject to multiple forms of influence simultaneously.
+
+Before renewal is considered, all influences affecting a chunk are resolved.
+Renewal proceeds **only if the resolved influence permits it**.
+
+Influence resolution follows a strict priority:
+
+- **Protection** (e.g. Lore influence) always prevents renewal
+- **Explicit renewal intent** (e.g. Wither influence) overrides the natural model
+- **Natural renewal** applies only when no higher-priority influence is present
+- **No influence** results in no renewal
+
+Natural Renewal therefore operates only on chunks whose resolved influence
+explicitly allows it.
+
 ---
 
 ## The role of the operator
@@ -89,6 +117,7 @@ An operator may:
 - **Protect chunks**  
   Preventing renewal even when the model considers them forgettable.
 
+Operator actions change **eligibility**, not the underlying definition of memory.
 This allows deliberate intervention without weakening the conservative nature of
 natural renewal.
 
@@ -99,6 +128,7 @@ natural renewal.
 Natural Renewal is not a cleanup system.
 
 It is designed to balance:
+
 - preservation and change
 - safety and progress
 - passivity and intent
