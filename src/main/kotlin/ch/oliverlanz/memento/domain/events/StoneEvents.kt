@@ -6,6 +6,35 @@ import net.minecraft.util.math.BlockPos
 import net.minecraft.world.World
 
 /**
+ * High-level stone kind used for cross-cutting concerns such as visualization.
+ *
+ * Domain semantics:
+ * - Lorestone protects land (higher precedence).
+ * - Witherstone forgets land once matured.
+ */
+enum class StoneKind {
+    LORESTONE,
+    WITHERSTONE,
+}
+
+/**
+ * Canonical structured event emitted when a stone is created (first time a name appears).
+ *
+ * This is intentionally separate from state transitions:
+ * - Creation is a one-time fact.
+ * - Lifecycle changes are state transitions.
+ *
+ * The domain does not decide what "creation means" visually; it only emits this fact.
+ */
+data class StoneCreated(
+    val stoneName: String,
+    val kind: StoneKind,
+    val dimension: RegistryKey<World>,
+    val position: BlockPos,
+    val radius: Int,
+)
+
+/**
  * Canonical structured event emitted by the shadow StoneTopology.
  *
  * Single event type only: lifecycle state transitions.
@@ -28,14 +57,20 @@ enum class WitherstoneTransitionTrigger {
 }
 
 object StoneDomainEvents {
-    private val listeners = linkedSetOf<(WitherstoneStateTransition) -> Unit>()
+
+    private val witherstoneTransitionListeners = linkedSetOf<(WitherstoneStateTransition) -> Unit>()
+    private val stoneCreatedListeners = linkedSetOf<(StoneCreated) -> Unit>()
+
+    // ---------------------------------------------------------------------
+    // Witherstone lifecycle transitions
+    // ---------------------------------------------------------------------
 
     fun subscribe(listener: (WitherstoneStateTransition) -> Unit) {
-        listeners.add(listener)
+        witherstoneTransitionListeners.add(listener)
     }
 
     fun unsubscribe(listener: (WitherstoneStateTransition) -> Unit) {
-        listeners.remove(listener)
+        witherstoneTransitionListeners.remove(listener)
     }
 
     // Wrappers used by StoneTopologyHooks (kept for readability)
@@ -43,7 +78,24 @@ object StoneDomainEvents {
     fun unsubscribeFromWitherstoneTransitions(listener: (WitherstoneStateTransition) -> Unit) = unsubscribe(listener)
 
     internal fun publish(event: WitherstoneStateTransition) {
-        val snapshot = listeners.toList()
+        val snapshot = witherstoneTransitionListeners.toList()
+        for (l in snapshot) l(event)
+    }
+
+    // ---------------------------------------------------------------------
+    // Stone creation
+    // ---------------------------------------------------------------------
+
+    fun subscribeToStoneCreated(listener: (StoneCreated) -> Unit) {
+        stoneCreatedListeners.add(listener)
+    }
+
+    fun unsubscribeFromStoneCreated(listener: (StoneCreated) -> Unit) {
+        stoneCreatedListeners.remove(listener)
+    }
+
+    internal fun publish(event: StoneCreated) {
+        val snapshot = stoneCreatedListeners.toList()
         for (l in snapshot) l(event)
     }
 }
