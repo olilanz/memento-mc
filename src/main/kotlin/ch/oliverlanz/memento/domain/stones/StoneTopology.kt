@@ -344,10 +344,22 @@ object StoneTopology {
             .filter { it.dimension == witherstone.dimension }
             .toList()
 
+        // We iterate a bounding square and then apply the exact circle eligibility check in StoneSpatial.
+        //
+        // Important: because StoneSpatial adds a +12 block margin (to guarantee own-chunk inclusion),
+        // the influence circle can slightly exceed `r` chunks in one axis when the stone is near a
+        // chunk edge. Extending the bounding square by 1 chunk ensures we never miss eligible chunks.
+        val search = r + 1
+
         val out = LinkedHashSet<ChunkPos>()
-        for (dx in -r..r) {
-            for (dz in -r..r) {
+        for (dx in -search..search) {
+            for (dz in -search..search) {
                 val candidate = ChunkPos(center.x + dx, center.z + dz)
+
+                // Exact eligibility: circle in world space against the candidate chunk center.
+                if (!StoneSpatial.containsChunk(witherstone, candidate)) continue
+
+                // Protection: lorestones exclude chunks from the renewal batch.
                 val protected = lorestones.any { StoneSpatial.containsChunk(it, candidate) }
                 if (!protected) out.add(candidate)
             }
