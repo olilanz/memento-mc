@@ -46,6 +46,8 @@ object Memento : ModInitializer {
             initialObserver.attach(server)
             scheduler.attach(server)
             dayObserver.attach(server)
+
+            // Visualization is application-level and event-driven.
             StoneVisualizationEngine.attach(server)
 
             StoneTopologyHooks.onServerStarted(server)
@@ -53,15 +55,16 @@ object Memento : ModInitializer {
             // Some stones may already be persisted as MATURED. Startup reconciliation may therefore be a no-op.
             // Reconcile AFTER StoneTopology is attached to ensure renewal batches exist for already-matured stones.
             WitherstoneRenewalBridge.reconcileAfterStoneTopologyAttached(reason = "startup_post_attach")
-
         })
 
         ServerLifecycleEvents.SERVER_STOPPING.register(ServerLifecycleEvents.ServerStopping {
             scheduler.detach()
             initialObserver.detach()
             dayObserver.detach()
-            StoneVisualizationEngine.detach()
             WitherstoneRenewalBridge.detach()
+
+            StoneVisualizationEngine.detach()
+
             RenewalRegenerationBridge.clear()
             RenewalTrackerLogging.detach()
             StoneTopologyHooks.onServerStopping()
