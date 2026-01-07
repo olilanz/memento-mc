@@ -3,26 +3,26 @@ package ch.oliverlanz.memento.application.visualization
 import ch.oliverlanz.memento.domain.events.StoneCreated
 import ch.oliverlanz.memento.domain.events.StoneDomainEvents
 import ch.oliverlanz.memento.domain.events.StoneKind
+import net.minecraft.particle.ParticleEffect
 import net.minecraft.particle.ParticleTypes
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld
-import net.minecraft.util.math.Vec3d
+import net.minecraft.util.math.BlockPos
+import net.minecraft.util.math.ChunkPos
+import net.minecraft.world.Heightmap
+import kotlin.random.Random
 
 /**
- * Minimal, server-side visualization engine.
+ * Visualization is an application-layer concern.
  *
- * Slice 1 responsibilities:
- * - Subscribe to stone creation events
- * - Emit a short particle cue at the stone position
+ * Current slice:
+ * - React to StoneCreated (known-good trigger)
+ * - Always emit particles at stone position (UX + debug anchor)
+ * - Additionally emit surface particles in the stone's chunk
  *
- * This intentionally does NOT:
- * - enumerate chunks
- * - track long-lived visual state
- * - interpret influence topology
- *
- * Parameterized particles (e.g. DustParticleEffect) are
- * intentionally avoided here to ensure compile stability
- * on MC 1.21.10 Yarn. Visual refinement comes later.
+ * No topology queries.
+ * No lifecycle awareness.
+ * One-shot emission only.
  */
 object StoneVisualizationEngine {
 
@@ -42,28 +42,124 @@ object StoneVisualizationEngine {
         val server = this.server ?: return
         val world: ServerWorld = server.getWorld(event.dimension) ?: return
 
-        val pos: Vec3d = event.position
-            .toCenterPos()
-            .add(0.0, 0.8, 0.0) // slightly above the block
+        // ------------------------------------------------------------
+        // Anchor visualization at stone position (slow, intentional)
+        // ------------------------------------------------------------
+        spawnStoneAnchor(world, event)
 
-        val particle = when (event.kind) {
-            StoneKind.LORESTONE -> ParticleTypes.HAPPY_VILLAGER
-            StoneKind.WITHERSTONE -> ParticleTypes.SMOKE
+        // ------------------------------------------------------------
+        // Chunk enumeration (single chunk derived from stone position)
+        // ------------------------------------------------------------
+        val chunkPos = ChunkPos(event.position)
+
+        // ------------------------------------------------------------
+        // Surface enumeration + random sampling (scaffold)
+        // ------------------------------------------------------------
+        val surfacePositions = enumerateChunkSurface(world, chunkPos)
+        val sampled = sample(surfacePositions, sampleCount = 64, rng = Random.Default)
+
+        // ------------------------------------------------------------
+        // One-shot surface emission (subtle, secondary)
+        // ------------------------------------------------------------
+        val surfaceParticle: ParticleEffect =
+            when (event.kind) {
+                StoneKind.WITHERSTONE -> ParticleTypes.SMOKE
+                StoneKind.LORESTONE -> ParticleTypes.HAPPY_VILLAGER
+            }
+
+        emitSurface(world, surfaceParticle, sampled)
+    }
+
+    private fun spawnStoneAnchor(world: ServerWorld, event: StoneCreated) {
+        when (event.kind) {
+            StoneKind.WITHERSTONE -> {
+                // Slow, creeping, ominous
+                world.spawnParticles(
+                    ParticleTypes.SMOKE,
+                    false,
+                    true,
+                    event.position.x + 0.5,
+                    event.position.y + 1.2,
+                    event.position.z + 0.5,
+                    6,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.002
+                )
+            }
+
+            StoneKind.LORESTONE -> {
+                // Calm, protective, stable
+                world.spawnParticles(
+                    ParticleTypes.HAPPY_VILLAGER,
+                    false,
+                    true,
+                    event.position.x + 0.5,
+                    event.position.y + 1.2,
+                    event.position.z + 0.5,
+                    8,
+                    0.15,
+                    0.15,
+                    0.15,
+                    0.001
+                )
+            }
         }
+    }
 
-        // Explicit overload required in MC 1.21.10 (Yarn)
-        world.spawnParticles(
-            particle,
-            false, // force
-            true,  // important
-            pos.x,
-            pos.y,
-            pos.z,
-            24,    // count
-            0.3,   // offsetX
-            0.3,   // offsetY
-            0.3,   // offsetZ
-            0.02   // speed
-        )
+    /**
+     * Enumerate surface positions using MOTION_BLOCKING_NO_LEAVES.
+     *
+     * This prefers ground over canopy and avoids floating visuals in forests.
+     */
+    private fun enumerateChunkSurface(world: ServerWorld, chunkPos: ChunkPos): List<BlockPos> {
+        val baseX = chunkPos.x shl 4
+        val baseZ = chunkPos.z shl 4
+
+        val out = ArrayList<BlockPos>(16 * 16)
+        for (dx in 0 until 16) {
+            val x = baseX + dx
+            for (dz in 0 until 16) {
+                val z = baseZ + dz
+                val topY = world.getTopY(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, x, z)
+                out.add(BlockPos(x, topY, z))
+            }
+        }
+        return out
+    }
+
+    /**
+     * Random sampling with replacement (duplicates allowed).
+     * Intentional scaffold for later refinement.
+     */
+    private fun <T> sample(source: List<T>, sampleCount: Int, rng: Random): List<T> {
+        if (source.isEmpty() || sampleCount <= 0) return emptyList()
+        val out = ArrayList<T>(sampleCount)
+        repeat(sampleCount) {
+            out.add(source[rng.nextInt(source.size)])
+        }
+        return out
+    }
+
+    /**
+     * Emit particles slightly above surface blocks to avoid culling.
+     */
+    private fun emitSurface(world: ServerWorld, particle: ParticleEffect, positions: List<BlockPos>) {
+        for (p in positions) {
+            world.spawnParticles(
+                particle,
+                false,
+                true,
+                p.x + 0.5,
+                p.y + 1.0,
+                p.z + 0.5,
+                1,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            )
+        }
     }
 }
