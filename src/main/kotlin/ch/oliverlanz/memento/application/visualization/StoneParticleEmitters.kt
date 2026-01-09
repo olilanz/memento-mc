@@ -23,7 +23,7 @@ internal object StoneParticleEmitters {
     /**
      * Current visualization behavior for a stone creation event:
      * - anchor at stone position
-     * - light dust on the surface of the stone's chunk
+     * - loud smoke on the surface of the stone's chunk (testing)
      *
      * NOTE: This intentionally ignores topology and influence radius for now.
      */
@@ -34,7 +34,7 @@ internal object StoneParticleEmitters {
         // Chunk enumeration (single chunk derived from stone position)
         val chunkPos = ChunkPos(stone.position)
 
-        // Surface dust
+        // Surface dust (intentionally noisy for validation)
         spawnChunkSurfaceDust(world, stone, chunkPos)
     }
 
@@ -90,13 +90,14 @@ internal object StoneParticleEmitters {
     private fun spawnChunkSurfaceDust(world: ServerWorld, stone: StoneView, chunkPos: ChunkPos) {
         val points = enumerateChunkSurface(world, chunkPos)
 
+        // Intentionally loud particles for testing / validation
         val particle: ParticleEffect = when (stone) {
-            is WitherstoneView -> ParticleTypes.SMOKE
-            is LorestoneView -> ParticleTypes.WAX_ON
-            else -> ParticleTypes.END_ROD
+            is WitherstoneView -> ParticleTypes.CAMPFIRE_COSY_SMOKE
+            is LorestoneView -> ParticleTypes.END_ROD
+            else -> ParticleTypes.CAMPFIRE_COSY_SMOKE
         }
 
-        // Keep it light: sample a handful of positions to avoid flooding.
+        // Keep it light-ish, but visible: sample a subset of surface points
         val random = Random(stone.position.asLong())
         val sample = if (points.size <= 32) points else points.shuffled(random).take(32)
 
@@ -106,11 +107,11 @@ internal object StoneParticleEmitters {
                 p.x + 0.5,
                 p.y + 1.0,
                 p.z + 0.5,
-                1,
-                0.0,
-                0.0,
-                0.0,
-                0.0
+                6,        // count (visible)
+                0.15,     // spread X
+                0.20,     // spread Y
+                0.15,     // spread Z
+                0.01      // speed
             )
         }
     }
