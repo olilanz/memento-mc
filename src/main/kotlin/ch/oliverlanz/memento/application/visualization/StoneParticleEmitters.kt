@@ -44,8 +44,6 @@ internal object StoneParticleEmitters {
                 // Active, slightly ominous
                 world.spawnParticles(
                     ParticleTypes.ASH,
-                    false,
-                    true,
                     stone.position.x + 0.5,
                     stone.position.y + 1.2,
                     stone.position.z + 0.5,
@@ -61,8 +59,6 @@ internal object StoneParticleEmitters {
                 // Calm, protective, stable
                 world.spawnParticles(
                     ParticleTypes.HAPPY_VILLAGER,
-                    false,
-                    true,
                     stone.position.x + 0.5,
                     stone.position.y + 1.2,
                     stone.position.z + 0.5,
@@ -78,8 +74,6 @@ internal object StoneParticleEmitters {
                 // Fallback: unknown stone types (future)
                 world.spawnParticles(
                     ParticleTypes.END_ROD,
-                    false,
-                    true,
                     stone.position.x + 0.5,
                     stone.position.y + 1.2,
                     stone.position.z + 0.5,
@@ -109,8 +103,6 @@ internal object StoneParticleEmitters {
         for (p in sample) {
             world.spawnParticles(
                 particle,
-                false,
-                true,
                 p.x + 0.5,
                 p.y + 1.0,
                 p.z + 0.5,
