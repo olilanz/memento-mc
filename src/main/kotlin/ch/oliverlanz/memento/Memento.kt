@@ -80,6 +80,9 @@ object Memento : ModInitializer {
 
             // Stone maturity work (day-index based)
             dayObserver.tick()
+
+            // Visualization (tick-driven)
+            StoneVisualizationEngine.tick()
         })
 
         // -----------------------------------------------------------------
