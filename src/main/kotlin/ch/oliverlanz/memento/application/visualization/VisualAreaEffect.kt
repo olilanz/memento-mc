@@ -1,6 +1,7 @@
 package ch.oliverlanz.memento.application.visualization
 
 import ch.oliverlanz.memento.domain.stones.StoneView
+import ch.oliverlanz.memento.application.time.GameClock
 import net.minecraft.server.world.ServerWorld
 
 /**
@@ -20,11 +21,14 @@ abstract class VisualAreaEffect(
     val stone: StoneView,
 ) {
     /**
-     * Perform one tick of visual work.
+     * Perform one clock-driven visual update.
+     *
+     * The clock is derived from the overworld by the application-level GameTimeTracker.
+     * Server ticks are transport only and must not leak into visualization behavior.
      *
      * @param world resolved world for the stone's dimension
-     * @param worldTime current world time (ticks) for that world
+     * @param clock current game-time snapshot (medium frequency)
      * @return true to keep the effect alive, false to terminate and remove it
      */
-    abstract fun tick(world: ServerWorld, worldTime: Long): Boolean
+    abstract fun tick(world: ServerWorld, clock: GameClock): Boolean
 }

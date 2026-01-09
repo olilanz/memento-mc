@@ -3,6 +3,8 @@ package ch.oliverlanz.memento.application.visualization
 import ch.oliverlanz.memento.domain.events.StoneCreated
 import ch.oliverlanz.memento.domain.events.StoneDomainEvents
 import ch.oliverlanz.memento.domain.stones.StoneView
+import ch.oliverlanz.memento.application.time.GameClock
+import ch.oliverlanz.memento.application.time.GameClockEvents
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld
 
@@ -33,6 +35,9 @@ object StoneVisualizationEngine {
 
         StoneDomainEvents.subscribeToStoneCreated(::onStoneCreated)
 
+        // High-frequency clock signal used to drive effect updates without leaking server ticks.
+        GameClockEvents.subscribe(::onClock)
+
         // NOTE: We intentionally do not react to witherstone transitions yet in this slice.
         // Wiring for additional event types can be added in the next iteration.
     }
@@ -40,16 +45,13 @@ object StoneVisualizationEngine {
     fun detach() {
         StoneDomainEvents.unsubscribeFromStoneCreated(::onStoneCreated)
 
+        GameClockEvents.unsubscribe(::onClock)
+
         effectsByStoneName.clear()
         this.server = null
     }
 
-    /**
-     * Tick all active effects once.
-     *
-     * Called from the server tick loop (END_SERVER_TICK).
-     */
-    fun tick() {
+    private fun onClock(clock: GameClock) {
         val server = this.server ?: return
         if (effectsByStoneName.isEmpty()) return
 
@@ -64,7 +66,7 @@ object StoneVisualizationEngine {
                 continue
             }
 
-            val keepAlive = effect.tick(world, world.time)
+            val keepAlive = effect.tick(world, clock)
             if (!keepAlive) {
                 it.remove()
             }

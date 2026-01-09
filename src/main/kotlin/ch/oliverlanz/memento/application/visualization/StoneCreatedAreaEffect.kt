@@ -1,6 +1,7 @@
 package ch.oliverlanz.memento.application.visualization
 
 import ch.oliverlanz.memento.domain.stones.StoneView
+import ch.oliverlanz.memento.application.time.GameClock
 import net.minecraft.server.world.ServerWorld
 
 /**
@@ -16,7 +17,7 @@ class StoneCreatedAreaEffect(
 
     private var emitted: Boolean = false
 
-    override fun tick(world: ServerWorld, worldTime: Long): Boolean {
+    override fun tick(world: ServerWorld, clock: GameClock): Boolean {
         if (emitted) return false
         emitted = true
 

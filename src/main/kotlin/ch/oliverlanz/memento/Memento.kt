@@ -3,7 +3,8 @@ package ch.oliverlanz.memento
 import ch.oliverlanz.memento.application.renewal.ChunkLoadScheduler
 import ch.oliverlanz.memento.application.renewal.RenewalInitialObserver
 import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge
-import ch.oliverlanz.memento.application.stone.OverworldDayObserver
+import ch.oliverlanz.memento.application.stone.StoneMaturityTimeBridge
+import ch.oliverlanz.memento.application.time.GameTimeTracker
 import ch.oliverlanz.memento.application.visualization.StoneVisualizationEngine
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks
@@ -27,7 +28,7 @@ object Memento : ModInitializer {
 
         val scheduler = ChunkLoadScheduler(chunksPerTick = 1)
         val initialObserver = RenewalInitialObserver()
-        val dayObserver = OverworldDayObserver()
+        val timeTracker = GameTimeTracker(clockEmitEveryTicks = 10)
 
         RenewalTracker.subscribe(scheduler::onRenewalEvent)
         RenewalTracker.subscribe(initialObserver::onRenewalEvent)
@@ -45,7 +46,10 @@ object Memento : ModInitializer {
 
             initialObserver.attach(server)
             scheduler.attach(server)
-            dayObserver.attach(server)
+            timeTracker.attach(server)
+
+            // Time-driven stone maturity (semantic day events)
+            StoneMaturityTimeBridge.attach()
 
             // Visualization is application-level and event-driven.
             StoneVisualizationEngine.attach(server)
@@ -60,7 +64,8 @@ object Memento : ModInitializer {
         ServerLifecycleEvents.SERVER_STOPPING.register(ServerLifecycleEvents.ServerStopping {
             scheduler.detach()
             initialObserver.detach()
-            dayObserver.detach()
+            StoneMaturityTimeBridge.detach()
+            timeTracker.detach()
             WitherstoneRenewalBridge.detach()
 
             StoneVisualizationEngine.detach()
@@ -78,11 +83,8 @@ object Memento : ModInitializer {
             // Renewal work (paced)
             scheduler.tick()
 
-            // Stone maturity work (day-index based)
-            dayObserver.tick()
-
-            // Visualization (tick-driven)
-            StoneVisualizationEngine.tick()
+            // Time tracking (drives semantic events + application clock)
+            timeTracker.tick()
         })
 
         // -----------------------------------------------------------------
