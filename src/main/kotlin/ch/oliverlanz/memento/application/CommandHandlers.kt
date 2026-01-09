@@ -188,7 +188,8 @@ object CommandHandlers {
             return null
         }
 
-        return hit.blockPos.up()
+        val blockHit = hit as net.minecraft.util.hit.BlockHitResult
+        return blockHit.blockPos.up()
     }
 
     private fun formatStoneLine(stone: Stone): String =
