@@ -2,68 +2,97 @@ package ch.oliverlanz.memento.application.visualization
 
 import ch.oliverlanz.memento.domain.events.StoneCreated
 import ch.oliverlanz.memento.domain.events.StoneDomainEvents
-import ch.oliverlanz.memento.domain.events.StoneKind
-import net.minecraft.particle.ParticleTypes
+import ch.oliverlanz.memento.domain.stones.StoneView
+import ch.oliverlanz.memento.application.time.GameClock
+import ch.oliverlanz.memento.application.time.GameClockEvents
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld
-import net.minecraft.util.math.Vec3d
+import org.slf4j.LoggerFactory
 
 /**
- * Minimal, server-side visualization engine.
+ * Application-level visualization host.
  *
- * Slice 1 responsibilities:
- * - Subscribe to stone creation events
- * - Emit a short particle cue at the stone position
+ * This engine is intentionally not a domain component.
+ * It listens to domain / operator events and maintains an in-memory set of
+ * visual projections (effects) that are ticked over time.
  *
- * This intentionally does NOT:
- * - enumerate chunks
- * - track long-lived visual state
- * - interpret influence topology
- *
- * Parameterized particles (e.g. DustParticleEffect) are
- * intentionally avoided here to ensure compile stability
- * on MC 1.21.10 Yarn. Visual refinement comes later.
+ * Effects are ephemeral: they are not persisted and do not survive restarts.
+ * They are expected to be rebuilt through regular startup reconciliation and events.
  */
 object StoneVisualizationEngine {
 
+    private val log = LoggerFactory.getLogger(StoneVisualizationEngine::class.java)
+
     private var server: MinecraftServer? = null
+
+    /**
+     * Active effects keyed by stone identity.
+     *
+     * For now we keep at most one effect per stone name, replacing on new events.
+     * (Composition can be introduced inside a single effect later if needed.)
+     */
+    private val effectsByStoneName: MutableMap<String, VisualAreaEffect> = LinkedHashMap()
 
     fun attach(server: MinecraftServer) {
         this.server = server
+
         StoneDomainEvents.subscribeToStoneCreated(::onStoneCreated)
+
+        // High-frequency clock signal used to drive effect updates without leaking server ticks.
+        GameClockEvents.subscribe(::onClock)
+
+        // NOTE: We intentionally do not react to witherstone transitions yet in this slice.
+        // Wiring for additional event types can be added in the next iteration.
     }
 
     fun detach() {
         StoneDomainEvents.unsubscribeFromStoneCreated(::onStoneCreated)
+
+        GameClockEvents.unsubscribe(::onClock)
+
+        effectsByStoneName.clear()
         this.server = null
     }
 
-    private fun onStoneCreated(event: StoneCreated) {
+    private fun onClock(clock: GameClock) {
         val server = this.server ?: return
-        val world: ServerWorld = server.getWorld(event.dimension) ?: return
+        if (effectsByStoneName.isEmpty()) return
 
-        val pos: Vec3d = event.position
-            .toCenterPos()
-            .add(0.0, 0.8, 0.0) // slightly above the block
+        val it = effectsByStoneName.entries.iterator()
+        while (it.hasNext()) {
+            val entry = it.next()
+            val effect = entry.value
 
-        val particle = when (event.kind) {
-            StoneKind.LORESTONE -> ParticleTypes.HAPPY_VILLAGER
-            StoneKind.WITHERSTONE -> ParticleTypes.SMOKE
+            val world: ServerWorld = server.getWorld(effect.stone.dimension) ?: run {
+                // If the world is not available, terminate the effect to avoid leaks.
+                log.debug(
+                    "[viz] World not available for stone='{}' dim='{}' - terminating effect",
+                    effect.stone.name,
+                    effect.stone.dimension.value
+                )
+                it.remove()
+                continue
+            }
+
+            val keepAlive = effect.tick(world, clock)
+            if (!keepAlive) {
+                it.remove()
+            }
         }
+    }
 
-        // Explicit overload required in MC 1.21.10 (Yarn)
-        world.spawnParticles(
-            particle,
-            false, // force
-            true,  // important
-            pos.x,
-            pos.y,
-            pos.z,
-            24,    // count
-            0.3,   // offsetX
-            0.3,   // offsetY
-            0.3,   // offsetZ
-            0.02   // speed
+    private fun onStoneCreated(event: StoneCreated) {
+        // Replace any existing effect for this stone.
+        log.debug(
+            "[viz] StoneCreated received for stone='{}' dim='{}' pos={} - registering one-shot effect",
+            event.stone.name,
+            event.stone.dimension.value,
+            event.stone.position
         )
+        registerOrReplace(event.stone, StoneCreatedAreaEffect(event.stone))
+    }
+
+    private fun registerOrReplace(stone: StoneView, effect: VisualAreaEffect) {
+        effectsByStoneName[stone.name] = effect
     }
 }

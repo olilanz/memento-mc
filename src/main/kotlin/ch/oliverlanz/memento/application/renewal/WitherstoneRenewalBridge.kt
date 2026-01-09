@@ -49,14 +49,14 @@ object WitherstoneRenewalBridge {
         if (e.to != WitherstoneState.MATURED) return
 
         val applied = StoneTopology.reconcileRenewalIntentForMaturedWitherstone(
-            stoneName = e.stoneName,
+            stoneName = e.stone.name,
             reason = "transition_${e.trigger}",
         )
 
         if (applied) {
             log.info(
                 "[BRIDGE] matured reconciliation applied witherstone='{}' trigger={}",
-                e.stoneName,
+                e.stone.name,
                 e.trigger,
             )
         }

@@ -8,6 +8,8 @@ import ch.oliverlanz.memento.domain.stones.Witherstone
 import net.minecraft.server.command.ServerCommandSource
 import net.minecraft.text.Text
 import net.minecraft.util.Formatting
+import net.minecraft.util.hit.HitResult
+import net.minecraft.util.math.BlockPos
 import org.slf4j.LoggerFactory
 
 /**
@@ -65,7 +67,8 @@ object CommandHandlers {
         log.info("[CMD] addWitherstone name='{}' radius={} daysToMaturity={} by={}", name, radius, daysToMaturity, source.name)
         val player = source.playerOrThrow
         val dim = source.world.registryKey
-        val pos = player.blockPos
+
+        val pos = resolveTargetBlockOrFail(source) ?: return 0
 
         StoneTopology.addOrReplaceWitherstone(
             name = name,
@@ -87,7 +90,8 @@ object CommandHandlers {
         log.info("[CMD] addLorestone name='{}' radius={} by={}", name, radius, source.name)
         val player = source.playerOrThrow
         val dim = source.world.registryKey
-        val pos = player.blockPos
+
+        val pos = resolveTargetBlockOrFail(source) ?: return 0
 
         StoneTopology.addOrReplaceLorestone(
             name = name,
@@ -169,6 +173,23 @@ object CommandHandlers {
 
         source.sendFeedback({ Text.literal("Updated daysToMaturity for '$name' to $value.").formatted(Formatting.GREEN) }, false)
         return 1
+    }
+
+    private fun resolveTargetBlockOrFail(source: ServerCommandSource): BlockPos? {
+        val player = source.playerOrThrow
+        val hit = player.raycast(
+            5.0,   // reach
+            0.0f,  // tick delta
+            false
+        )
+
+        if (hit.type != HitResult.Type.BLOCK) {
+            source.sendError(Text.literal("No block in reach. Look at a block to place the stone."))
+            return null
+        }
+
+        val blockHit = hit as net.minecraft.util.hit.BlockHitResult
+        return blockHit.blockPos.up()
     }
 
     private fun formatStoneLine(stone: Stone): String =
