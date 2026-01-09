@@ -4,7 +4,6 @@ import ch.oliverlanz.memento.domain.events.GameDayAdvanced
 import ch.oliverlanz.memento.domain.events.GameTimeDomainEvents
 import ch.oliverlanz.memento.infrastructure.MementoConstants
 import net.minecraft.server.MinecraftServer
-import org.slf4j.LoggerFactory
 
 /**
  * Interprets overworld time and emits:
@@ -18,8 +17,6 @@ class GameTimeTracker(
     /** Emit [GameClock] updates every N server ticks. Default: 10 (~2/s). */
     private val clockEmitEveryTicks: Int = 10,
 ) {
-
-    private val log = LoggerFactory.getLogger(GameTimeTracker::class.java)
 
     private var server: MinecraftServer? = null
 
@@ -59,8 +56,6 @@ class GameTimeTracker(
         } else {
             val deltaDays = (mementoDayIndex - lastMementoDay).toInt()
             if (deltaDays > 0) {
-
-                log.info("[time] Game day advanced: mementoDayIndex={} (deltaDays={})", mementoDayIndex, deltaDays)
 
                 lastObservedMementoDay = mementoDayIndex
                 GameTimeDomainEvents.publish(GameDayAdvanced(deltaDays = deltaDays, mementoDayIndex = mementoDayIndex))

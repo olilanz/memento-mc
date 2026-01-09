@@ -7,6 +7,7 @@ import ch.oliverlanz.memento.application.time.GameClock
 import ch.oliverlanz.memento.application.time.GameClockEvents
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld
+import org.slf4j.LoggerFactory
 
 /**
  * Application-level visualization host.
@@ -19,6 +20,8 @@ import net.minecraft.server.world.ServerWorld
  * They are expected to be rebuilt through regular startup reconciliation and events.
  */
 object StoneVisualizationEngine {
+
+    private val log = LoggerFactory.getLogger(StoneVisualizationEngine::class.java)
 
     private var server: MinecraftServer? = null
 
@@ -62,6 +65,11 @@ object StoneVisualizationEngine {
 
             val world: ServerWorld = server.getWorld(effect.stone.dimension) ?: run {
                 // If the world is not available, terminate the effect to avoid leaks.
+                log.debug(
+                    "[viz] World not available for stone='{}' dim='{}' - terminating effect",
+                    effect.stone.name,
+                    effect.stone.dimension.value
+                )
                 it.remove()
                 continue
             }
@@ -75,6 +83,12 @@ object StoneVisualizationEngine {
 
     private fun onStoneCreated(event: StoneCreated) {
         // Replace any existing effect for this stone.
+        log.debug(
+            "[viz] StoneCreated received for stone='{}' dim='{}' pos={} - registering one-shot effect",
+            event.stone.name,
+            event.stone.dimension.value,
+            event.stone.position
+        )
         registerOrReplace(event.stone, StoneCreatedAreaEffect(event.stone))
     }
 
