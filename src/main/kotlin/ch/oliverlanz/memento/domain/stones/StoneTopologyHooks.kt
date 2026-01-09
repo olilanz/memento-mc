@@ -95,11 +95,12 @@ object StoneTopologyHooks {
     }
 
     private fun logTransition(e: WitherstoneStateTransition) {
-        val pos = "(${e.position.x},${e.position.y},${e.position.z})"
+        val stone = e.stone
+        val pos = "(${stone.position.x},${stone.position.y},${stone.position.z})"
         log.info(
             "[STONE] witherstone='{}' dim='{}' pos={} {} -> {} trigger={}",
-            e.stoneName,
-            e.dimension.value.toString(),
+            stone.name,
+            stone.dimension.value.toString(),
             pos,
             e.from.name,
             e.to.name,
@@ -111,14 +112,14 @@ object StoneTopologyHooks {
             WitherstoneState.MATURED -> {
                 MementoDebug.info(
                     serverRef,
-                    "Witherstone '${e.stoneName}' has matured. Leave the area to allow renewal."
+                    "Witherstone '${stone.name}' has matured. Leave the area to allow renewal."
                 )
             }
 
             WitherstoneState.CONSUMED -> {
                 MementoDebug.info(
                     serverRef,
-                    "Witherstone '${e.stoneName}' has completed renewal."
+                    "Witherstone '${stone.name}' has completed renewal."
                 )
             }
 
