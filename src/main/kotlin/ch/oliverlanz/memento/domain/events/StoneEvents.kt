@@ -1,37 +1,14 @@
 package ch.oliverlanz.memento.domain.events
 
+import ch.oliverlanz.memento.domain.stones.StoneView
 import ch.oliverlanz.memento.domain.stones.WitherstoneState
-import net.minecraft.registry.RegistryKey
-import net.minecraft.util.math.BlockPos
-import net.minecraft.world.World
-
-/**
- * High-level stone kind used for cross-cutting concerns such as visualization.
- *
- * Domain semantics:
- * - Lorestone protects land (higher precedence).
- * - Witherstone forgets land once matured.
- */
-enum class StoneKind {
-    LORESTONE,
-    WITHERSTONE,
-}
+import ch.oliverlanz.memento.domain.stones.WitherstoneView
 
 /**
  * Canonical structured event emitted when a stone is created (first time a name appears).
- *
- * This is intentionally separate from state transitions:
- * - Creation is a one-time fact.
- * - Lifecycle changes are state transitions.
- *
- * The domain does not decide what "creation means" visually; it only emits this fact.
  */
 data class StoneCreated(
-    val stoneName: String,
-    val kind: StoneKind,
-    val dimension: RegistryKey<World>,
-    val position: BlockPos,
-    val radius: Int,
+    val stone: StoneView,
 )
 
 /**
@@ -41,9 +18,7 @@ data class StoneCreated(
  * Domain code does not log; logging is attached by subscribers.
  */
 data class WitherstoneStateTransition(
-    val stoneName: String,
-    val dimension: RegistryKey<World>,
-    val position: BlockPos,
+    val stone: WitherstoneView,
     val from: WitherstoneState,
     val to: WitherstoneState,
     val trigger: WitherstoneTransitionTrigger,

@@ -2,7 +2,6 @@ package ch.oliverlanz.memento.domain.stones
 
 import ch.oliverlanz.memento.domain.events.StoneDomainEvents
 import ch.oliverlanz.memento.domain.events.StoneCreated
-import ch.oliverlanz.memento.domain.events.StoneKind
 import ch.oliverlanz.memento.domain.events.WitherstoneStateTransition
 import ch.oliverlanz.memento.domain.events.WitherstoneTransitionTrigger
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
@@ -121,17 +120,13 @@ object StoneTopology {
 
         stones[name] = replaced
 
-if (wasCreated) {
-    StoneDomainEvents.publish(
-        StoneCreated(
-            stoneName = replaced.name,
-            kind = StoneKind.WITHERSTONE,
-            dimension = replaced.dimension,
-            position = replaced.position,
-            radius = replaced.radius,
-        )
-    )
-}
+        if (wasCreated) {
+            StoneDomainEvents.publish(
+                StoneCreated(
+                    stone = replaced,
+                )
+            )
+        }
 
         // Operator may force maturity by setting daysToMaturity <= 0.
         evaluate(trigger = trigger)
@@ -159,18 +154,14 @@ if (wasCreated) {
 
         stones[name] = Lorestone(name = name, dimension = dimension, position = position).also { it.radius = radius }
 
-val createdLore = stones[name] as? Lorestone
-if (wasCreated && createdLore != null) {
-    StoneDomainEvents.publish(
-        StoneCreated(
-            stoneName = createdLore.name,
-            kind = StoneKind.LORESTONE,
-            dimension = createdLore.dimension,
-            position = createdLore.position,
-            radius = createdLore.radius,
-        )
-    )
-}
+        val createdLore = stones[name] as? Lorestone
+        if (wasCreated && createdLore != null) {
+            StoneDomainEvents.publish(
+                StoneCreated(
+                    stone = createdLore,
+                )
+            )
+        }
         persist()
 
         // Lorestone applies immediately: derived renewal intent must reflect the updated topology.
@@ -411,9 +402,7 @@ if (wasCreated && createdLore != null) {
 
         StoneDomainEvents.publish(
             WitherstoneStateTransition(
-                stoneName = stone.name,
-                dimension = stone.dimension,
-                position = stone.position,
+                stone = stone,
                 from = from,
                 to = to,
                 trigger = trigger,
