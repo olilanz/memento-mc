@@ -7,27 +7,42 @@ import net.minecraft.server.world.ServerWorld
 /**
  * Base type for long-lived visualization projections.
  *
- * Visualization effects are:
- * - created from domain / operator events
- * - purely in-memory (not persisted)
- * - ticked by the VisualizationEngine
- *
- * The effect decides:
- * - where to sample (directly or via helpers)
- * - what to emit
- * - when to terminate (by returning false from tick)
+ * Owns optional lifecycle (finite or infinite).
+ * Concrete effects decide behavior by implementing tick().
  */
 abstract class VisualAreaEffect(
     val stone: StoneView,
 ) {
+
+    /**
+     * Remaining lifetime in ticks.
+     *
+     * null  -> infinite lifetime
+     * >= 0  -> finite lifetime
+     */
+    protected var remainingTicks: Long? = null
+
+    /**
+     * Configure a finite lifetime for this effect.
+     */
+    protected fun withLifetime(ticks: Long) {
+        remainingTicks = ticks
+    }
+
+    /**
+     * Advances lifetime by one tick.
+     *
+     * @return true if the effect should continue, false if expired
+     */
+    protected fun advanceLifetime(): Boolean {
+        val rt = remainingTicks ?: return true
+        remainingTicks = rt - 1
+        return remainingTicks!! >= 0
+    }
+
     /**
      * Perform one clock-driven visual update.
      *
-     * The clock is derived from the overworld by the application-level GameTimeTracker.
-     * Server ticks are transport only and must not leak into visualization behavior.
-     *
-     * @param world resolved world for the stone's dimension
-     * @param clock current game-time snapshot (medium frequency)
      * @return true to keep the effect alive, false to terminate and remove it
      */
     abstract fun tick(world: ServerWorld, clock: GameClock): Boolean
