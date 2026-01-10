@@ -1,9 +1,10 @@
 package ch.oliverlanz.memento.application.renewal
 
 import ch.oliverlanz.memento.domain.events.StoneDomainEvents
-import ch.oliverlanz.memento.domain.events.WitherstoneStateTransition
+import ch.oliverlanz.memento.domain.events.StoneLifecycleState
+import ch.oliverlanz.memento.domain.events.StoneLifecycleTransition
 import ch.oliverlanz.memento.domain.stones.StoneTopology
-import ch.oliverlanz.memento.domain.stones.WitherstoneState
+import ch.oliverlanz.memento.domain.stones.WitherstoneView
 import org.slf4j.LoggerFactory
 
 /**
@@ -24,28 +25,29 @@ object WitherstoneRenewalBridge {
 
     fun attach() {
         if (attached) return
-        StoneDomainEvents.subscribeToWitherstoneTransitions(::onWitherstoneTransition)
+        StoneDomainEvents.subscribeToLifecycleTransitions(::onLifecycleTransition)
         attached = true
     }
 
     fun detach() {
         if (!attached) return
-        StoneDomainEvents.unsubscribeFromWitherstoneTransitions(::onWitherstoneTransition)
+        StoneDomainEvents.unsubscribeFromLifecycleTransitions(::onLifecycleTransition)
         attached = false
     }
 
-    private fun onWitherstoneTransition(e: WitherstoneStateTransition) {
-        if (e.to != WitherstoneState.MATURED) return
+    private fun onLifecycleTransition(e: StoneLifecycleTransition) {
+        val witherstone = e.stone as? WitherstoneView ?: return
+        if (e.to != StoneLifecycleState.MATURED) return
 
         val applied = StoneTopology.reconcileRenewalIntentForMaturedWitherstone(
-            stoneName = e.stone.name,
+            stoneName = witherstone.name,
             reason = "transition_${e.trigger}",
         )
 
         if (applied) {
             log.info(
                 "[BRIDGE] matured reconciliation applied witherstone='{}' trigger={}",
-                e.stone.name,
+                witherstone.name,
                 e.trigger,
             )
         }

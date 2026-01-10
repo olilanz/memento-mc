@@ -5,6 +5,7 @@ import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrigger
 import net.minecraft.server.MinecraftServer
+import net.minecraft.world.chunk.ChunkStatus
 import org.slf4j.LoggerFactory
 
 /**
@@ -13,8 +14,8 @@ import org.slf4j.LoggerFactory
  * This is an observational convenience to seed unload-gate flags without waiting
  * for fresh unload events after restart.
  *
- * NOTE: We intentionally keep this conservative: we treat tracked chunks as 'loaded'
- * on startup unless we have explicit evidence otherwise.
+ * NOTE: This must not guess.
+ * We seed the unload gate using the server's actual loaded-chunk view without loading anything.
  */
 class RenewalInitialObserver {
 
@@ -29,7 +30,6 @@ class RenewalInitialObserver {
         attached = true
 
         applyStartupSnapshot()
-        RenewalTracker.resumeAfterStartup()
     }
 
     fun detach() {
@@ -58,10 +58,26 @@ class RenewalInitialObserver {
     }
 
     private fun applySnapshotForSnapshot(snap: RenewalTracker.RenewalBatchSnapshot) {
-        // Conservative: assume all tracked chunks are loaded at startup.
+        val s = server ?: return
+        val world = s.getWorld(snap.dimension)
+
+        // Seed using the server's *current* loaded-chunk view without loading anything.
+        // If the world is unavailable, fall back to "nothing loaded" (safe for renewal gating).
+        val loadedChunks = if (world == null) {
+            emptySet()
+        } else {
+            snap.chunks
+                .asSequence()
+                .filter { pos ->
+                    // create=false: do not load; only report if already present.
+                    world.chunkManager.getChunk(pos.x, pos.z, ChunkStatus.FULL, false) != null
+                }
+                .toSet()
+        }
+
         RenewalTracker.applyInitialSnapshot(
             batchName = snap.name,
-            loadedChunks = snap.chunks,
+            loadedChunks = loadedChunks,
             trigger = RenewalTrigger.INITIAL_SNAPSHOT
         )
     }

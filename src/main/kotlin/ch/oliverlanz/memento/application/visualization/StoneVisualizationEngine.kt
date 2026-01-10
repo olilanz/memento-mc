@@ -1,6 +1,7 @@
 package ch.oliverlanz.memento.application.visualization
 
-import ch.oliverlanz.memento.domain.events.StoneCreated
+import ch.oliverlanz.memento.domain.events.StoneLifecycleState
+import ch.oliverlanz.memento.domain.events.StoneLifecycleTransition
 import ch.oliverlanz.memento.domain.events.StoneDomainEvents
 import ch.oliverlanz.memento.domain.stones.StoneView
 import ch.oliverlanz.memento.domain.stones.WitherstoneView
@@ -22,25 +23,42 @@ class StoneVisualizationEngine(
     private val effectsByStoneName = mutableMapOf<String, VisualAreaEffect>()
 
     init {
-        StoneDomainEvents.subscribeToStoneCreated(::onStoneCreated)
+        StoneDomainEvents.subscribeToLifecycleTransitions(::onLifecycleTransition)
         GameClockEvents.subscribe(::onTick)
     }
 
-    private fun onStoneCreated(event: StoneCreated) {
-        val effect = when (event.stone) {
-            is WitherstoneView -> WitherstoneCreatedEffect(event.stone)
-            is LorestoneView -> LorestoneCreatedEffect(event.stone)
-            else -> return
+    private fun onLifecycleTransition(event: StoneLifecycleTransition) {
+        when (event.to) {
+            StoneLifecycleState.PLACED -> {
+                val effect = when (event.stone) {
+                    is WitherstoneView -> WitherstoneCreatedEffect(event.stone)
+                    is LorestoneView -> LorestoneCreatedEffect(event.stone)
+                    else -> return
+                }
+
+                log.debug(
+                    "[viz] lifecycle PLACED received for stone='{}' dim='{}' pos={} - registering placement effect",
+                    event.stone.name,
+                    event.stone.dimension.value,
+                    event.stone.position
+                )
+
+                registerOrReplace(event.stone, effect)
+            }
+
+            StoneLifecycleState.CONSUMED -> {
+                // Terminal teardown: ensure we do not keep emitting particles after a stone ceased to exist.
+                val removed = effectsByStoneName.remove(event.stone.name)
+                if (removed != null) {
+                    log.debug(
+                        "[viz] lifecycle CONSUMED received for stone='{}' - removing active effect",
+                        event.stone.name,
+                    )
+                }
+            }
+
+            else -> Unit
         }
-
-        log.debug(
-            "[viz] StoneCreated received for stone='{}' dim='{}' pos={} - registering creation effect",
-            event.stone.name,
-            event.stone.dimension.value,
-            event.stone.position
-        )
-
-        registerOrReplace(event.stone, effect)
     }
 
     private fun onTick(clock: GameClock) {
