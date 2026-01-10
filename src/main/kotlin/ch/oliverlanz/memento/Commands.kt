@@ -60,7 +60,7 @@ object Commands {
                                     MementoConstants.DEFAULT_DAYS_TO_MATURITY
                                 )
                             }
-                            .then(argument("radius", IntegerArgumentType.integer(1, 10))
+                            .then(argument("radius", IntegerArgumentType.integer(0, 10))
                                 .executes { ctx ->
                                     CommandHandlers.addWitherstone(
                                         ctx.source,
@@ -93,7 +93,7 @@ object Commands {
                                     MementoConstants.DEFAULT_CHUNKS_RADIUS
                                 )
                             }
-                            .then(argument("radius", IntegerArgumentType.integer(1, 10))
+                            .then(argument("radius", IntegerArgumentType.integer(0, 10))
                                 .executes { ctx ->
                                     CommandHandlers.addLorestone(
                                         ctx.source,
@@ -135,7 +135,7 @@ object Commands {
                     .then(literal("witherstone")
                         .then(argument("name", StringArgumentType.word())
                             .then(literal("radius")
-                                .then(argument("value", IntegerArgumentType.integer(1, 10))
+                                .then(argument("value", IntegerArgumentType.integer(0, 10))
                                     .executes { ctx ->
                                         CommandHandlers.setRadius(
                                             ctx.source,
@@ -163,7 +163,7 @@ object Commands {
                     .then(literal("lorestone")
                         .then(argument("name", StringArgumentType.word())
                             .then(literal("radius")
-                                .then(argument("value", IntegerArgumentType.integer(1, 10))
+                                .then(argument("value", IntegerArgumentType.integer(0, 10))
                                     .executes { ctx ->
                                         CommandHandlers.setRadius(
                                             ctx.source,
