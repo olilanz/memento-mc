@@ -188,17 +188,8 @@ object CommandHandlers {
 
     private fun resolveTargetBlockOrFail(source: ServerCommandSource): BlockPos? {
         val player = source.playerOrThrow
-
-        // Prefer the player's configured interaction range over hardcoded reach.
-        // Fallback is intentionally generous for operator workflows.
-        val reach = try {
-            player.getAttributeValue(EntityAttributes.PLAYER_BLOCK_INTERACTION_RANGE)
-        } catch (_: Throwable) {
-            15.0
-        }.coerceAtLeast(5.0)
-
         val hit = player.raycast(
-            reach,
+            15.0, // max distance
             0.0f,  // tick delta
             false
         )
