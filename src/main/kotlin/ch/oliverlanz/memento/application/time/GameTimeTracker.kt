@@ -41,9 +41,10 @@ class GameTimeTracker {
         lastMementoDayIndex = mementoDayIndex
 
         log.info(
-            "[TIME] attached timeOfDay={} dayTime={} mementoDayIndex={}",
+            "[TIME] attached worldTicks={} dayTicks={} checkpointTick={} mementoDayIndex={}",
             timeOfDay,
             timeOfDay % MementoConstants.OVERWORLD_DAY_TICKS,
+            MementoConstants.RENEWAL_CHECKPOINT_TICK,
             mementoDayIndex
         )
     }
@@ -93,12 +94,13 @@ class GameTimeTracker {
         val deltaDays = (mementoDayIndex - lastDay).toInt()
         if (deltaDays > 0) {
             log.info(
-                "[TIME] memento day advanced previousDay={} currentDay={} deltaDays={} timeOfDay={} dayTime={}",
+                "[TIME] day advanced previousDay={} currentDay={} deltaDays={} worldTicks={} dayTicks={} checkpointTick={}",
                 lastDay,
                 mementoDayIndex,
                 deltaDays,
                 timeOfDay,
-                dayTime
+                dayTime,
+                MementoConstants.RENEWAL_CHECKPOINT_TICK
             )
 
             // Emit one semantic day event per crossed day to preserve domain step semantics.
