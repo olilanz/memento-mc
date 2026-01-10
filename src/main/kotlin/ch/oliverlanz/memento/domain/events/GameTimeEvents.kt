@@ -33,7 +33,13 @@ object GameTimeDomainEvents {
         dayAdvancedListeners.remove(listener)
     }
 
-    internal fun publish(event: GameDayAdvanced) {
+    /**
+     * Publish a semantic day advancement event.
+     *
+     * This is intentionally the ONLY publishing surface.
+     * Domain code must not emit time events.
+     */
+    fun publishDayAdvanced(event: GameDayAdvanced) {
         val snapshot = dayAdvancedListeners.toList()
         for (l in snapshot) l(event)
     }
