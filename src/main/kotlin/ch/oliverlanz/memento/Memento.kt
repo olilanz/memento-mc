@@ -57,21 +57,28 @@ object Memento : ModInitializer {
 
         // Attach server-scoped components.
         ServerLifecycleEvents.SERVER_STARTED.register { server: MinecraftServer ->
-            StoneTopologyHooks.onServerStarted(server)
+            // ------------------------------------------------------------
+            // Wiring order matters.
+            // All observers must be attached BEFORE any domain activity can emit events.
+            // Startup must not be a separate semantic code path.
+            // ------------------------------------------------------------
 
-            // Application wiring (no startup-only code paths).
-            WitherstoneRenewalBridge.attach()
-
-            // Drive stone maturity from semantic day events.
-            StoneMaturityTimeBridge.attach()
-
-            // Renewal: logging + startup seeding + paced execution.
+            // Renewal: logging + observational seeding + paced execution.
             RenewalTrackerLogging.attachOnce()
             renewalInitialObserver = RenewalInitialObserver().also { it.attach(server) }
             chunkLoadScheduler = ChunkLoadScheduler(chunksPerTick = 1).also { it.attach(server) }
 
             // Fan out tracker events.
             RenewalTracker.subscribe(renewalEventListener)
+
+            // Application wiring that reacts to normal domain events.
+            WitherstoneRenewalBridge.attach()
+
+            // Domain startup (loading stones must behave like normal creation).
+            StoneTopologyHooks.onServerStarted(server)
+
+            // Drive stone maturity from semantic day events.
+            StoneMaturityTimeBridge.attach()
 
             gameTimeTracker.attach(server)
             visualizationEngine = StoneVisualizationEngine(server)
