@@ -46,12 +46,16 @@ class GameTimeTracker {
         if (lastIndex != null) {
             val deltaDays = (checkpointIndex - lastIndex).toInt()
             if (deltaDays > 0) {
-                GameTimeDomainEvents.publish(
-                    GameDayAdvanced(
-                        deltaDays = deltaDays,
-                        mementoDayIndex = checkpointIndex
+                // Emit one semantic day event per crossed checkpoint.
+                // This keeps stone maturity semantics stable even when time jumps (e.g., /time add 48000).
+                for (i in 1..deltaDays) {
+                    GameTimeDomainEvents.publish(
+                        GameDayAdvanced(
+                            deltaDays = 1,
+                            mementoDayIndex = lastIndex + i
+                        )
                     )
-                )
+                }
             }
         }
 
