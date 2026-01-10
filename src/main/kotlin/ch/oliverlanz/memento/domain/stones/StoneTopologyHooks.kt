@@ -1,8 +1,9 @@
 package ch.oliverlanz.memento.domain.stones
 
 import ch.oliverlanz.memento.domain.events.StoneDomainEvents
-import ch.oliverlanz.memento.domain.events.WitherstoneStateTransition
-import ch.oliverlanz.memento.domain.events.WitherstoneTransitionTrigger
+import ch.oliverlanz.memento.domain.events.StoneLifecycleState
+import ch.oliverlanz.memento.domain.events.StoneLifecycleTransition
+import ch.oliverlanz.memento.domain.events.StoneLifecycleTrigger
 import ch.oliverlanz.memento.infrastructure.MementoDebug
 import net.minecraft.server.MinecraftServer
 import org.slf4j.LoggerFactory
@@ -27,13 +28,13 @@ object StoneTopologyHooks {
 
         log.info("[STONE] attach trigger=SERVER_START")
         StoneTopology.attach(server)
-        StoneTopology.evaluate(WitherstoneTransitionTrigger.SERVER_START)
+        StoneTopology.evaluate(StoneLifecycleTrigger.SERVER_START)
         logLoadedSnapshot()
     }
 
     fun onServerStopping() {
         if (loggingAttached) {
-            StoneDomainEvents.unsubscribeFromWitherstoneTransitions(::logTransition)
+            StoneDomainEvents.unsubscribeFromLifecycleTransitions(::logTransition)
             loggingAttached = false
         }
 
@@ -43,17 +44,17 @@ object StoneTopologyHooks {
 
     fun onNightlyCheckpoint(days: Int) {
         log.info("[STONE] maturity check trigger=NIGHTLY_TICK days={}", days)
-        StoneTopology.advanceDays(days, WitherstoneTransitionTrigger.NIGHTLY_TICK)
+        StoneTopology.advanceDays(days, StoneLifecycleTrigger.NIGHTLY_TICK)
     }
 
     fun onAdminTimeAdjustment() {
         log.info("[STONE] maturity check trigger=OP_COMMAND")
-        StoneTopology.evaluate(WitherstoneTransitionTrigger.OP_COMMAND)
+        StoneTopology.evaluate(StoneLifecycleTrigger.OP_COMMAND)
     }
 
     private fun attachLoggingOnce() {
         if (loggingAttached) return
-        StoneDomainEvents.subscribeToWitherstoneTransitions(::logTransition)
+        StoneDomainEvents.subscribeToLifecycleTransitions(::logTransition)
         loggingAttached = true
     }
 
@@ -94,29 +95,32 @@ object StoneTopologyHooks {
         }
     }
 
-    private fun logTransition(e: WitherstoneStateTransition) {
+    private fun logTransition(e: StoneLifecycleTransition) {
         val stone = e.stone
         val pos = "(${stone.position.x},${stone.position.y},${stone.position.z})"
         log.info(
-            "[STONE] witherstone='{}' dim='{}' pos={} {} -> {} trigger={}",
+            "[STONE] stone='{}' dim='{}' pos={} {} -> {} trigger={}",
             stone.name,
             stone.dimension.value.toString(),
             pos,
-            e.from.name,
+            e.from?.name ?: "ABSENT",
             e.to.name,
             e.trigger.name,
         )
 
         // Operator feedback (in-game) for meaningful lifecycle events.
+        // (Only witherstones produce meaningful lifecycle events for players at the moment.)
+        if (stone !is WitherstoneView) return
+
         when (e.to) {
-            WitherstoneState.MATURED -> {
+            StoneLifecycleState.MATURED -> {
                 MementoDebug.info(
                     serverRef,
                     "Witherstone '${stone.name}' has matured. Leave the area to allow renewal."
                 )
             }
 
-            WitherstoneState.CONSUMED -> {
+            StoneLifecycleState.CONSUMED -> {
                 MementoDebug.info(
                     serverRef,
                     "Witherstone '${stone.name}' has completed renewal."

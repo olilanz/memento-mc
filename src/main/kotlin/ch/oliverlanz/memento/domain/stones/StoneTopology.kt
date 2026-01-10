@@ -1,9 +1,9 @@
 package ch.oliverlanz.memento.domain.stones
 
 import ch.oliverlanz.memento.domain.events.StoneDomainEvents
-import ch.oliverlanz.memento.domain.events.StoneCreated
-import ch.oliverlanz.memento.domain.events.WitherstoneStateTransition
-import ch.oliverlanz.memento.domain.events.WitherstoneTransitionTrigger
+import ch.oliverlanz.memento.domain.events.StoneLifecycleState
+import ch.oliverlanz.memento.domain.events.StoneLifecycleTransition
+import ch.oliverlanz.memento.domain.events.StoneLifecycleTrigger
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrigger
 import ch.oliverlanz.memento.infrastructure.MementoConstants
@@ -58,7 +58,7 @@ object StoneTopology {
         log.info("[STONE] register after load count={}", stones.size)
 
         // Startup reconciliation: persisted state may already indicate maturity.
-        evaluate(trigger = WitherstoneTransitionTrigger.SERVER_START)
+        evaluate(trigger = StoneLifecycleTrigger.SERVER_START)
 
         persist()
     }
@@ -86,7 +86,7 @@ object StoneTopology {
         position: BlockPos,
         radius: Int,
         daysToMaturity: Int,
-        trigger: WitherstoneTransitionTrigger,
+        trigger: StoneLifecycleTrigger,
     ) {
         requireInitialized()
         require(name.isNotBlank()) { "Stone name must not be blank." }
@@ -104,8 +104,15 @@ object StoneTopology {
         w.radius = radius
         stones[name] = w
 
-        // ✅ FIX: StoneDomainEvents exposes publish(), not emit()
-        StoneDomainEvents.publish(StoneCreated(w))
+        // Lifecycle: stones enter existence as PLACED.
+        StoneDomainEvents.publish(
+            StoneLifecycleTransition(
+                stone = w,
+                from = null,
+                to = StoneLifecycleState.PLACED,
+                trigger = trigger,
+            )
+        )
 
         // Ensure immediate lifecycle progression (including daysToMaturity == 0).
         evaluate(trigger = trigger)
@@ -132,8 +139,15 @@ object StoneTopology {
         l.radius = radius
         stones[name] = l
 
-        // ✅ FIX: StoneDomainEvents exposes publish(), not emit()
-        StoneDomainEvents.publish(StoneCreated(l))
+        // Lifecycle: stones enter existence as PLACED.
+        StoneDomainEvents.publish(
+            StoneLifecycleTransition(
+                stone = l,
+                from = null,
+                to = StoneLifecycleState.PLACED,
+                trigger = StoneLifecycleTrigger.OP_COMMAND,
+            )
+        )
 
         // Lorestone applies immediately: derived renewal intent must reflect the updated topology.
         reconcileMaturedWitherstonesAffectedByLorestone(l, reason = "lorestone_created")
@@ -149,6 +163,34 @@ object StoneTopology {
 
         val removed = stones.remove(name)
         persist()
+
+        // Unified terminal lifecycle: removal is expressed as CONSUMED.
+        when (removed) {
+            is Witherstone -> {
+                val from = StoneLifecycleState.valueOf(removed.state.name)
+                StoneDomainEvents.publish(
+                    StoneLifecycleTransition(
+                        stone = removed,
+                        from = from,
+                        to = StoneLifecycleState.CONSUMED,
+                        trigger = StoneLifecycleTrigger.MANUAL_REMOVE,
+                    )
+                )
+            }
+
+            is Lorestone -> {
+                StoneDomainEvents.publish(
+                    StoneLifecycleTransition(
+                        stone = removed,
+                        from = StoneLifecycleState.PLACED,
+                        to = StoneLifecycleState.CONSUMED,
+                        trigger = StoneLifecycleTrigger.MANUAL_REMOVE,
+                    )
+                )
+            }
+
+            null -> Unit
+        }
 
         when (removed) {
             is Lorestone -> {
@@ -170,13 +212,13 @@ object StoneTopology {
      *
      * Emits transitions as stones cross lifecycle boundaries.
      */
-    fun advanceDays(days: Int, trigger: WitherstoneTransitionTrigger) {
+    fun advanceDays(days: Int, trigger: StoneLifecycleTrigger) {
         requireInitialized()
         require(days >= 0) { "days must be >= 0" }
         repeat(days) { ageOnce(trigger) }
     }
 
-    fun ageOnce(trigger: WitherstoneTransitionTrigger) {
+    fun ageOnce(trigger: StoneLifecycleTrigger) {
         requireInitialized()
 
         for (s in stones.values) {
@@ -198,7 +240,7 @@ object StoneTopology {
      * - server startup reconciliation
      * - administrative time adjustments
      */
-    fun evaluate(trigger: WitherstoneTransitionTrigger) {
+    fun evaluate(trigger: StoneLifecycleTrigger) {
         requireInitialized()
 
         val snapshot = stones.values.toList()
@@ -234,7 +276,7 @@ object StoneTopology {
         transition(
             stone = s,
             to = WitherstoneState.CONSUMED,
-            trigger = WitherstoneTransitionTrigger.RENEWAL_COMPLETED,
+            trigger = StoneLifecycleTrigger.RENEWAL_COMPLETED,
         )
 
         stones.remove(stoneName)
@@ -373,17 +415,17 @@ object StoneTopology {
     // Internal
     // ---------------------------------------------------------------------
 
-    private fun transition(stone: Witherstone, to: WitherstoneState, trigger: WitherstoneTransitionTrigger) {
+    private fun transition(stone: Witherstone, to: WitherstoneState, trigger: StoneLifecycleTrigger) {
         val from = stone.state
         if (from == to) return
 
         stone.state = to
 
         StoneDomainEvents.publish(
-            WitherstoneStateTransition(
+            StoneLifecycleTransition(
                 stone = stone,
-                from = from,
-                to = to,
+                from = StoneLifecycleState.valueOf(from.name),
+                to = StoneLifecycleState.valueOf(to.name),
                 trigger = trigger,
             )
         )

@@ -1,6 +1,6 @@
 package ch.oliverlanz.memento.application
 
-import ch.oliverlanz.memento.domain.events.WitherstoneTransitionTrigger
+import ch.oliverlanz.memento.domain.events.StoneLifecycleTrigger
 import ch.oliverlanz.memento.domain.stones.Lorestone
 import ch.oliverlanz.memento.domain.stones.Stone
 import ch.oliverlanz.memento.domain.stones.StoneTopology
@@ -77,7 +77,7 @@ object CommandHandlers {
                     position = pos,
                     radius = radius,
                     daysToMaturity = daysToMaturity,
-                    trigger = WitherstoneTransitionTrigger.OP_COMMAND
+                    trigger = StoneLifecycleTrigger.OP_COMMAND
                 )
                 } catch (e: IllegalArgumentException) {
                     source.sendError(Text.literal(e.message ?: "Invalid stone definition."))
@@ -146,7 +146,7 @@ object CommandHandlers {
                 position = stone.position,
                 radius = value,
                 daysToMaturity = stone.daysToMaturity,
-                trigger = WitherstoneTransitionTrigger.OP_COMMAND
+                trigger = StoneLifecycleTrigger.OP_COMMAND
             )
             is Lorestone -> StoneTopology.addLorestone(
                 name = stone.name,
@@ -178,7 +178,7 @@ object CommandHandlers {
             position = stone.position,
             radius = stone.radius,
             daysToMaturity = value,
-            trigger = WitherstoneTransitionTrigger.OP_COMMAND
+            trigger = StoneLifecycleTrigger.OP_COMMAND
         )
 
         source.sendFeedback({ Text.literal("Updated daysToMaturity for '$name' to $value.").formatted(Formatting.GREEN) }, false)
