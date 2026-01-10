@@ -132,59 +132,75 @@ object CommandHandlers {
         return 1
     }
 
-    fun setRadius(source: ServerCommandSource, name: String, value: Int): Int {
-        log.info("[CMD] setRadius name='{}' radius={} by={}", name, value, source.name)
-        val stone = StoneTopology.get(name)
-        if (stone == null) {
-            source.sendError(Text.literal("No stone named '$name'."))
-            return 0
-        }
+        fun alterRadius(source: ServerCommandSource, name: String, value: Int): Int {
+        log.info("[CMD] alterRadius name='{}' radius={} by={}", name, value, source.name)
 
-        when (stone) {
-            is Witherstone -> StoneTopology.addWitherstone(
-                name = stone.name,
-                dimension = stone.dimension,
-                position = stone.position,
+        return try {
+            val ok = StoneTopology.alterRadius(
+                name = name,
                 radius = value,
-                daysToMaturity = stone.daysToMaturity,
-                trigger = StoneLifecycleTrigger.OP_COMMAND
+                trigger = StoneLifecycleTrigger.OP_COMMAND,
             )
-            is Lorestone -> StoneTopology.addLorestone(
-                name = stone.name,
-                dimension = stone.dimension,
-                position = stone.position,
-                radius = value
-            )
-        }
 
-        source.sendFeedback({ Text.literal("Updated radius for '$name' to $value.").formatted(Formatting.GREEN) }, false)
-        return 1
+            if (!ok) {
+                source.sendError(Text.literal("No stone named '$name'."))
+                0
+            } else {
+                source.sendFeedback(
+                    { Text.literal("Updated radius for '$name' to $value.").formatted(Formatting.GREEN) },
+                    false
+                )
+                1
+            }
+        } catch (e: Exception) {
+            log.error("[CMD] alterRadius failed name='{}' radius={}", name, value, e)
+            source.sendError(Text.literal("Memento: could not alter radius (see server log)."))
+            0
+        }
     }
 
-    fun setDaysToMaturity(source: ServerCommandSource, name: String, value: Int): Int {
-        log.info("[CMD] setDaysToMaturity name='{}' daysToMaturity={} by={}", name, value, source.name)
-        val stone = StoneTopology.get(name)
-        if (stone == null) {
-            source.sendError(Text.literal("No stone named '$name'."))
-            return 0
-        }
-        if (stone !is Witherstone) {
-            source.sendError(Text.literal("'$name' is not a witherstone."))
-            return 0
-        }
 
-        StoneTopology.addWitherstone(
-            name = stone.name,
-            dimension = stone.dimension,
-            position = stone.position,
-            radius = stone.radius,
-            daysToMaturity = value,
-            trigger = StoneLifecycleTrigger.OP_COMMAND
-        )
+        fun alterDaysToMaturity(source: ServerCommandSource, name: String, value: Int): Int {
+        log.info("[CMD] alterDaysToMaturity name='{}' daysToMaturity={} by={}", name, value, source.name)
 
-        source.sendFeedback({ Text.literal("Updated daysToMaturity for '$name' to $value.").formatted(Formatting.GREEN) }, false)
-        return 1
+        return try {
+            when (
+                StoneTopology.alterDaysToMaturity(
+                    name = name,
+                    daysToMaturity = value,
+                    trigger = StoneLifecycleTrigger.OP_COMMAND,
+                )
+            ) {
+                StoneTopology.AlterDaysResult.OK -> {
+                    source.sendFeedback(
+                        { Text.literal("Updated daysToMaturity for '$name' to $value.").formatted(Formatting.GREEN) },
+                        false
+                    )
+                    1
+                }
+
+                StoneTopology.AlterDaysResult.NOT_FOUND -> {
+                    source.sendError(Text.literal("No stone named '$name'."))
+                    0
+                }
+
+                StoneTopology.AlterDaysResult.NOT_SUPPORTED -> {
+                    source.sendError(Text.literal("Stone '$name' does not support daysToMaturity (Lorestone)."))
+                    0
+                }
+
+                StoneTopology.AlterDaysResult.ALREADY_CONSUMED -> {
+                    source.sendError(Text.literal("Stone '$name' is already consumed."))
+                    0
+                }
+            }
+        } catch (e: Exception) {
+            log.error("[CMD] alterDaysToMaturity failed name='{}' daysToMaturity={}", name, value, e)
+            source.sendError(Text.literal("Memento: could not alter daysToMaturity (see server log)."))
+            0
+        }
     }
+
 
     private fun resolveTargetBlockOrFail(source: ServerCommandSource): BlockPos? {
         val player = source.playerOrThrow

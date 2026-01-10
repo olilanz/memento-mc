@@ -80,6 +80,67 @@ object StoneTopology {
         stones[name]
 
     // ---------------------------------------------------------------------
+    // Mutations (admin / operator alterations)
+    // ---------------------------------------------------------------------
+
+    /**
+     * Alter a stone's radius in-place.
+     *
+     * This preserves the stone's identity (name) and does not recreate entities.
+     */
+    fun alterRadius(name: String, radius: Int, trigger: StoneLifecycleTrigger): Boolean {
+        requireInitialized()
+        require(radius >= 0) { "radius must be >= 0." }
+
+        val stone = stones[name] ?: return false
+        stone.radius = radius
+
+        // Radius changes can affect derived renewal intent.
+        when (stone) {
+            is Lorestone -> {
+                // Protection area changed; reconcile all matured witherstones under current topology.
+                reconcileAllMaturedWitherstones(reason = "alter_radius_lorestone")
+            }
+            is Witherstone -> {
+                // Influence area changed; reconcile this stone if it is already matured.
+                reconcileRenewalIntentForMaturedWitherstone(stone.name, reason = "alter_radius_witherstone")
+            }
+        }
+
+        persist()
+        return true
+    }
+
+    /**
+     * Alter daysToMaturity for a witherstone.
+     *
+     * If the resulting value reaches 0 (or below), maturity is evaluated immediately.
+     */
+    fun alterDaysToMaturity(name: String, daysToMaturity: Int, trigger: StoneLifecycleTrigger): AlterDaysResult {
+        requireInitialized()
+        require(daysToMaturity >= 0) { "daysToMaturity must be >= 0." }
+
+        val stone = stones[name] ?: return AlterDaysResult.NOT_FOUND
+        val w = stone as? Witherstone ?: return AlterDaysResult.NOT_SUPPORTED
+
+        if (w.state == WitherstoneState.CONSUMED) return AlterDaysResult.ALREADY_CONSUMED
+
+        w.daysToMaturity = daysToMaturity
+
+        // Ensure immediate lifecycle progression (including daysToMaturity == 0).
+        evaluate(trigger = trigger)
+
+        persist()
+        return AlterDaysResult.OK
+    }
+
+    enum class AlterDaysResult {
+        OK,
+        NOT_FOUND,
+        NOT_SUPPORTED,
+        ALREADY_CONSUMED,
+    }
+    // ---------------------------------------------------------------------
     fun addWitherstone(
         name: String,
         dimension: RegistryKey<World>,

@@ -126,52 +126,32 @@ object Commands {
                     )
                 )
 
-                /* ======================
-                 * SET
-                 * ====================== */
-                .then(literal("set")
 
-                    // witherstone attributes
-                    .then(literal("witherstone")
-                        .then(argument("name", StringArgumentType.word())
-                            .then(literal("radius")
-                                .then(argument("value", IntegerArgumentType.integer(0, 10))
-                                    .executes { ctx ->
-                                        CommandHandlers.setRadius(
-                                            ctx.source,
-                                            StringArgumentType.getString(ctx, "name"),
-                                            IntegerArgumentType.getInteger(ctx, "value")
-                                        )
-                                    }
-                                )
-                            )
-                            .then(literal("daysToMaturity")
-                                .then(argument("value", IntegerArgumentType.integer(0, 10))
-                                    .executes { ctx ->
-                                        CommandHandlers.setDaysToMaturity(
-                                            ctx.source,
-                                            StringArgumentType.getString(ctx, "name"),
-                                            IntegerArgumentType.getInteger(ctx, "value")
-                                        )
-                                    }
-                                )
+                /* ======================
+                 * ALTER
+                 * ====================== */
+                .then(literal("alter")
+                    .then(argument("name", StringArgumentType.word())
+                        .then(literal("radius")
+                            .then(argument("value", IntegerArgumentType.integer(0, 10))
+                                .executes { ctx ->
+                                    CommandHandlers.alterRadius(
+                                        ctx.source,
+                                        StringArgumentType.getString(ctx, "name"),
+                                        IntegerArgumentType.getInteger(ctx, "value")
+                                    )
+                                }
                             )
                         )
-                    )
-
-                    // lorestone attributes
-                    .then(literal("lorestone")
-                        .then(argument("name", StringArgumentType.word())
-                            .then(literal("radius")
-                                .then(argument("value", IntegerArgumentType.integer(0, 10))
-                                    .executes { ctx ->
-                                        CommandHandlers.setRadius(
-                                            ctx.source,
-                                            StringArgumentType.getString(ctx, "name"),
-                                            IntegerArgumentType.getInteger(ctx, "value")
-                                        )
-                                    }
-                                )
+                        .then(literal("daysToMaturity")
+                            .then(argument("value", IntegerArgumentType.integer(0, 10))
+                                .executes { ctx ->
+                                    CommandHandlers.alterDaysToMaturity(
+                                        ctx.source,
+                                        StringArgumentType.getString(ctx, "name"),
+                                        IntegerArgumentType.getInteger(ctx, "value")
+                                    )
+                                }
                             )
                         )
                     )
