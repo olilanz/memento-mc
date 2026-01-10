@@ -9,13 +9,13 @@ import net.minecraft.world.chunk.ChunkStatus
 import org.slf4j.LoggerFactory
 
 /**
- * Seeds load status for existing renewal batches on server startup.
+ * Observes renewal batches and seeds unload-gate evidence for newly created batches.
  *
- * This is an observational convenience to seed unload-gate flags without waiting
- * for fresh unload events after restart.
- *
- * NOTE: This must not guess.
- * We seed the unload gate using the server's actual loaded-chunk view without loading anything.
+ * Locked semantics:
+ * - Startup is not a separate code path.
+ * - When stones are loaded, they are registered normally.
+ * - When derived batches are created, we seed their initial unload evidence based on the server's
+ *   current loaded-chunk view (without loading anything).
  */
 class RenewalInitialObserver {
 
@@ -28,8 +28,6 @@ class RenewalInitialObserver {
         if (attached) return
         this.server = server
         attached = true
-
-        applyStartupSnapshot()
     }
 
     fun detach() {
@@ -40,15 +38,6 @@ class RenewalInitialObserver {
     fun onRenewalEvent(e: RenewalEvent) {
         if (e is BatchCreated && attached) {
             applySnapshotFor(e.batchName)
-        }
-    }
-
-    private fun applyStartupSnapshot() {
-        val batches = RenewalTracker.snapshotBatches()
-        if (batches.isEmpty()) return
-        log.info("[RENEWAL] Seeding batch load status for {} batch(es)", batches.size)
-        for (b in batches) {
-            applySnapshotForSnapshot(b)
         }
     }
 
