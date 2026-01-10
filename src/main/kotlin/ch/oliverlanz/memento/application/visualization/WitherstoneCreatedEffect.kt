@@ -3,28 +3,42 @@ package ch.oliverlanz.memento.application.visualization
 import ch.oliverlanz.memento.domain.stones.WitherstoneView
 import ch.oliverlanz.memento.application.time.GameClock
 import net.minecraft.server.world.ServerWorld
-import org.slf4j.LoggerFactory
+import net.minecraft.particle.ParticleTypes
+import kotlin.random.Random
 
 class WitherstoneCreatedEffect(
     stone: WitherstoneView
 ) : VisualAreaEffect(stone) {
 
-    private val log = LoggerFactory.getLogger(javaClass)
-    private var emitted = false
+    private val anchorEmissionChance = 0.15
+    private val surfaceEmissionChance = 0.05
 
     override fun tick(world: ServerWorld, clock: GameClock): Boolean {
         if (!advanceLifetime()) return false
 
-        if (!emitted) {
-            emitted = true
-            log.debug(
-                "[viz] Emitting WitherstoneCreated visuals for stone='{}' dim='{}' pos={}",
-                stone.name,
-                stone.dimension.value,
-                stone.position
-            )
+        // Anchor presence
+        if (Random.nextDouble() < anchorEmissionChance) {
             StoneParticleEmitters.emitStoneCreated(world, stone)
         }
+
+        // Surface presence (single chunk)
+        if (Random.nextDouble() < surfaceEmissionChance) {
+            val chunkX = stone.position.x shr 4
+            val chunkZ = stone.position.z shr 4
+
+            SurfaceParticleEmitter.emitRandomSurfacePosition(
+                world,
+                chunkX,
+                chunkZ
+            ) { surfacePos ->
+                PositionParticleEmitter.emit(
+                    world,
+                    surfacePos,
+                    ParticleTypes.ASH
+                )
+            }
+        }
+
         return true
     }
 }
