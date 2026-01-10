@@ -70,14 +70,19 @@ object CommandHandlers {
 
         val pos = resolveTargetBlockOrFail(source) ?: return 0
 
-        StoneTopology.addOrReplaceWitherstone(
-            name = name,
-            dimension = dim,
-            position = pos,
-            radius = radius,
-            daysToMaturity = daysToMaturity,
-            trigger = WitherstoneTransitionTrigger.OP_COMMAND
-        )
+                        try {
+        StoneTopology.addWitherstone(
+                    name = name,
+                    dimension = dim,
+                    position = pos,
+                    radius = radius,
+                    daysToMaturity = daysToMaturity,
+                    trigger = WitherstoneTransitionTrigger.OP_COMMAND
+                )
+                } catch (e: IllegalArgumentException) {
+                    source.sendError(Text.literal(e.message ?: "Invalid stone definition."))
+                    return 0
+                }
 
         source.sendFeedback(
             { Text.literal("Witherstone '$name' registered at ${pos.x},${pos.y},${pos.z} (r=$radius, days=$daysToMaturity).").formatted(Formatting.GREEN) },
@@ -93,12 +98,17 @@ object CommandHandlers {
 
         val pos = resolveTargetBlockOrFail(source) ?: return 0
 
-        StoneTopology.addOrReplaceLorestone(
-            name = name,
-            dimension = dim,
-            position = pos,
-            radius = radius
-        )
+                        try {
+        StoneTopology.addLorestone(
+                    name = name,
+                    dimension = dim,
+                    position = pos,
+                    radius = radius
+                )
+                } catch (e: IllegalArgumentException) {
+                    source.sendError(Text.literal(e.message ?: "Invalid stone definition."))
+                    return 0
+                }
 
         source.sendFeedback(
             { Text.literal("Lorestone '$name' registered at ${pos.x},${pos.y},${pos.z} (r=$radius).").formatted(Formatting.GREEN) },
@@ -130,7 +140,7 @@ object CommandHandlers {
         }
 
         when (stone) {
-            is Witherstone -> StoneTopology.addOrReplaceWitherstone(
+            is Witherstone -> StoneTopology.addWitherstone(
                 name = stone.name,
                 dimension = stone.dimension,
                 position = stone.position,
@@ -138,7 +148,7 @@ object CommandHandlers {
                 daysToMaturity = stone.daysToMaturity,
                 trigger = WitherstoneTransitionTrigger.OP_COMMAND
             )
-            is Lorestone -> StoneTopology.addOrReplaceLorestone(
+            is Lorestone -> StoneTopology.addLorestone(
                 name = stone.name,
                 dimension = stone.dimension,
                 position = stone.position,
@@ -162,7 +172,7 @@ object CommandHandlers {
             return 0
         }
 
-        StoneTopology.addOrReplaceWitherstone(
+        StoneTopology.addWitherstone(
             name = stone.name,
             dimension = stone.dimension,
             position = stone.position,

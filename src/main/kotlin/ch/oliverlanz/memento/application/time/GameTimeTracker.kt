@@ -6,86 +6,77 @@ import ch.oliverlanz.memento.infrastructure.MementoConstants
 import net.minecraft.server.MinecraftServer
 
 /**
- * Interprets overworld time and emits:
+ * Interprets overworld time and emits semantic day-advance events
+ * whenever the renewal checkpoint is crossed.
  *
- * 1) Sparse semantic time events (domain-visible), e.g. day boundary advancements
- * 2) A medium-frequency clock signal (application-only) for smooth progression
- *
- * Server ticks are used only as transport; consumers should subscribe to outputs.
+ * Restores original Memento semantics:
+ * - one domain day == one checkpoint crossing
+ * - robust to /time add and large jumps
+ * - independent of server start time
  */
-class GameTimeTracker(
-    /** Emit [GameClock] updates every N server ticks. Default: 10 (~2/s). */
-    private val clockEmitEveryTicks: Int = 10,
-) {
+class GameTimeTracker {
 
     private var server: MinecraftServer? = null
 
-    private var tickCounter: Int = 0
-    private var lastObservedTimeOfDay: Long? = null
-    private var lastObservedMementoDay: Long? = null
+    private var lastObservedTime: Long? = null
+    private var lastObservedCheckpointIndex: Long? = null
 
     fun attach(server: MinecraftServer) {
         this.server = server
-        this.tickCounter = 0
-        this.lastObservedTimeOfDay = null
-        this.lastObservedMementoDay = null
+        this.lastObservedTime = null
+        this.lastObservedCheckpointIndex = null
     }
 
     fun detach() {
         this.server = null
-        this.tickCounter = 0
-        this.lastObservedTimeOfDay = null
-        this.lastObservedMementoDay = null
+        this.lastObservedTime = null
+        this.lastObservedCheckpointIndex = null
     }
 
     fun tick() {
-        val server = this.server ?: return
-        val overworld = server.overworld ?: return
+        val server = server ?: return
+        val world = server.overworld ?: return
 
-        val timeOfDay = overworld.timeOfDay
-        val dayTime = timeOfDay % MementoConstants.OVERWORLD_DAY_TICKS
+        val time = world.time
 
-        val mementoDayIndex = computeMementoDayIndex(timeOfDay)
+        // --- semantic day advancement (checkpoint crossing) ---
+        val checkpointIndex = computeCheckpointIndex(time)
 
-        // -----------------------------------------------------------------
-        // Semantic day boundary events (domain-visible)
-        // -----------------------------------------------------------------
-        val lastMementoDay = lastObservedMementoDay
-        if (lastMementoDay == null) {
-            lastObservedMementoDay = mementoDayIndex
-        } else {
-            val deltaDays = (mementoDayIndex - lastMementoDay).toInt()
+        val lastIndex = lastObservedCheckpointIndex
+        if (lastIndex != null) {
+            val deltaDays = (checkpointIndex - lastIndex).toInt()
             if (deltaDays > 0) {
-
-                lastObservedMementoDay = mementoDayIndex
-                GameTimeDomainEvents.publish(GameDayAdvanced(deltaDays = deltaDays, mementoDayIndex = mementoDayIndex))
+                GameTimeDomainEvents.publish(
+                    GameDayAdvanced(
+                        deltaDays = deltaDays,
+                        mementoDayIndex = checkpointIndex
+                    )
+                )
             }
         }
 
-        // -----------------------------------------------------------------
-        // Medium-frequency clock signal (application-only)
-        // -----------------------------------------------------------------
-        val lastTime = lastObservedTimeOfDay
-        val deltaTicks = if (lastTime == null) 0L else (timeOfDay - lastTime).coerceAtLeast(0L)
-        lastObservedTimeOfDay = timeOfDay
+        // always advance baseline AFTER comparison
+        lastObservedCheckpointIndex = checkpointIndex
 
-        tickCounter++
-        if (tickCounter >= clockEmitEveryTicks) {
-            tickCounter = 0
-            GameClockEvents.publish(
-                GameClock(
-                    dayTime = dayTime,
-                    timeOfDay = timeOfDay,
-                    deltaTicks = deltaTicks,
-                    mementoDayIndex = mementoDayIndex,
-                )
+        // --- application clock (continuous signal) ---
+        val lastTime = lastObservedTime
+        val deltaTicks = if (lastTime == null) 0L else (time - lastTime).coerceAtLeast(0L)
+        lastObservedTime = time
+
+        GameClockEvents.publish(
+            GameClock(
+                dayTime = time % MementoConstants.OVERWORLD_DAY_TICKS,
+                timeOfDay = time,
+                deltaTicks = deltaTicks,
+                mementoDayIndex = checkpointIndex
             )
-        }
+        )
     }
 
-    private fun computeMementoDayIndex(timeOfDay: Long): Long {
-        // Shift time so integer day boundaries align at the renewal checkpoint tick.
-        val shift = MementoConstants.OVERWORLD_DAY_TICKS - MementoConstants.RENEWAL_CHECKPOINT_TICK
-        return (timeOfDay + shift) / MementoConstants.OVERWORLD_DAY_TICKS
+    private fun computeCheckpointIndex(time: Long): Long {
+        val dayTicks = MementoConstants.OVERWORLD_DAY_TICKS
+        val checkpoint = MementoConstants.RENEWAL_CHECKPOINT_TICK
+        val shifted = time - checkpoint
+        return if (shifted >= 0) shifted / dayTicks else -1
     }
 }
