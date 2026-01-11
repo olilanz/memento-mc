@@ -6,7 +6,7 @@ import ch.oliverlanz.memento.application.renewal.RenewalInitialObserver
 import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge
 import ch.oliverlanz.memento.application.stone.StoneMaturityTimeBridge
 import ch.oliverlanz.memento.application.time.GameTimeTracker
-import ch.oliverlanz.memento.application.visualization.StoneVisualizationEngine
+import ch.oliverlanz.memento.application.visualization.EffectsHost
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks
@@ -25,7 +25,7 @@ object Memento : ModInitializer {
 
     private val log = LoggerFactory.getLogger("Memento")
 
-    private var visualizationEngine: StoneVisualizationEngine? = null
+    private var effectsHost: EffectsHost? = null
     private val gameTimeTracker = GameTimeTracker()
 
     // Renewal wiring (application/infrastructure)
@@ -39,7 +39,7 @@ object Memento : ModInitializer {
         renewalInitialObserver?.onRenewalEvent(e)
         chunkLoadScheduler?.onRenewalEvent(e)
         RenewalRegenerationBridge.onRenewalEvent(e)
-        visualizationEngine?.onRenewalEvent(e)
+        effectsHost?.onRenewalEvent(e)
     }
 
     override fun onInitialize() {
@@ -71,8 +71,8 @@ object Memento : ModInitializer {
             chunkLoadScheduler = ChunkLoadScheduler(chunksPerTick = 1).also { it.attach(server) }
 
             // Visualization host must be attached before any domain activity can emit events.
-            visualizationEngine = StoneVisualizationEngine(server)
-            CommandHandlers.attachVisualizationEngine(visualizationEngine!!)
+            effectsHost = EffectsHost(server)
+            CommandHandlers.attachVisualizationEngine(effectsHost!!)
 
             // Fan out tracker events.
             RenewalTracker.subscribe(renewalEventListener)
@@ -112,7 +112,7 @@ object Memento : ModInitializer {
             StoneTopologyHooks.onServerStopping()
 
             CommandHandlers.detachVisualizationEngine()
-            visualizationEngine = null
+            effectsHost = null
         }
 
         // Transport tick only (NO direct domain logic here).

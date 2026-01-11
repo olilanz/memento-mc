@@ -28,7 +28,7 @@ import org.slf4j.LoggerFactory
  *
  * Effects are projections only; they must remain safe to expire and re-create.
  */
-class StoneVisualizationEngine(
+class EffectsHost(
     private val server: MinecraftServer
 ) {
 

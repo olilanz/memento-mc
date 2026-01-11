@@ -12,7 +12,7 @@ import net.minecraft.util.Formatting
 import net.minecraft.util.hit.HitResult
 import net.minecraft.util.math.BlockPos
 import org.slf4j.LoggerFactory
-import ch.oliverlanz.memento.application.visualization.StoneVisualizationEngine
+import ch.oliverlanz.memento.application.visualization.EffectsHost
 import ch.oliverlanz.memento.application.visualization.VisualizationType
 
 /**
@@ -27,14 +27,14 @@ object CommandHandlers {
     private val log = LoggerFactory.getLogger("memento")
 
     @Volatile
-    private var visualizationEngine: StoneVisualizationEngine? = null
+    private var effectsHost: EffectsHost? = null
 
-    fun attachVisualizationEngine(engine: StoneVisualizationEngine) {
-        visualizationEngine = engine
+    fun attachVisualizationEngine(engine: EffectsHost) {
+        effectsHost = engine
     }
 
     fun detachVisualizationEngine() {
-        visualizationEngine = null
+        effectsHost = null
     }
 
     enum class StoneKind { WITHERSTONE, LORESTONE }
@@ -86,7 +86,7 @@ object CommandHandlers {
             return 0
         }
 
-        val engine = visualizationEngine
+        val engine = effectsHost
         if (engine == null) {
             source.sendError(Text.literal("Visualization engine is not ready yet."))
             return 0
