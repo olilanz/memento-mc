@@ -11,7 +11,7 @@ import kotlin.random.Random
 
 class WitherstonePlacementEffect(
     stone: WitherstoneView
-) : VisualAreaEffect(stone) {
+) : EffectBase(stone) {
 
     private val anchorEmissionChance = 0.15
     private val surfaceEmissionChance = 0.05

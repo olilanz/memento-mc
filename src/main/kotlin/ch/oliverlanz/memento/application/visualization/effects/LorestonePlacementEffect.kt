@@ -11,7 +11,7 @@ import kotlin.random.Random
 
 class LorestonePlacementEffect(
     stone: LorestoneView
-) : VisualAreaEffect(stone) {
+) : EffectBase(stone) {
 
     private val anchorEmissionChance = 0.15
     private val surfaceEmissionChance = 0.05

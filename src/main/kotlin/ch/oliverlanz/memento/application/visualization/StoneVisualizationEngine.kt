@@ -4,7 +4,7 @@ import ch.oliverlanz.memento.application.time.GameClock
 import ch.oliverlanz.memento.application.time.GameClockEvents
 import ch.oliverlanz.memento.application.visualization.effects.LorestonePlacementEffect
 import ch.oliverlanz.memento.application.visualization.effects.StoneInspectionEffect
-import ch.oliverlanz.memento.application.visualization.effects.VisualAreaEffect
+import ch.oliverlanz.memento.application.visualization.effects.EffectBase
 import ch.oliverlanz.memento.application.visualization.effects.WitherstonePlacementEffect
 import ch.oliverlanz.memento.application.visualization.effects.WitherstoneWaitingEffect
 import ch.oliverlanz.memento.domain.events.StoneDomainEvents
@@ -39,7 +39,7 @@ class StoneVisualizationEngine(
         val type: VisualizationType,
     )
 
-    private val effectsByKey = mutableMapOf<EffectKey, VisualAreaEffect>()
+    private val effectsByKey = mutableMapOf<EffectKey, EffectBase>()
 
     init {
         StoneDomainEvents.subscribeToLifecycleTransitions(::onLifecycleTransition)
@@ -88,7 +88,7 @@ class StoneVisualizationEngine(
         registerOrReplace(stone, type, effect)
     }
 
-    private fun createEffect(stone: StoneView, type: VisualizationType): VisualAreaEffect? =
+    private fun createEffect(stone: StoneView, type: VisualizationType): EffectBase? =
         when (type) {
             VisualizationType.PLACEMENT -> when (stone) {
                 is WitherstoneView -> WitherstonePlacementEffect(stone)
@@ -145,7 +145,7 @@ class StoneVisualizationEngine(
         }
     }
 
-    private fun registerOrReplace(stone: StoneView, type: VisualizationType, effect: VisualAreaEffect) {
+    private fun registerOrReplace(stone: StoneView, type: VisualizationType, effect: EffectBase) {
         effectsByKey[EffectKey(stone.name, type)] = effect
     }
 

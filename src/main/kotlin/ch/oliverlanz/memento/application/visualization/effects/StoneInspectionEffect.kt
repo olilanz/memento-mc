@@ -19,7 +19,7 @@ import kotlin.random.Random
  */
 class StoneInspectionEffect(
     stone: StoneView
-) : VisualAreaEffect(stone) {
+) : EffectBase(stone) {
 
     private val anchorEmissionChance = 0.20
     private val surfaceEmissionChance = 0.08
