@@ -9,7 +9,7 @@ import org.slf4j.LoggerFactory
  * Shared base for stone creation visuals.
  * Owns lifecycle and one-time emission mechanics.
  */
-abstract class StoneCreatedAreaEffectBase(
+abstract class StonePlacementEffect(
     stone: StoneView
 ) : VisualAreaEffect(stone) {
 

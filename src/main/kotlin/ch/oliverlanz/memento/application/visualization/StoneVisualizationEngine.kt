@@ -1,7 +1,7 @@
 package ch.oliverlanz.memento.application.visualization
 import ch.oliverlanz.memento.application.visualization.effects.VisualAreaEffect
-import ch.oliverlanz.memento.application.visualization.effects.WitherstoneCreatedEffect
-import ch.oliverlanz.memento.application.visualization.effects.LorestoneCreatedEffect
+import ch.oliverlanz.memento.application.visualization.effects.WitherstonePlacementEffect
+import ch.oliverlanz.memento.application.visualization.effects.LorestonePlacementEffect
 
 import ch.oliverlanz.memento.domain.events.StoneLifecycleState
 import ch.oliverlanz.memento.domain.events.StoneLifecycleTransition
@@ -34,8 +34,8 @@ class StoneVisualizationEngine(
         when (event.to) {
             StoneLifecycleState.PLACED -> {
                 val effect = when (event.stone) {
-                    is WitherstoneView -> WitherstoneCreatedEffect(event.stone)
-                    is LorestoneView -> LorestoneCreatedEffect(event.stone)
+                    is WitherstoneView -> WitherstonePlacementEffect(event.stone)
+                    is LorestoneView -> LorestonePlacementEffect(event.stone)
                     else -> return
                 }
 
