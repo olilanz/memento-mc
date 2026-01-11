@@ -100,7 +100,7 @@ class StoneVisualizationEngine(
                 StoneInspectionEffect(stone)
 
             VisualizationType.WITHERSTONE_WAITING ->
-                (stone as? WitherstoneView)?.let { WitherstoneWaitingEffect(it) }
+                WitherstoneWaitingEffect(stone)
         }
 
     private fun onLifecycleTransition(event: StoneLifecycleTransition) {
