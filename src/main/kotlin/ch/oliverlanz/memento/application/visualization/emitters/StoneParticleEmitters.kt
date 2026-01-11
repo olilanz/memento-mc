@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.application.visualization
+package ch.oliverlanz.memento.application.visualization.emitters
 
 import ch.oliverlanz.memento.domain.stones.LorestoneView
 import ch.oliverlanz.memento.domain.stones.StoneView

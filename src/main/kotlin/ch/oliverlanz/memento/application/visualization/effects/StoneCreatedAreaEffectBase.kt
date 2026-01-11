@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.application.visualization
+package ch.oliverlanz.memento.application.visualization.effects
 
 import ch.oliverlanz.memento.domain.stones.StoneView
 import ch.oliverlanz.memento.application.time.GameClock

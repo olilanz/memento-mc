@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.application.visualization
+package ch.oliverlanz.memento.application.visualization.emitters
 
 import net.minecraft.particle.ParticleEffect
 import net.minecraft.server.world.ServerWorld

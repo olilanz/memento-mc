@@ -1,4 +1,7 @@
-package ch.oliverlanz.memento.application.visualization
+package ch.oliverlanz.memento.application.visualization.effects
+import ch.oliverlanz.memento.application.visualization.emitters.StoneParticleEmitters
+import ch.oliverlanz.memento.application.visualization.emitters.SurfaceParticleEmitter
+import ch.oliverlanz.memento.application.visualization.emitters.PositionParticleEmitter
 
 import ch.oliverlanz.memento.domain.stones.WitherstoneView
 import ch.oliverlanz.memento.application.time.GameClock
