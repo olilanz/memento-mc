@@ -42,12 +42,6 @@ class StoneInspectionEffect(
             val chunkX = stone.position.x shr 4
             val chunkZ = stone.position.z shr 4
 
-            val surfaceParticle = when (stone) {
-                is WitherstoneView -> ParticleTypes.ASH
-                is LorestoneView -> ParticleTypes.ENCHANT
-                else -> ParticleTypes.END_ROD
-            }
-
             SurfaceParticleEmitter.emitRandomSurfacePosition(
                 world,
                 chunkX,
@@ -56,7 +50,7 @@ class StoneInspectionEffect(
                 PositionParticleEmitter.emit(
                     world,
                     surfacePos,
-                    surfaceParticle
+                    ParticleTypes.ELECTRIC_SPARK
                 )
             }
         }

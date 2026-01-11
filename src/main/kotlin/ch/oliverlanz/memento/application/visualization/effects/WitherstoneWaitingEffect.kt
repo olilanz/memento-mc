@@ -1,14 +1,16 @@
 package ch.oliverlanz.memento.application.visualization.effects
-import ch.oliverlanz.memento.application.visualization.emitters.StoneParticleEmitters
 
 import ch.oliverlanz.memento.application.time.GameClock
 import ch.oliverlanz.memento.application.visualization.emitters.PositionParticleEmitter
+import ch.oliverlanz.memento.application.visualization.emitters.StoneParticleEmitters
 import ch.oliverlanz.memento.application.visualization.emitters.SurfaceParticleEmitter
+import ch.oliverlanz.memento.domain.stones.LorestoneView
+import ch.oliverlanz.memento.domain.stones.StoneView
 import ch.oliverlanz.memento.domain.stones.WitherstoneView
-import net.minecraft.particle.DustParticleEffect
 import net.minecraft.particle.ParticleTypes
 import net.minecraft.server.world.ServerWorld
 import kotlin.random.Random
+
 
 /**
  * Visualization shown while a Witherstone is matured and waiting for renewal to progress.
@@ -20,18 +22,23 @@ import kotlin.random.Random
  * The visual language will be refined later; we only ensure wiring and lifecycle now.
  */
 class WitherstoneWaitingEffect(
-    stone: WitherstoneView
+    stone: StoneView
 ) : VisualAreaEffect(stone) {
 
-    private val anchorEmissionChance = 0.18
-    private val surfaceEmissionChance = 0.06
+    private val anchorEmissionChance = 0.20
+    private val surfaceEmissionChance = 0.08
 
-    // Distinct color (temporary): muted purple.
+    init {
+        // ~1 in-game hour (1000 ticks).
+        withLifetime(1_000)
+    }
 
     override fun tick(world: ServerWorld, clock: GameClock): Boolean {
-        // Anchor presence (colored)
+        if (!advanceLifetime(clock.deltaTicks)) return false
+
+        // Anchor presence
         if (Random.nextDouble() < anchorEmissionChance) {
-            PositionParticleEmitter.emit(world, stone.position, ParticleTypes.ASH)
+            StoneParticleEmitters.emitStoneCreated(world, stone)
         }
 
         // Surface presence (single chunk)
@@ -47,7 +54,7 @@ class WitherstoneWaitingEffect(
                 PositionParticleEmitter.emit(
                     world,
                     surfacePos,
-                    ParticleTypes.ASH
+                    ParticleTypes.ANGRY_VILLAGER
                 )
             }
         }
