@@ -22,12 +22,6 @@ object RenewalTracker {
      *
      * Intentionally minimal and stable: no mutation, no lifecycle operations.
      */
-    data class RenewalBatchSnapshot(
-        val name: String,
-        val dimension: RegistryKey<World>,
-        val chunks: Set<ChunkPos>,
-        val state: RenewalBatchState,
-    )
 
     private val batches: MutableMap<String, RenewalBatch> = ConcurrentHashMap()
     private val listeners = linkedSetOf<(RenewalEvent) -> Unit>()
@@ -84,6 +78,20 @@ object RenewalTracker {
                 trigger = trigger,
                 state = batch.state,
                 chunkCount = batch.chunks.size
+            )
+        )
+
+        emit(
+            RenewalBatchLifecycleTransition(
+                batch = RenewalBatchSnapshot(
+                    name = batch.name,
+                    dimension = batch.dimension,
+                    chunks = batch.chunks,
+                    state = batch.state,
+                ),
+                from = null,
+                to = batch.state,
+                trigger = trigger,
             )
         )
     }
@@ -199,7 +207,20 @@ object RenewalTracker {
         val from = batch.state
         if (from == to) return
         batch.state = to
-        emit(BatchUpdated(batchName = batch.name, trigger = trigger, from = from, to = to, chunkCount = batch.chunks.size))
+emit(
+    RenewalBatchLifecycleTransition(
+        batch = RenewalBatchSnapshot(
+            name = batch.name,
+            dimension = batch.dimension,
+            chunks = batch.chunks,
+            state = batch.state,
+        ),
+        from = from,
+        to = to,
+        trigger = trigger,
+    )
+)
+emit(BatchUpdated(batchName = batch.name, trigger = trigger, from = from, to = to, chunkCount = batch.chunks.size))
         emit(GatePassed(batchName = batch.name, trigger = trigger, from = from, to = to))
     }
 
