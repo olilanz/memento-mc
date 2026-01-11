@@ -28,14 +28,7 @@ class WitherstoneWaitingEffect(
 
     // Distinct color (temporary): muted purple.
 
-    init {
-        // ~25 in-game hours (slightly longer than a full day).
-        withLifetime(25_000)
-    }
-
     override fun tick(world: ServerWorld, clock: GameClock): Boolean {
-        if (!advanceLifetime(clock.deltaTicks)) return false
-
         // Anchor presence (colored)
         if (Random.nextDouble() < anchorEmissionChance) {
             PositionParticleEmitter.emit(world, stone.position, ParticleTypes.ASH)

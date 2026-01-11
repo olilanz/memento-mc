@@ -46,7 +46,7 @@ class RenewalInitialObserver {
         applySnapshotForSnapshot(snap)
     }
 
-    private fun applySnapshotForSnapshot(snap: RenewalTracker.RenewalBatchSnapshot) {
+    private fun applySnapshotForSnapshot(snap: ch.oliverlanz.memento.domain.renewal.RenewalBatchSnapshot) {
         val s = server ?: return
         val world = s.getWorld(snap.dimension)
 

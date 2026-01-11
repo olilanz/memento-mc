@@ -13,6 +13,19 @@ sealed interface RenewalEvent {
     val trigger: RenewalTrigger
 }
 
+/**
+ * Canonical structured lifecycle transition event for renewal batches.
+ *
+ * Single event type only: batch lifecycle state transitions.
+ * Carries an immutable [RenewalBatchView] snapshot for safe consumption.
+ */
+data class RenewalBatchLifecycleTransition(
+    val batch: RenewalBatchView,
+    val from: RenewalBatchState?,
+    val to: RenewalBatchState,
+    override val trigger: RenewalTrigger,
+) : RenewalEvent
+
 data class BatchCreated(
     val batchName: String,
     override val trigger: RenewalTrigger,

@@ -1,15 +1,17 @@
 package ch.oliverlanz.memento.domain.renewal
 
+import ch.oliverlanz.memento.domain.renewal.RenewalBatchView
+
 import net.minecraft.registry.RegistryKey
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
 
 data class RenewalBatch(
-    val name: String,
-    val dimension: RegistryKey<World>,
-    val chunks: Set<ChunkPos>,
-    var state: RenewalBatchState
-) {
+    override val name: String,
+    override val dimension: RegistryKey<World>,
+    override val chunks: Set<ChunkPos>,
+    override var state: RenewalBatchState
+) : RenewalBatchView {
     private val unloadedFlags: MutableMap<ChunkPos, Boolean> = chunks.associateWith { false }.toMutableMap()
     private val renewedFlags: MutableMap<ChunkPos, Boolean> = chunks.associateWith { false }.toMutableMap()
     fun observeUnloaded(pos: ChunkPos) {

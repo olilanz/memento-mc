@@ -70,6 +70,11 @@ object RenewalTrackerLogging {
             is BatchWaitingForRenewal ->
                 log.debug("[LOADER] batch='{}' waiting for renewal chunks={}",
                     e.batchName, e.chunks.size)
+
+            is RenewalBatchLifecycleTransition ->
+                log.info(
+                    "Renewal batch for stone '{}' transitioned from {} to {} ({} chunks)",
+                    e.batch.name, e.from, e.to, e.batch.chunks.size)
         }
     }
 }
