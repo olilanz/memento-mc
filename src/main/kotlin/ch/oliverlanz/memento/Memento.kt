@@ -7,6 +7,7 @@ import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge
 import ch.oliverlanz.memento.application.stone.StoneMaturityTimeBridge
 import ch.oliverlanz.memento.application.time.GameTimeTracker
 import ch.oliverlanz.memento.application.visualization.EffectsHost
+import ch.oliverlanz.memento.domain.renewal.RenewalBatchLifecycleTransition
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks
@@ -39,7 +40,11 @@ object Memento : ModInitializer {
         renewalInitialObserver?.onRenewalEvent(e)
         chunkLoadScheduler?.onRenewalEvent(e)
         RenewalRegenerationBridge.onRenewalEvent(e)
-        effectsHost?.onRenewalEvent(e)
+
+        // EffectsHost only cares about batch lifecycle transitions.
+        if (e is RenewalBatchLifecycleTransition) {
+            effectsHost?.onRenewalEvent(e)
+        }
     }
 
     override fun onInitialize() {

@@ -13,7 +13,6 @@ import net.minecraft.util.hit.HitResult
 import net.minecraft.util.math.BlockPos
 import org.slf4j.LoggerFactory
 import ch.oliverlanz.memento.application.visualization.EffectsHost
-import ch.oliverlanz.memento.application.visualization.VisualizationType
 
 /**
  * Application-layer command handlers.
@@ -92,7 +91,7 @@ object CommandHandlers {
             return 0
         }
 
-        engine.visualizeStone(stone, VisualizationType.INSPECTION)
+        engine.visualizeStone(stone)
         source.sendFeedback({ Text.literal("Visualizing '$name' for a short time.").formatted(Formatting.YELLOW) }, false)
         return 1
     }
