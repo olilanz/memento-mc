@@ -3,14 +3,14 @@ import ch.oliverlanz.memento.application.visualization.emitters.StoneParticleEmi
 import ch.oliverlanz.memento.application.visualization.emitters.SurfaceParticleEmitter
 import ch.oliverlanz.memento.application.visualization.emitters.PositionParticleEmitter
 
-import ch.oliverlanz.memento.domain.stones.LorestoneView
+import ch.oliverlanz.memento.domain.stones.WitherstoneView
 import ch.oliverlanz.memento.application.time.GameClock
 import net.minecraft.server.world.ServerWorld
 import net.minecraft.particle.ParticleTypes
 import kotlin.random.Random
 
-class LorestoneCreatedEffect(
-    stone: LorestoneView
+class WitherstonePlacementEffect(
+    stone: WitherstoneView
 ) : VisualAreaEffect(stone) {
 
     private val anchorEmissionChance = 0.15
@@ -37,7 +37,7 @@ class LorestoneCreatedEffect(
                 PositionParticleEmitter.emit(
                     world,
                     surfacePos,
-                    ParticleTypes.ENCHANT
+                    ParticleTypes.ASH
                 )
             }
         }
