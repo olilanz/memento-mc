@@ -1,60 +1,64 @@
 package ch.oliverlanz.memento.application.visualization.effects
 
-import ch.oliverlanz.memento.application.time.GameClock
-import ch.oliverlanz.memento.application.visualization.emitters.PositionParticleEmitter
-import ch.oliverlanz.memento.application.visualization.emitters.StoneParticleEmitters
-import ch.oliverlanz.memento.application.visualization.emitters.SurfaceParticleEmitter
-import ch.oliverlanz.memento.domain.stones.LorestoneView
+import ch.oliverlanz.memento.application.visualization.samplers.SingleChunkSurfaceSampler
+import ch.oliverlanz.memento.application.visualization.samplers.StoneBlockSampler
+import ch.oliverlanz.memento.application.visualization.samplers.StoneSampler
 import ch.oliverlanz.memento.domain.stones.StoneView
-import ch.oliverlanz.memento.domain.stones.WitherstoneView
 import net.minecraft.particle.ParticleTypes
-import net.minecraft.server.world.ServerWorld
-import kotlin.random.Random
 
-/**
- * Operator-driven visualization of a specific stone by name.
- *
- * This is intentionally simple for now and reuses the same sampling approach as
- * placement effects (stone anchor + surface particles on the stone's chunk).
- */
 class StoneInspectionEffect(
     stone: StoneView
 ) : EffectBase(stone) {
 
-    private val anchorEmissionChance = 0.20
+    private val anchorEmissionChance = 0.2
     private val surfaceEmissionChance = 0.08
+
+    private val anchorSampler: StoneSampler = StoneBlockSampler(stone)
+    private val surfaceSampler: StoneSampler = SingleChunkSurfaceSampler(stone)
 
     init {
         // ~1 in-game hour (1000 ticks).
         withLifetime(1_000)
     }
 
-    override fun tick(world: ServerWorld, clock: GameClock): Boolean {
-        if (!advanceLifetime(clock.deltaTicks)) return false
+    override fun emissionPlans(): List<EmissionPlan> = listOf(
+        // Anchor presence (explicit; no implicit emission in the base).
+        EmissionPlan(
+            sampler = anchorSampler,
+            system = anchorSystemFor(stone),
+            perTickChance = anchorEmissionChance,
+            perBlockChance = 1.0,
+            yOffsetSpread = 0..0,
+            mode = SamplingMode.All
+        ),
 
-        // Anchor presence
-        if (Random.nextDouble() < anchorEmissionChance) {
-            StoneParticleEmitters.emitStoneCreated(world, stone)
-        }
+        // Loud surface dust for validation (matches previous StoneParticleEmitters behavior):
+        // deterministic subset of 32 positions on the stone's chunk surface.
+        EmissionPlan(
+            sampler = surfaceSampler,
+            system = surfaceDustSystemFor(stone),
+            perTickChance = anchorEmissionChance,
+            perBlockChance = 1.0,
+            yOffsetSpread = 0..0,
+            mode = SamplingMode.FixedSubset(32, stone.position.asLong())
+        ),
 
-        // Surface presence (single chunk)
-        if (Random.nextDouble() < surfaceEmissionChance) {
-            val chunkX = stone.position.x shr 4
-            val chunkZ = stone.position.z shr 4
-
-            SurfaceParticleEmitter.emitRandomSurfacePosition(
-                world,
-                chunkX,
-                chunkZ
-            ) { surfacePos ->
-                PositionParticleEmitter.emit(
-                    world,
-                    surfacePos,
-                    ParticleTypes.ELECTRIC_SPARK
-                )
-            }
-        }
-
-        return true
-    }
+        // Local surface presence (single random surface position per tick when gated).
+        EmissionPlan(
+            sampler = surfaceSampler,
+            system = ParticleSystemPrototype(
+                particle = ParticleTypes.ELECTRIC_SPARK,
+                count = 6,
+                spreadX = 0.15,
+                spreadY = 0.20,
+                spreadZ = 0.15,
+                speed = 0.01,
+                baseYOffset = 1.0
+            ),
+            perTickChance = surfaceEmissionChance,
+            perBlockChance = 1.0,
+            yOffsetSpread = 0..0,
+            mode = SamplingMode.OneRandom
+        )
+    )
 }
