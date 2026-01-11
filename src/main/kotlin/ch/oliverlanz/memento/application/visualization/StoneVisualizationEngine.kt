@@ -1,4 +1,7 @@
 package ch.oliverlanz.memento.application.visualization
+import ch.oliverlanz.memento.application.visualization.effects.VisualAreaEffect
+import ch.oliverlanz.memento.application.visualization.effects.WitherstoneCreatedEffect
+import ch.oliverlanz.memento.application.visualization.effects.LorestoneCreatedEffect
 
 import ch.oliverlanz.memento.domain.events.StoneLifecycleState
 import ch.oliverlanz.memento.domain.events.StoneLifecycleTransition
