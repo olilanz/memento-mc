@@ -10,7 +10,7 @@ import net.minecraft.server.world.ServerWorld
  * Owns optional lifecycle (finite or infinite).
  * Concrete effects decide behavior by implementing tick().
  */
-abstract class VisualAreaEffect(
+abstract class EffectBase(
     val stone: StoneView,
 ) {
 

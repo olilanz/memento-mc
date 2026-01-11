@@ -87,10 +87,6 @@ object StoneTopologyHooks {
                         s.radius,
                     )
                 }
-
-                else -> {
-                    // no-op: future stone types
-                }
             }
         }
     }
