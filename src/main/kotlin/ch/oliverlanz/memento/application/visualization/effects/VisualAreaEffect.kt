@@ -34,10 +34,10 @@ abstract class VisualAreaEffect(
      *
      * @return true if the effect should continue, false if expired
      */
-    protected fun advanceLifetime(): Boolean {
+    protected fun advanceLifetime(deltaTicks: Long): Boolean {
         val rt = remainingTicks ?: return true
-        remainingTicks = rt - 1
-        return remainingTicks!! >= 0
+        remainingTicks = rt - deltaTicks
+        return remainingTicks!! > 0
     }
 
     /**

@@ -12,6 +12,8 @@ import net.minecraft.util.Formatting
 import net.minecraft.util.hit.HitResult
 import net.minecraft.util.math.BlockPos
 import org.slf4j.LoggerFactory
+import ch.oliverlanz.memento.application.visualization.StoneVisualizationEngine
+import ch.oliverlanz.memento.application.visualization.VisualizationType
 
 /**
  * Application-layer command handlers.
@@ -23,6 +25,17 @@ import org.slf4j.LoggerFactory
 object CommandHandlers {
 
     private val log = LoggerFactory.getLogger("memento")
+
+    @Volatile
+    private var visualizationEngine: StoneVisualizationEngine? = null
+
+    fun attachVisualizationEngine(engine: StoneVisualizationEngine) {
+        visualizationEngine = engine
+    }
+
+    fun detachVisualizationEngine() {
+        visualizationEngine = null
+    }
 
     enum class StoneKind { WITHERSTONE, LORESTONE }
 
@@ -61,6 +74,26 @@ object CommandHandlers {
         lines.drop(1).forEach { line ->
             source.sendFeedback({ Text.literal(line).formatted(Formatting.GRAY) }, false)
         }
+        return 1
+    }
+
+    fun visualize(source: ServerCommandSource, name: String): Int {
+        log.info("[CMD] visualize name='{}' by={}", name, source.name)
+
+        val stone = StoneTopology.get(name)
+        if (stone == null) {
+            source.sendError(Text.literal("No stone named '$name'."))
+            return 0
+        }
+
+        val engine = visualizationEngine
+        if (engine == null) {
+            source.sendError(Text.literal("Visualization engine is not ready yet."))
+            return 0
+        }
+
+        engine.visualizeStone(stone, VisualizationType.INSPECTION)
+        source.sendFeedback({ Text.literal("Visualizing '$name' for a short time.").formatted(Formatting.YELLOW) }, false)
         return 1
     }
 

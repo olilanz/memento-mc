@@ -22,7 +22,7 @@ abstract class StonePlacementEffect(
     }
 
     final override fun tick(world: ServerWorld, clock: GameClock): Boolean {
-        if (!advanceLifetime()) return false
+        if (!advanceLifetime(clock.deltaTicks)) return false
 
         if (!emitted) {
             emitted = true
