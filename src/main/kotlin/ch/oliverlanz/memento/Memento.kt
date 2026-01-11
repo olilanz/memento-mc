@@ -39,6 +39,7 @@ object Memento : ModInitializer {
         renewalInitialObserver?.onRenewalEvent(e)
         chunkLoadScheduler?.onRenewalEvent(e)
         RenewalRegenerationBridge.onRenewalEvent(e)
+        visualizationEngine?.onRenewalEvent(e)
     }
 
     override fun onInitialize() {
@@ -69,6 +70,10 @@ object Memento : ModInitializer {
             renewalInitialObserver = RenewalInitialObserver().also { it.attach(server) }
             chunkLoadScheduler = ChunkLoadScheduler(chunksPerTick = 1).also { it.attach(server) }
 
+            // Visualization host must be attached before any domain activity can emit events.
+            visualizationEngine = StoneVisualizationEngine(server)
+            CommandHandlers.attachVisualizationEngine(visualizationEngine!!)
+
             // Fan out tracker events.
             RenewalTracker.subscribe(renewalEventListener)
 
@@ -82,8 +87,6 @@ object Memento : ModInitializer {
             StoneMaturityTimeBridge.attach()
 
             gameTimeTracker.attach(server)
-            visualizationEngine = StoneVisualizationEngine(server)
-            CommandHandlers.attachVisualizationEngine(visualizationEngine!!)
 
             renewalTickCounter = 0
         }

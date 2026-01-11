@@ -7,15 +7,15 @@ import ch.oliverlanz.memento.application.visualization.effects.StoneInspectionEf
 import ch.oliverlanz.memento.application.visualization.effects.VisualAreaEffect
 import ch.oliverlanz.memento.application.visualization.effects.WitherstonePlacementEffect
 import ch.oliverlanz.memento.application.visualization.effects.WitherstoneWaitingEffect
-import ch.oliverlanz.memento.domain.events.GameDayAdvanced
 import ch.oliverlanz.memento.domain.events.StoneDomainEvents
 import ch.oliverlanz.memento.domain.events.StoneLifecycleState
 import ch.oliverlanz.memento.domain.events.StoneLifecycleTransition
 import ch.oliverlanz.memento.domain.stones.LorestoneView
+import ch.oliverlanz.memento.domain.renewal.RenewalBatchLifecycleTransition
+import ch.oliverlanz.memento.domain.renewal.RenewalBatchState
+import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.stones.StoneTopology
 import ch.oliverlanz.memento.domain.stones.StoneView
-import ch.oliverlanz.memento.domain.stones.Witherstone
-import ch.oliverlanz.memento.domain.stones.WitherstoneState
 import ch.oliverlanz.memento.domain.stones.WitherstoneView
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld
@@ -45,6 +45,43 @@ class StoneVisualizationEngine(
         StoneDomainEvents.subscribeToLifecycleTransitions(::onLifecycleTransition)
         GameClockEvents.subscribe(::onTick)
     }
+
+    /**
+     * Receives authoritative renewal domain events.
+     *
+     * Waiting visualization is fully event-driven. It exists iff the batch is in
+     * [RenewalBatchState.WAITING_FOR_UNLOAD].
+     */
+    fun onRenewalEvent(event: RenewalEvent) {
+        when (event) {
+            is RenewalBatchLifecycleTransition -> onRenewalBatchLifecycleTransition(event)
+            else -> Unit
+        }
+    }
+
+    private fun onRenewalBatchLifecycleTransition(event: RenewalBatchLifecycleTransition) {
+        // We key waiting effects by stone name (batch identity).
+        val stoneName = event.batch.name
+        val stone = StoneTopology.get(stoneName) as? WitherstoneView
+
+        // If the stone has already been removed, we treat this as a cleanup boundary.
+        if (stone == null) {
+            removeAllEffectsForStone(stoneName)
+            return
+        }
+
+        when {
+            event.to == RenewalBatchState.WAITING_FOR_UNLOAD -> {
+                visualizeStone(stone, VisualizationType.WITHERSTONE_WAITING)
+            }
+
+            event.from == RenewalBatchState.WAITING_FOR_UNLOAD && event.to != RenewalBatchState.WAITING_FOR_UNLOAD -> {
+                effectsByKey.remove(EffectKey(stone.name, VisualizationType.WITHERSTONE_WAITING))
+            }
+        }
+    }
+
+    // (Renewal handling above.)
 
     fun visualizeStone(stone: StoneView, type: VisualizationType) {
         val effect = createEffect(stone, type) ?: return
@@ -78,20 +115,6 @@ class StoneVisualizationEngine(
                 visualizeStone(event.stone, VisualizationType.PLACEMENT)
             }
 
-            StoneLifecycleState.MATURED -> {
-                // Temporary wiring for this slice:
-                // use lifecycle MATURED as the signal for "waiting" visualization.
-                if (event.stone is WitherstoneView) {
-                    log.debug(
-                        "[viz] lifecycle MATURED received for stone='{}' dim='{}' pos={} - registering waiting effect",
-                        event.stone.name,
-                        event.stone.dimension.value,
-                        event.stone.position
-                    )
-                    visualizeStone(event.stone, VisualizationType.WITHERSTONE_WAITING)
-                }
-            }
-
             StoneLifecycleState.CONSUMED -> {
                 // Terminal teardown: ensure we do not keep emitting particles after a stone ceased to exist.
                 val removed = removeAllEffectsForStone(event.stone.name)
@@ -106,27 +129,6 @@ class StoneVisualizationEngine(
 
             else -> Unit
         }
-    }
-
-    private fun onDayAdvanced(event: GameDayAdvanced) {
-        // Defensive self-healing for long-lived projections:
-        // ensure all matured Witherstones keep their "waiting" visualization across nights.
-        val maturedWitherstones = StoneTopology.list()
-            .filterIsInstance<Witherstone>()
-            .filter { it.state == WitherstoneState.MATURED }
-
-        if (maturedWitherstones.isEmpty()) return
-
-        for (stone in maturedWitherstones) {
-            registerOrReplace(stone, VisualizationType.WITHERSTONE_WAITING, WitherstoneWaitingEffect(stone))
-        }
-
-        log.debug(
-            "[viz] day advanced (deltaDays={}, dayIndex={}) - refreshed waiting effects for {} matured Witherstone(s)",
-            event.deltaDays,
-            event.mementoDayIndex,
-            maturedWitherstones.size
-        )
     }
 
     private fun onTick(clock: GameClock) {
