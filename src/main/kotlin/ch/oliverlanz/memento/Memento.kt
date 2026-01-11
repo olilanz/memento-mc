@@ -1,5 +1,6 @@
 package ch.oliverlanz.memento
 
+import ch.oliverlanz.memento.application.CommandHandlers
 import ch.oliverlanz.memento.application.renewal.ChunkLoadScheduler
 import ch.oliverlanz.memento.application.renewal.RenewalInitialObserver
 import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge
@@ -82,6 +83,7 @@ object Memento : ModInitializer {
 
             gameTimeTracker.attach(server)
             visualizationEngine = StoneVisualizationEngine(server)
+            CommandHandlers.attachVisualizationEngine(visualizationEngine!!)
 
             renewalTickCounter = 0
         }
@@ -106,6 +108,7 @@ object Memento : ModInitializer {
             WitherstoneRenewalBridge.detach()
             StoneTopologyHooks.onServerStopping()
 
+            CommandHandlers.detachVisualizationEngine()
             visualizationEngine = null
         }
 

@@ -16,8 +16,14 @@ class LorestonePlacementEffect(
     private val anchorEmissionChance = 0.15
     private val surfaceEmissionChance = 0.05
 
+
+    init {
+        // ~1 in-game hour (1000 ticks).
+        withLifetime(1000)
+    }
+
     override fun tick(world: ServerWorld, clock: GameClock): Boolean {
-        if (!advanceLifetime()) return false
+        if (!advanceLifetime(clock.deltaTicks)) return false
 
         // Anchor presence
         if (Random.nextDouble() < anchorEmissionChance) {
