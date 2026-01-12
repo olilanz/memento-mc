@@ -32,7 +32,9 @@ class EffectsHost(
         val effectClass: KClass<out EffectBase>
     )
 
-    private val effectsByKey = mutableMapOf<EffectKey, EffectBase>()
+    private data class EffectEntry(val stone: StoneView, val effect: EffectBase)
+
+    private val effectsByKey = mutableMapOf<EffectKey, EffectEntry>()
 
     init {
         StoneDomainEvents.subscribeToLifecycleTransitions(::onLifecycleTransition)
@@ -42,7 +44,7 @@ class EffectsHost(
     /* ---------- Public semantic API ---------- */
 
     fun visualizeStone(stone: StoneView) {
-        add(stone.name, StoneInspectionEffect(stone))
+        add(stone, StoneInspectionEffect(stone))
     }
 
     /* ---------- Domain event handling ---------- */
@@ -58,7 +60,7 @@ class EffectsHost(
 
         when {
             event.to == RenewalBatchState.WAITING_FOR_UNLOAD ->
-                add(stoneName, WitherstoneWaitingEffect(stone))
+                add(stone, WitherstoneWaitingEffect(stone))
 
             event.from == RenewalBatchState.WAITING_FOR_UNLOAD ->
                 remove(stoneName, WitherstoneWaitingEffect::class)
@@ -69,9 +71,9 @@ class EffectsHost(
         when (event.to) {
             StoneLifecycleState.PLACED -> when (event.stone) {
                 is WitherstoneView ->
-                    add(event.stone.name, WitherstonePlacementEffect(event.stone))
+                    add(event.stone, WitherstonePlacementEffect(event.stone))
                 is LorestoneView ->
-                    add(event.stone.name, LorestonePlacementEffect(event.stone))
+                    add(event.stone, LorestonePlacementEffect(event.stone))
             }
 
             StoneLifecycleState.CONSUMED ->
@@ -86,11 +88,11 @@ class EffectsHost(
     private fun onTick(clock: GameClock) {
         val it = effectsByKey.entries.iterator()
         while (it.hasNext()) {
-            val (key, effect) = it.next()
+            val (key, entry) = it.next()
             val world: ServerWorld =
-                server.getWorld(effect.stone.dimension) ?: continue
+                server.getWorld(entry.stone.dimension) ?: continue
 
-            if (!effect.tick(world, clock)) {
+            if (!entry.effect.tick(world, clock)) {
                 it.remove()
             }
         }
@@ -98,8 +100,8 @@ class EffectsHost(
 
     /* ---------- Internal mechanics ---------- */
 
-    private fun add(stoneName: String, effect: EffectBase) {
-        effectsByKey[EffectKey(stoneName, effect::class)] = effect
+    private fun add(stone: StoneView, effect: EffectBase) {
+        effectsByKey[EffectKey(stone.name, effect::class)] = EffectEntry(stone, effect)
     }
 
     private fun remove(stoneName: String, effectClass: KClass<out EffectBase>) {

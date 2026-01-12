@@ -39,41 +39,53 @@ object CommandHandlers {
     enum class StoneKind { WITHERSTONE, LORESTONE }
 
     fun list(kind: StoneKind?, source: ServerCommandSource): Int {
-        val stones = StoneTopology.list()
-            .filter { stone ->
-                when (kind) {
-                    null -> true
-                    StoneKind.WITHERSTONE -> stone is Witherstone
-                    StoneKind.LORESTONE -> stone is Lorestone
+        return try {
+            val stones = StoneTopology.list()
+                .filter { stone ->
+                    when (kind) {
+                        null -> true
+                        StoneKind.WITHERSTONE -> stone is Witherstone
+                        StoneKind.LORESTONE -> stone is Lorestone
+                    }
                 }
+                .sortedBy { it.name }
+
+            if (stones.isEmpty()) {
+                source.sendFeedback({ Text.literal("No stones registered.").formatted(Formatting.GRAY) }, false)
+                return 1
             }
-            .sortedBy { it.name }
 
-        if (stones.isEmpty()) {
-            source.sendFeedback({ Text.literal("No stones registered.").formatted(Formatting.GRAY) }, false)
-            return 1
+            source.sendFeedback({ Text.literal("Registered stones (${stones.size}):").formatted(Formatting.GOLD) }, false)
+            stones.forEach { stone ->
+                source.sendFeedback({ Text.literal(" - ${formatStoneLine(stone)}") }, false)
+            }
+            1
+        } catch (e: Exception) {
+            log.error("[CMD] list failed", e)
+            source.sendError(Text.literal("Memento: could not list stones (see server log)."))
+            0
         }
-
-        source.sendFeedback({ Text.literal("Registered stones (${stones.size}):").formatted(Formatting.GOLD) }, false)
-        stones.forEach { stone ->
-            source.sendFeedback({ Text.literal(" - ${formatStoneLine(stone)}") }, false)
-        }
-        return 1
     }
 
     fun inspect(source: ServerCommandSource, name: String): Int {
-        val stone = StoneTopology.get(name)
-        if (stone == null) {
-            source.sendError(Text.literal("No stone named '$name'."))
-            return 0
-        }
+        return try {
+            val stone = StoneTopology.get(name)
+            if (stone == null) {
+                source.sendError(Text.literal("No stone named '$name'."))
+                return 0
+            }
 
-        val lines = formatStoneInspect(stone)
-        source.sendFeedback({ Text.literal(lines.first()).formatted(Formatting.GOLD) }, false)
-        lines.drop(1).forEach { line ->
-            source.sendFeedback({ Text.literal(line).formatted(Formatting.GRAY) }, false)
+            val lines = formatStoneInspect(stone)
+            source.sendFeedback({ Text.literal(lines.first()).formatted(Formatting.GOLD) }, false)
+            lines.drop(1).forEach { line ->
+                source.sendFeedback({ Text.literal(line).formatted(Formatting.GRAY) }, false)
+            }
+            1
+        } catch (e: Exception) {
+            log.error("[CMD] inspect failed name='{}'", name, e)
+            source.sendError(Text.literal("Memento: could not inspect stone (see server log)."))
+            0
         }
-        return 1
     }
 
     fun visualize(source: ServerCommandSource, name: String): Int {
@@ -91,9 +103,15 @@ object CommandHandlers {
             return 0
         }
 
-        engine.visualizeStone(stone)
-        source.sendFeedback({ Text.literal("Visualizing '$name' for a short time.").formatted(Formatting.YELLOW) }, false)
-        return 1
+        return try {
+            engine.visualizeStone(stone)
+            source.sendFeedback({ Text.literal("Visualizing '$name' for a short time.").formatted(Formatting.YELLOW) }, false)
+            1
+        } catch (e: Exception) {
+            log.error("[CMD] visualize failed name='{}'", name, e)
+            source.sendError(Text.literal("Memento: could not visualize stone (see server log)."))
+            0
+        }
     }
 
     fun addWitherstone(source: ServerCommandSource, name: String, radius: Int, daysToMaturity: Int): Int {
@@ -152,16 +170,22 @@ object CommandHandlers {
 
     fun remove(source: ServerCommandSource, name: String): Int {
         log.info("[CMD] removeStone name='{}' by={}", name, source.name)
-        val existing = StoneTopology.get(name)
-        if (existing == null) {
-            source.sendError(Text.literal("No stone named '$name'."))
-            return 0
+        return try {
+            val existing = StoneTopology.get(name)
+            if (existing == null) {
+                source.sendError(Text.literal("No stone named '$name'."))
+                return 0
+            }
+
+            StoneTopology.remove(name)
+
+            source.sendFeedback({ Text.literal("Removed ${existing.javaClass.simpleName.lowercase()} '$name'.").formatted(Formatting.YELLOW) }, false)
+            1
+        } catch (e: Exception) {
+            log.error("[CMD] remove failed name='{}'", name, e)
+            source.sendError(Text.literal("Memento: could not remove stone (see server log)."))
+            0
         }
-
-        StoneTopology.remove(name)
-
-        source.sendFeedback({ Text.literal("Removed ${existing.javaClass.simpleName.lowercase()} '$name'.").formatted(Formatting.YELLOW) }, false)
-        return 1
     }
 
         fun alterRadius(source: ServerCommandSource, name: String, value: Int): Int {

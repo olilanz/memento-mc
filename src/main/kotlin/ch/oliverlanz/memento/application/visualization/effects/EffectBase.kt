@@ -1,69 +1,23 @@
 package ch.oliverlanz.memento.application.visualization.effects
 
 import ch.oliverlanz.memento.application.time.GameClock
-import ch.oliverlanz.memento.application.visualization.samplers.SingleChunkSurfaceSampler
-import ch.oliverlanz.memento.application.visualization.samplers.StoneBlockSampler
 import ch.oliverlanz.memento.application.visualization.samplers.StoneSampler
-import ch.oliverlanz.memento.domain.stones.LorestoneView
-import ch.oliverlanz.memento.domain.stones.StoneView
-import ch.oliverlanz.memento.domain.stones.WitherstoneView
 import net.minecraft.particle.ParticleEffect
-import net.minecraft.particle.ParticleTypes
 import net.minecraft.server.world.ServerWorld
 import net.minecraft.util.math.BlockPos
+import kotlin.math.floor
 import kotlin.random.Random
 
 /**
- * Base type for long-lived visualization projections.
+ * Base class for all visualization effects.
  *
- * IMPORTANT:
- * - Effects are driven exclusively by GameClock events (via EffectsHost), not server ticks.
- * - The time dimension (delta ticks) comes from GameClock.
- * - Spatial eligibility is provided by samplers (StoneView -> Set<BlockPos>).
- *
- * This base class defines a canonical ticking pipeline and provides a *default* emission pipeline
- * for the common "chunk area projection" case. Concrete effects may keep custom logic by
- * overriding [onTick].
+ * IMPORTANT (locked):
+ * - Effects are driven by GameWatch via GameClock updates (not server ticks).
+ * - Subclasses are declarative: override onConfigure(profile) only.
+ * - Semantics (lifetime, rates, particles, samplers) live in EffectProfile.
+ * - Mechanics (ticking, sampling caches, emission) live here.
  */
-abstract class EffectBase(
-    val stone: StoneView,
-    private val profile: DefaultAreaProfile? = null,
-) {
-
-    /**
-     * Declarative configuration for the default area projection pipeline.
-     *
-     * This is intentionally small: it captures the "what" and "how often" of an effect,
-     * while the base class owns the emission mechanics and caching.
-     */
-    data class DefaultAreaProfile(
-        /** Optional finite lifetime. If null, the effect is infinite and must be terminated externally. */
-        val lifetimeTicks: Long? = null,
-
-        /** Whether to include the stone anchor plan (stone block projected upward). */
-        val includeAnchor: Boolean = true,
-
-        /** Gate evaluated once per tick for anchor emission. */
-        val anchorPerTickChance: Double = 0.0,
-
-        /** Gate evaluated once per tick for the deterministic surface subset dust plan. */
-        val surfaceDustPerTickChance: Double = 0.0,
-
-        /** Size of the deterministic surface subset. (Matches current visuals: 32) */
-        val surfaceDustSubsetSize: Int = 32,
-
-        /** Gate evaluated once per tick for the local surface presence plan. */
-        val surfacePresencePerTickChance: Double = 0.0,
-
-        /** Particle to use for the local surface presence plan. */
-        val surfacePresenceParticle: ParticleEffect,
-
-        /**
-         * Inclusive vertical spread in whole blocks applied on top of baseYOffset.
-         * Example: 1..4 means +1, +2, +3 or +4 blocks above sampled base position.
-         */
-        val yOffsetSpread: IntRange = 0..0,
-    )
+abstract class EffectBase {
 
     data class ParticleSystemPrototype(
         val particle: ParticleEffect,
@@ -72,112 +26,187 @@ abstract class EffectBase(
         val spreadY: Double,
         val spreadZ: Double,
         val speed: Double,
-        /**
-         * Base vertical offset above the sampled block position.
-         *
-         * This matches existing visuals (often y+1.0 for surface, y+1.2 for anchors).
-         */
+        /** Base vertical offset above the sampled block (often y+1.0). */
         val baseYOffset: Double,
     )
 
-    // --- Lifetime management (ticks come from GameClock) ---
-
-    private var remainingTicks: Long? = profile?.lifetimeTicks
-
-    private fun advanceLifetime(deltaTicks: Long): Boolean {
-        val rt = remainingTicks ?: return true
-        remainingTicks = rt - deltaTicks
-        return remainingTicks!! > 0
-    }
-
-    // --- Sampling caches (samplers are deterministic; effects are free to cache) ---
-
-    private val sampleCache = HashMap<StoneSampler, Set<BlockPos>>()
-    private val subsetCache = HashMap<StoneSampler, Set<BlockPos>>() // for deterministic subset only
-
-    // --- Common samplers used by the default pipeline ---
-
-    private val anchorSampler: StoneSampler = StoneBlockSampler(stone)
-    private val surfaceSampler: StoneSampler = SingleChunkSurfaceSampler(stone)
+    private var alive: Boolean = true
+    private var elapsedGameHours: Double = 0.0
 
     /**
-     * FINAL tick entrypoint.
+     * Lazily configured profile.
      *
-     * Called by EffectsHost in response to GameClock ticks.
-     *
-     * @return true to keep the effect alive, false to terminate and remove it.
+     * Kotlin nuance: this MUST NOT run during base construction, because onConfigure()
+     * may depend on subclass constructor properties (e.g. stone views).
+     */
+    private val profile: EffectProfile by lazy { EffectProfile().also { onConfigure(it) } }
+
+    // Cache full samples per sampler (stable for lifetime of the effect).
+    private val sampleCache = mutableMapOf<StoneSampler, Set<BlockPos>>()
+
+    // Cache deterministic subsets per sampler (stable for lifetime of the effect).
+    private val subsetCache = mutableMapOf<StoneSampler, Set<BlockPos>>()
+
+    /**
+     * FINAL tick entry point. Subclasses must NOT override this.
      */
     final fun tick(world: ServerWorld, clock: GameClock): Boolean {
-        if (!advanceLifetime(clock.deltaTicks)) return false
+        if (!alive) return false
 
-        // Default pipeline (inactive unless a profile is provided)
-        profile?.let { emitDefaultAreaPlans(world, it) }
+        val deltaGameHours = clock.deltaTicks.toDouble() / 1000.0
+        if (deltaGameHours > 0.0) {
+            elapsedGameHours += deltaGameHours
+        }
 
-        // Hook for custom / supplemental behavior (anchor effects can live here if desired)
+        // Finite lifetime (if configured)
+        profile.lifetimeGameHours?.let { limit ->
+            if (elapsedGameHours >= limit) {
+                alive = false
+                return false
+            }
+        }
+
+        // Default pipelines (only active when configured)
+        runAnchorPlan(world, deltaGameHours)
+        runSurfaceDustPlan(world, deltaGameHours)
+        runSurfacePresencePlan(world, deltaGameHours)
+
+        // Optional extension hook (not used in this slice)
         onTick(world, clock)
 
-        return true
+        return alive
     }
 
     /**
-     * Hook for subclasses.
-     *
-     * Override to implement custom behavior without bypassing the base pipeline.
+     * Declarative configuration hook.
      */
-    protected open fun onTick(world: ServerWorld, clock: GameClock) {
-        // default: no-op
+    protected open fun onConfigure(profile: EffectProfile) = Unit
+
+    /**
+     * Optional extension hook.
+     *
+     * For this slice, effects should not override this.
+     */
+    protected open fun onTick(world: ServerWorld, clock: GameClock) = Unit
+
+    protected fun terminate() {
+        alive = false
     }
 
-    // --- Default area projection pipeline ---
+    /* ---------- Plans ---------- */
 
-    private fun emitDefaultAreaPlans(world: ServerWorld, p: DefaultAreaProfile) {
-        // Anchor presence (explicit; profile-controlled)
-        if (p.includeAnchor && p.anchorPerTickChance > 0.0 && Random.nextDouble() < p.anchorPerTickChance) {
-            val base = samplesFor(world, anchorSampler)
+    private fun runAnchorPlan(world: ServerWorld, deltaGameHours: Double) {
+        val sampler = profile.anchorSampler ?: return
+        val system = profile.anchorSystem ?: return
+        val occurrences = occurrencesForRate(
+            ratePerGameHour = effectiveRate(profile.anchorRatePerGameHour),
+            deltaGameHours = deltaGameHours
+        )
+        if (occurrences <= 0) return
+
+        val base = samplesFor(world, sampler)
+        if (base.isEmpty()) return
+
+        repeat(occurrences) {
             emitParticles(
                 world = world,
                 positions = base,
-                system = anchorSystemFor(stone),
+                system = system,
                 perBlockChance = 1.0,
-                yOffsetSpread = 0..0
+                yOffsetSpread = profile.yOffsetSpread
             )
         }
+    }
 
-        // Loud surface dust for validation:
-        // deterministic subset of N positions on the stone's chunk surface.
-        if (p.surfaceDustPerTickChance > 0.0 && Random.nextDouble() < p.surfaceDustPerTickChance) {
-            val base = samplesFor(world, surfaceSampler)
-            val selected = fixedSubsetFor(
-                sampler = surfaceSampler,
-                base = base,
-                n = p.surfaceDustSubsetSize,
-                seed = stone.position.asLong()
-            )
+    private fun runSurfaceDustPlan(world: ServerWorld, deltaGameHours: Double) {
+        val sampler = profile.surfaceSampler ?: return
+        val system = profile.surfaceDustSystem ?: return
+        val occurrences = occurrencesForRate(
+            ratePerGameHour = effectiveRate(profile.surfaceDustRatePerGameHour),
+            deltaGameHours = deltaGameHours
+        )
+        if (occurrences <= 0) return
 
+        val base = samplesFor(world, sampler)
+        if (base.isEmpty()) return
+
+        val selected = fixedSubsetFor(
+            sampler = sampler,
+            base = base,
+            n = profile.surfaceDustSubsetSize,
+            seed = profile.surfaceDustSubsetSeed
+        )
+
+        repeat(occurrences) {
             emitParticles(
                 world = world,
                 positions = selected,
-                system = surfaceDustSystemFor(stone),
+                system = system,
                 perBlockChance = 1.0,
-                yOffsetSpread = 0..0
+                yOffsetSpread = 0..0 // exact reproduction of dust plan
             )
         }
+    }
 
-        // Local surface presence (single random surface position per tick when gated).
-        if (p.surfacePresencePerTickChance > 0.0 && Random.nextDouble() < p.surfacePresencePerTickChance) {
-            val base = samplesFor(world, surfaceSampler)
-            if (base.isNotEmpty()) {
-                val pos = base.elementAt(Random.nextInt(base.size))
-                emitParticles(
-                    world = world,
-                    positions = setOf(pos),
-                    system = surfacePresenceSystemFor(p.surfacePresenceParticle),
-                    perBlockChance = 1.0,
-                    yOffsetSpread = p.yOffsetSpread
-                )
-            }
+    private fun runSurfacePresencePlan(world: ServerWorld, deltaGameHours: Double) {
+        val sampler = profile.surfaceSampler ?: return
+        val system = profile.surfacePresenceSystem ?: return
+        val occurrences = occurrencesForRate(
+            ratePerGameHour = effectiveRate(profile.surfacePresenceRatePerGameHour),
+            deltaGameHours = deltaGameHours
+        )
+        if (occurrences <= 0) return
+
+        val base = samplesFor(world, sampler)
+        if (base.isEmpty()) return
+
+        repeat(occurrences) {
+            val pos = base.elementAt(Random.nextInt(base.size))
+            emitParticles(
+                world = world,
+                positions = setOf(pos),
+                system = system,
+                perBlockChance = 1.0,
+                yOffsetSpread = profile.yOffsetSpread
+            )
         }
     }
+
+    /* ---------- Rate helpers ---------- */
+
+    private fun effectiveRate(baseRatePerGameHour: Double): Double {
+        if (baseRatePerGameHour <= 0.0) return 0.0
+        val burstDuration = profile.burstDurationGameHours
+        val burstMultiplier = profile.burstMultiplier
+        return if (burstDuration > 0.0 && elapsedGameHours < burstDuration && burstMultiplier > 1.0) {
+            baseRatePerGameHour * burstMultiplier
+        } else {
+            baseRatePerGameHour
+        }
+    }
+
+    /**
+     * Convert a rate (occurrences per game hour) into an integer number of occurrences for this update.
+     *
+     * We use an "integer + fractional Bernoulli" model:
+     * - k = floor(expected)
+     * - +1 with probability frac(expected)
+     *
+     * This is deterministic-in-expectation and scales correctly when time is advanced manually.
+     */
+    private fun occurrencesForRate(ratePerGameHour: Double, deltaGameHours: Double): Int {
+        if (ratePerGameHour <= 0.0) return 0
+        if (deltaGameHours <= 0.0) return 0
+
+        val expected = ratePerGameHour * deltaGameHours
+        if (expected <= 0.0) return 0
+
+        val k = floor(expected).toInt()
+        val frac = expected - k
+        return k + if (Random.nextDouble() < frac) 1 else 0
+    }
+
+    /* ---------- Sampling helpers ---------- */
 
     private fun samplesFor(world: ServerWorld, sampler: StoneSampler): Set<BlockPos> =
         sampleCache.getOrPut(sampler) { sampler.sample(world) }
@@ -188,41 +217,39 @@ abstract class EffectBase(
         n: Int,
         seed: Long
     ): Set<BlockPos> {
-        // Cache per sampler, deterministic subset is stable for the lifetime of this effect.
+        // Cache per sampler; deterministic subset is stable for the lifetime of this effect.
         return subsetCache.getOrPut(sampler) {
-            if (base.size <= n) base
-            else base.toList().shuffled(Random(seed)).take(n.coerceAtLeast(0)).toSet()
+            if (base.size <= n) return@getOrPut base
+            val rnd = Random(seed)
+            base.shuffled(rnd).take(n).toSet()
         }
     }
 
-    /**
-     * Emit a particle system at each position with probability per block.
-     *
-     * This is the central reusable emission primitive.
-     */
+    /* ---------- Particle emission ---------- */
+
     protected fun emitParticles(
         world: ServerWorld,
         positions: Set<BlockPos>,
         system: ParticleSystemPrototype,
         perBlockChance: Double,
-        yOffsetSpread: IntRange = 0..0,
+        yOffsetSpread: IntRange,
     ) {
         if (positions.isEmpty()) return
+        if (perBlockChance <= 0.0) return
 
-        val minY = yOffsetSpread.first
-        val maxY = yOffsetSpread.last
+        for (pos in positions) {
+            if (perBlockChance < 1.0 && Random.nextDouble() >= perBlockChance) continue
 
-        for (p in positions) {
-            if (Random.nextDouble() >= perBlockChance) continue
-
-            val yOffsetBlocks = if (minY == maxY) minY else Random.nextInt(minY, maxY + 1)
-            val y = p.y + system.baseYOffset + yOffsetBlocks.toDouble()
+            val spread = when {
+                yOffsetSpread.first == yOffsetSpread.last -> yOffsetSpread.first
+                else -> Random.nextInt(yOffsetSpread.first, yOffsetSpread.last + 1)
+            }.toDouble()
 
             world.spawnParticles(
                 system.particle,
-                p.x + 0.5,
-                y,
-                p.z + 0.5,
+                pos.x + 0.5,
+                pos.y + system.baseYOffset + spread,
+                pos.z + 0.5,
                 system.count,
                 system.spreadX,
                 system.spreadY,
@@ -231,87 +258,4 @@ abstract class EffectBase(
             )
         }
     }
-
-    /**
-     * Exact reproduction of the previous "stone anchor" particle system.
-     */
-    protected fun anchorSystemFor(stone: StoneView): ParticleSystemPrototype =
-        when (stone) {
-            is WitherstoneView -> ParticleSystemPrototype(
-                particle = ParticleTypes.ASH,
-                count = 10,
-                spreadX = 0.20,
-                spreadY = 0.20,
-                spreadZ = 0.20,
-                speed = 0.001,
-                baseYOffset = 1.2
-            )
-
-            is LorestoneView -> ParticleSystemPrototype(
-                particle = ParticleTypes.HAPPY_VILLAGER,
-                count = 8,
-                spreadX = 0.15,
-                spreadY = 0.15,
-                spreadZ = 0.15,
-                speed = 0.001,
-                baseYOffset = 1.2
-            )
-
-            else -> ParticleSystemPrototype(
-                particle = ParticleTypes.END_ROD,
-                count = 6,
-                spreadX = 0.15,
-                spreadY = 0.15,
-                spreadZ = 0.15,
-                speed = 0.001,
-                baseYOffset = 1.2
-            )
-        }
-
-    /**
-     * Exact reproduction of the previous "chunk surface dust" particle system.
-     */
-    protected fun surfaceDustSystemFor(stone: StoneView): ParticleSystemPrototype =
-        when (stone) {
-            is WitherstoneView -> ParticleSystemPrototype(
-                particle = ParticleTypes.CAMPFIRE_COSY_SMOKE,
-                count = 6,
-                spreadX = 0.15,
-                spreadY = 0.20,
-                spreadZ = 0.15,
-                speed = 0.01,
-                baseYOffset = 1.0
-            )
-
-            is LorestoneView -> ParticleSystemPrototype(
-                particle = ParticleTypes.END_ROD,
-                count = 6,
-                spreadX = 0.15,
-                spreadY = 0.20,
-                spreadZ = 0.15,
-                speed = 0.01,
-                baseYOffset = 1.0
-            )
-
-            else -> ParticleSystemPrototype(
-                particle = ParticleTypes.CAMPFIRE_COSY_SMOKE,
-                count = 6,
-                spreadX = 0.15,
-                spreadY = 0.20,
-                spreadZ = 0.15,
-                speed = 0.01,
-                baseYOffset = 1.0
-            )
-        }
-
-    private fun surfacePresenceSystemFor(particle: ParticleEffect): ParticleSystemPrototype =
-        ParticleSystemPrototype(
-            particle = particle,
-            count = 6,
-            spreadX = 0.15,
-            spreadY = 0.20,
-            spreadZ = 0.15,
-            speed = 0.01,
-            baseYOffset = 1.0
-        )
 }
