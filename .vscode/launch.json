@@ -6,13 +6,14 @@
       "type": "java",
       "request": "attach",
       "hostName": "localhost",
-      "port": 5005
+      "port": 5005,
+      "preLaunchTask": "Gradle: runServer (debug)",
+      "postDebugTask": "terminateAll"
     }
   ],
   "compounds": [
     {
       "name": "Run + Attach (Fabric Server)",
-      "preLaunchTask": "Gradle: runServer (debug)",
       "configurations": ["Attach to Fabric Server"]
     }
   ]
