@@ -12,7 +12,13 @@ import net.minecraft.world.Heightmap
  * Uses MOTION_BLOCKING_NO_LEAVES to prefer ground over canopy and avoid floating visuals.
  */
 class SingleChunkSurfaceSampler(
-    private val stone: StoneView
+    private val stone: StoneView,
+    /**
+     * Optional deterministic subset size.
+     *
+     * Locked semantics: subset selection is a sampling concern.
+     */
+    private val subsetSize: Int? = null,
 ) : StoneSampler {
 
     override fun sample(world: ServerWorld): Set<BlockPos> {
@@ -29,6 +35,12 @@ class SingleChunkSurfaceSampler(
                 out.add(BlockPos(x, topY, z))
             }
         }
-        return out
+
+        val n = subsetSize
+        if (n == null || n <= 0 || out.size <= n) return out
+
+        // Deterministic subset derived from the stone position.
+        val rnd = kotlin.random.Random(stone.position.asLong())
+        return out.shuffled(rnd).take(n).toSet()
     }
 }
