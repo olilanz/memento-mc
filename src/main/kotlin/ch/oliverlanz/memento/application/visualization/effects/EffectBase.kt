@@ -4,12 +4,12 @@ import ch.oliverlanz.memento.application.time.GameClock
 import ch.oliverlanz.memento.application.time.GameHours
 import ch.oliverlanz.memento.application.time.asGameTicks
 import ch.oliverlanz.memento.application.time.toGameHours
-import ch.oliverlanz.memento.application.visualization.samplers.StoneSampler
 import net.minecraft.particle.ParticleEffect
 import net.minecraft.server.world.ServerWorld
 import net.minecraft.util.math.BlockPos
 import kotlin.math.floor
 import kotlin.random.Random
+import java.util.Random as JavaRandom
 
 /**
  * Base class for all visualization effects.
@@ -37,7 +37,6 @@ abstract class EffectBase {
     private var elapsedGameHours: GameHours = GameHours(0.0)
 
     private var anchorEmitted: Int = 0
-    private var surfaceEmitted: Int = 0
 
     /**
      * Lazily configured profile.
@@ -45,10 +44,11 @@ abstract class EffectBase {
      * Kotlin nuance: this MUST NOT run during base construction, because onConfigure()
      * may depend on subclass constructor properties (e.g. stone views).
      */
-    private val profile: EffectProfile by lazy { EffectProfile().also { onConfigure(it) } }
+    private val profile: EffectProfile by lazy {
+        defaultProfile().also { onConfigure(it) }
+    }
 
-    // Cache full samples per sampler (stable for lifetime of the effect).
-    private val sampleCache = mutableMapOf<StoneSampler, Set<BlockPos>>()
+    private val rng = JavaRandom()
 
     /**
      * FINAL tick entry point. Subclasses must NOT override this.
@@ -95,6 +95,47 @@ abstract class EffectBase {
         alive = false
     }
 
+    /**
+     * Default, fully configured profile.
+     *
+     * Subclasses should only override the few properties that are specific to the
+     * effect instance (most commonly samplers, lifetime and emission rates).
+     */
+    private fun defaultProfile(): EffectProfile = EffectProfile().also { p ->
+        // Anchor defaults (shared across all effects)
+        p.anchorVerticalSpan = 0..0
+        p.anchorSystem = ParticleSystemPrototype(
+            particle = net.minecraft.particle.ParticleTypes.HAPPY_VILLAGER,
+            count = 18,
+            spreadX = 0.18,
+            spreadY = 0.18,
+            spreadZ = 0.18,
+            speed = 0.01,
+            baseYOffset = 1.2,
+        )
+
+        // Surface defaults (shared baseline; subclasses may override particle/system details)
+        p.surfaceVerticalSpan = 0..0
+        p.surfaceSystem = ParticleSystemPrototype(
+            particle = net.minecraft.particle.ParticleTypes.ASH,
+            count = 6,
+            spreadX = 0.30,
+            spreadY = 0.10,
+            spreadZ = 0.30,
+            speed = 0.01,
+            baseYOffset = 1.0,
+        )
+
+        // Samplers intentionally left null by default.
+        p.anchorSampler = null
+        p.surfaceSampler = null
+
+        // Rates/totals default to 0 (disabled) unless configured.
+        p.anchorTotalEmissions = 0
+        p.anchorEmissionsPerGameHour = 0
+        p.surfaceEmissionsPerGameHour = 0
+    }
+
     /* ---------- Plans ---------- */
 
     private fun runAnchorPlan(world: ServerWorld, deltaGameHours: GameHours) {
@@ -115,15 +156,12 @@ abstract class EffectBase {
         }
         if (occurrences <= 0) return
 
-        val base = samplesFor(world, sampler)
-        if (base.isEmpty()) return
-
         repeat(occurrences) {
-            emitParticles(
+            val base = sampler.randomCandidate(world, rng) ?: return
+            emitParticleAt(
                 world = world,
-                positions = base,
+                pos = base,
                 system = system,
-                perBlockChance = 1.0,
                 yOffsetSpread = profile.anchorVerticalSpan
             )
         }
@@ -135,40 +173,28 @@ abstract class EffectBase {
         val sampler = profile.surfaceSampler ?: return
         val system = profile.surfaceSystem ?: return
 
-        val occurrences = when (val lifetime = profile.lifetime) {
-            null -> {
-                var occ = occurrencesForInfinite(
-                    emissionsPerGameHour = profile.surfaceEmissionsPerGameHour,
-                    deltaGameHours = deltaGameHours
-                )
-                // Surface emission safeguard for infinite effects:
-                // ensure spatial presence even at very low temporal rates.
-                if (occ <= 0 && profile.surfaceEmissionsPerGameHour > 0) occ = 1
-                occ
-            }
-            else -> occurrencesForFiniteTotal(
-                total = profile.surfaceTotalEmissions,
-                alreadyEmitted = surfaceEmitted,
-                deltaGameHours = deltaGameHours,
-                lifetime = lifetime
-            )
-        }
+        // Surface emission is always rate-based.
+        // Finite effects are bounded by lifetime (handled in tick()).
+        var occurrences = occurrencesForInfinite(
+            emissionsPerGameHour = profile.surfaceEmissionsPerGameHour,
+            deltaGameHours = deltaGameHours
+        )
+
+        // Surface emission safeguard:
+        // ensure spatial presence even at very low temporal rates.
+        if (occurrences <= 0 && profile.surfaceEmissionsPerGameHour > 0) occurrences = 1
         if (occurrences <= 0) return
 
-        val base = samplesFor(world, sampler)
-        if (base.isEmpty()) return
-
         repeat(occurrences) {
-            emitParticles(
+            val base = sampler.randomCandidate(world, rng) ?: return
+            emitParticleAt(
                 world = world,
-                positions = base,
+                pos = base,
                 system = system,
-                perBlockChance = 1.0,
                 yOffsetSpread = profile.surfaceVerticalSpan
             )
         }
 
-        surfaceEmitted += occurrences
     }
 
     private fun occurrencesForFiniteTotal(
@@ -209,42 +235,29 @@ abstract class EffectBase {
         return k + if (Random.nextDouble() < frac) 1 else 0
     }
 
-    /* ---------- Sampling helpers ---------- */
-
-    private fun samplesFor(world: ServerWorld, sampler: StoneSampler): Set<BlockPos> =
-        sampleCache.getOrPut(sampler) { sampler.sample(world) }
-
     /* ---------- Particle emission ---------- */
 
-    protected fun emitParticles(
+    protected fun emitParticleAt(
         world: ServerWorld,
-        positions: Set<BlockPos>,
+        pos: BlockPos,
         system: ParticleSystemPrototype,
-        perBlockChance: Double,
         yOffsetSpread: IntRange,
     ) {
-        if (positions.isEmpty()) return
-        if (perBlockChance <= 0.0) return
+        val spread = when {
+            yOffsetSpread.first == yOffsetSpread.last -> yOffsetSpread.first
+            else -> Random.nextInt(yOffsetSpread.first, yOffsetSpread.last + 1)
+        }.toDouble()
 
-        for (pos in positions) {
-            if (perBlockChance < 1.0 && Random.nextDouble() >= perBlockChance) continue
-
-            val spread = when {
-                yOffsetSpread.first == yOffsetSpread.last -> yOffsetSpread.first
-                else -> Random.nextInt(yOffsetSpread.first, yOffsetSpread.last + 1)
-            }.toDouble()
-
-            world.spawnParticles(
-                system.particle,
-                pos.x + 0.5,
-                pos.y + system.baseYOffset + spread,
-                pos.z + 0.5,
-                system.count,
-                system.spreadX,
-                system.spreadY,
-                system.spreadZ,
-                system.speed
-            )
-        }
+        world.spawnParticles(
+            system.particle,
+            pos.x + 0.5,
+            pos.y + system.baseYOffset + spread,
+            pos.z + 0.5,
+            system.count,
+            system.spreadX,
+            system.spreadY,
+            system.spreadZ,
+            system.speed
+        )
     }
 }

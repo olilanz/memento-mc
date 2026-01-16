@@ -9,10 +9,10 @@ import ch.oliverlanz.memento.application.visualization.samplers.StoneSampler
  * Locked semantics:
  * - One lifecycle per effect instance (expressed in game time).
  * - Two emitters: anchor and surface.
- * - Each emitter declares what, where, and total emissions over the effect lifetime.
+ * - Each emitter declares what, where, and an emission rate.
  * - No tick-based concepts.
- * - Finite effects declare totals over a finite lifetime.
- * - Infinite effects declare emissions per game hour.
+ * - Finite effects are bounded by lifetime (when set).
+ * - Emission pacing is always expressed as emissions per game hour.
  */
 class EffectProfile {
 
@@ -39,9 +39,6 @@ class EffectProfile {
     var surfaceSampler: StoneSampler? = null
     var surfaceSystem: EffectBase.ParticleSystemPrototype? = null
 
-    /** Total emissions over the finite lifetime. Ignored when lifetime is null. */
-    var surfaceTotalEmissions: Int = 0
-
-    /** Emissions per game hour when lifetime is null (infinite effects). */
+    /** Emissions per game hour (finite effects are bounded by lifetime when set). */
     var surfaceEmissionsPerGameHour: Int = 0
 }
