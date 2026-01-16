@@ -1,5 +1,6 @@
 package ch.oliverlanz.memento.application.visualization.effects
 
+import ch.oliverlanz.memento.application.time.GameHours
 import ch.oliverlanz.memento.application.visualization.samplers.StoneSampler
 
 /**
@@ -14,7 +15,7 @@ import ch.oliverlanz.memento.application.visualization.samplers.StoneSampler
 class EffectProfile {
 
     /** Optional finite lifetime expressed in GAME HOURS. Null means domain-managed / infinite. */
-    var lifetimeGameHours: Double? = null
+    var lifetimeGameHours: GameHours? = null
 
     /**
      * Optional burst window at the start of the effect.
@@ -22,7 +23,7 @@ class EffectProfile {
      *
      * Defaults are neutral (no burst).
      */
-    var burstDurationGameHours: Double = 0.0
+    var burstDurationGameHours: GameHours = GameHours(0.0)
     var burstMultiplier: Double = 1.0
 
     /** Sampler for the anchor projection. Null disables anchor projection. */
