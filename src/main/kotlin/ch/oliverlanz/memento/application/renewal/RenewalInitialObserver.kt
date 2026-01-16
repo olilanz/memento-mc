@@ -5,16 +5,17 @@ import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrigger
 import net.minecraft.server.MinecraftServer
+import net.minecraft.world.chunk.ChunkStatus
 import org.slf4j.LoggerFactory
 
 /**
- * Seeds load status for existing renewal batches on server startup.
+ * Observes renewal batches and seeds unload-gate evidence for newly created batches.
  *
- * This is an observational convenience to seed unload-gate flags without waiting
- * for fresh unload events after restart.
- *
- * NOTE: We intentionally keep this conservative: we treat tracked chunks as 'loaded'
- * on startup unless we have explicit evidence otherwise.
+ * Locked semantics:
+ * - Startup is not a separate code path.
+ * - When stones are loaded, they are registered normally.
+ * - When derived batches are created, we seed their initial unload evidence based on the server's
+ *   current loaded-chunk view (without loading anything).
  */
 class RenewalInitialObserver {
 
@@ -27,9 +28,6 @@ class RenewalInitialObserver {
         if (attached) return
         this.server = server
         attached = true
-
-        applyStartupSnapshot()
-        RenewalTracker.resumeAfterStartup()
     }
 
     fun detach() {
@@ -43,25 +41,32 @@ class RenewalInitialObserver {
         }
     }
 
-    private fun applyStartupSnapshot() {
-        val batches = RenewalTracker.snapshotBatches()
-        if (batches.isEmpty()) return
-        log.info("[RENEWAL] Seeding batch load status for {} batch(es)", batches.size)
-        for (b in batches) {
-            applySnapshotForSnapshot(b)
-        }
-    }
-
     private fun applySnapshotFor(batchName: String) {
         val snap = RenewalTracker.snapshotBatches().firstOrNull { it.name == batchName } ?: return
         applySnapshotForSnapshot(snap)
     }
 
-    private fun applySnapshotForSnapshot(snap: RenewalTracker.RenewalBatchSnapshot) {
-        // Conservative: assume all tracked chunks are loaded at startup.
+    private fun applySnapshotForSnapshot(snap: ch.oliverlanz.memento.domain.renewal.RenewalBatchSnapshot) {
+        val s = server ?: return
+        val world = s.getWorld(snap.dimension)
+
+        // Seed using the server's *current* loaded-chunk view without loading anything.
+        // If the world is unavailable, fall back to "nothing loaded" (safe for renewal gating).
+        val loadedChunks = if (world == null) {
+            emptySet()
+        } else {
+            snap.chunks
+                .asSequence()
+                .filter { pos ->
+                    // create=false: do not load; only report if already present.
+                    world.chunkManager.getChunk(pos.x, pos.z, ChunkStatus.FULL, false) != null
+                }
+                .toSet()
+        }
+
         RenewalTracker.applyInitialSnapshot(
             batchName = snap.name,
-            loadedChunks = snap.chunks,
+            loadedChunks = loadedChunks,
             trigger = RenewalTrigger.INITIAL_SNAPSHOT
         )
     }

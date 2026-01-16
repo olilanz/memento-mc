@@ -1,23 +1,9 @@
 package ch.oliverlanz.memento.application.inspection
 
-import ch.oliverlanz.memento.domain.renewal.RenewalBatchState
-import net.minecraft.registry.RegistryKey
-import net.minecraft.util.math.ChunkPos
-import net.minecraft.world.World
-
 /**
- * Read-only projection of a renewal batch for inspection/reporting.
+ * Application-facing alias for the domain RenewalBatchView.
  *
- * This interface is intentionally minimal and stable:
- * - No mutation
- * - No lifecycle operations
- * - No persistence
- *
- * Both legacy and shadow implementations may expose this view without leaking internals.
+ * Inspection and visualization consume this read-only view, while the domain
+ * remains authoritative for lifecycle and execution semantics.
  */
-interface RenewalBatchView {
-    val name: String
-    val dimension: RegistryKey<World>
-    val chunks: Set<ChunkPos>
-    val state: RenewalBatchState
-}
+typealias RenewalBatchView = ch.oliverlanz.memento.domain.renewal.RenewalBatchView

@@ -22,12 +22,6 @@ object RenewalTracker {
      *
      * Intentionally minimal and stable: no mutation, no lifecycle operations.
      */
-    data class RenewalBatchSnapshot(
-        val name: String,
-        val dimension: RegistryKey<World>,
-        val chunks: Set<ChunkPos>,
-        val state: RenewalBatchState,
-    )
 
     private val batches: MutableMap<String, RenewalBatch> = ConcurrentHashMap()
     private val listeners = linkedSetOf<(RenewalEvent) -> Unit>()
@@ -86,6 +80,20 @@ object RenewalTracker {
                 chunkCount = batch.chunks.size
             )
         )
+
+        emit(
+            RenewalBatchLifecycleTransition(
+                batch = RenewalBatchSnapshot(
+                    name = batch.name,
+                    dimension = batch.dimension,
+                    chunks = batch.chunks,
+                    state = batch.state,
+                ),
+                from = null,
+                to = batch.state,
+                trigger = trigger,
+            )
+        )
     }
 
     fun removeBatch(name: String, trigger: RenewalTrigger) {
@@ -97,6 +105,10 @@ object RenewalTracker {
      * Apply an initial snapshot of loaded chunks for a given batch.
      *
      * This is purely observational: it seeds unload-gate flags without assuming gameplay intent.
+     *
+     * IMPORTANT:
+     * - Applying evidence must be followed by the same gate evaluation as chunk unload events.
+     * - Otherwise batches can stall forever at startup (no unload event can "happen" for unknown chunks).
      */
     fun applyInitialSnapshot(batchName: String, loadedChunks: Set<ChunkPos>, trigger: RenewalTrigger) {
         val batch = batches[batchName] ?: return
@@ -111,6 +123,9 @@ object RenewalTracker {
                 unloaded = unloaded
             )
         )
+
+        // Single code path: initial evidence can satisfy the unload gate immediately.
+        maybePassUnloadGate(batch, trigger)
     }
 
     /**
@@ -125,23 +140,8 @@ object RenewalTracker {
             batch.observeUnloaded(pos)
             emit(ChunkObserved(batchName = batch.name, trigger = RenewalTrigger.CHUNK_UNLOAD, chunk = pos, state = batch.state))
 
-            if (batch.state == RenewalBatchState.WAITING_FOR_UNLOAD && batch.allUnloadedSimultaneously()) {
-                transition(batch, RenewalBatchState.UNLOAD_COMPLETED, RenewalTrigger.CHUNK_UNLOAD)
-
-                // Locked execution boundary: once unload gate is passed, the batch becomes ready for renewal.
-                transition(batch, RenewalBatchState.WAITING_FOR_RENEWAL, RenewalTrigger.CHUNK_UNLOAD)
-
-                // New execution phase: start collecting renewal evidence from scratch.
-                batch.resetRenewalEvidence()
-                emit(
-                    BatchWaitingForRenewal(
-                        batchName = batch.name,
-                        trigger = RenewalTrigger.CHUNK_UNLOAD,
-                        dimension = batch.dimension,
-                        chunks = batch.chunks.toList()
-                    )
-                )
-            }
+            // Single code path: unload evidence may satisfy the gate.
+            maybePassUnloadGate(batch, RenewalTrigger.CHUNK_UNLOAD)
         }
     }
 
@@ -158,34 +158,69 @@ object RenewalTracker {
             emit(ChunkObserved(batchName = batch.name, trigger = RenewalTrigger.CHUNK_LOAD, chunk = pos, state = batch.state))
 
             // If a chunk loads while we are waiting for renewal, treat it as renewal evidence.
-// This is intentionally compatible with ChunkLoadScheduler forcing loads as a completion signal.
-if (batch.state == RenewalBatchState.WAITING_FOR_RENEWAL) {
-    batch.observeRenewed(pos)
+            // This is intentionally compatible with ChunkLoadScheduler forcing loads as a completion signal.
+            if (batch.state == RenewalBatchState.WAITING_FOR_RENEWAL) {
+                batch.observeRenewed(pos)
 
-    if (batch.allRenewedAtLeastOnce()) {
-        transition(batch, RenewalBatchState.RENEWAL_COMPLETE, RenewalTrigger.CHUNK_LOAD)
-        emit(BatchCompleted(batchName = batch.name, trigger = RenewalTrigger.CHUNK_LOAD, dimension = batch.dimension))
+                if (batch.allRenewedAtLeastOnce()) {
+                    transition(batch, RenewalBatchState.RENEWAL_COMPLETE, RenewalTrigger.CHUNK_LOAD)
+                    emit(BatchCompleted(batchName = batch.name, trigger = RenewalTrigger.CHUNK_LOAD, dimension = batch.dimension))
 
-        // Retire from active tracking (terminal state).
-        batches.remove(batch.name)
-    }
-}
-
+                    // Retire from active tracking (terminal state).
+                    batches.remove(batch.name)
+                }
+            }
         }
     }
 
     /**
-     * Startup resumption hook. Currently a no-op, but kept explicit to support wiring.
+     * Shared unload-gate evaluation.
+     *
+     * Called after any observational update that could satisfy the unload gate:
+     * - initial snapshot
+     * - chunk unload events
+     *
+     * No "startup semantics" exist here. This is normal gate evaluation.
      */
-    fun resumeAfterStartup() {
-        // Intentionally no-op for now.
+    private fun maybePassUnloadGate(batch: RenewalBatch, trigger: RenewalTrigger) {
+        if (batch.state != RenewalBatchState.WAITING_FOR_UNLOAD) return
+        if (!batch.allUnloadedSimultaneously()) return
+
+        transition(batch, RenewalBatchState.UNLOAD_COMPLETED, trigger)
+
+        // Locked execution boundary: once unload gate is passed, the batch becomes ready for renewal.
+        transition(batch, RenewalBatchState.WAITING_FOR_RENEWAL, trigger)
+
+        // New execution phase: start collecting renewal evidence from scratch.
+        batch.resetRenewalEvidence()
+        emit(
+            BatchWaitingForRenewal(
+                batchName = batch.name,
+                trigger = trigger,
+                dimension = batch.dimension,
+                chunks = batch.chunks.toList()
+            )
+        )
     }
 
     private fun transition(batch: RenewalBatch, to: RenewalBatchState, trigger: RenewalTrigger) {
         val from = batch.state
         if (from == to) return
         batch.state = to
-        emit(BatchUpdated(batchName = batch.name, trigger = trigger, from = from, to = to, chunkCount = batch.chunks.size))
+emit(
+    RenewalBatchLifecycleTransition(
+        batch = RenewalBatchSnapshot(
+            name = batch.name,
+            dimension = batch.dimension,
+            chunks = batch.chunks,
+            state = batch.state,
+        ),
+        from = from,
+        to = to,
+        trigger = trigger,
+    )
+)
+emit(BatchUpdated(batchName = batch.name, trigger = trigger, from = from, to = to, chunkCount = batch.chunks.size))
         emit(GatePassed(batchName = batch.name, trigger = trigger, from = from, to = to))
     }
 

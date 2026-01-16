@@ -1,16 +1,18 @@
 package ch.oliverlanz.memento.application
 
-import ch.oliverlanz.memento.domain.events.WitherstoneTransitionTrigger
+import ch.oliverlanz.memento.domain.events.StoneLifecycleTrigger
 import ch.oliverlanz.memento.domain.stones.Lorestone
 import ch.oliverlanz.memento.domain.stones.Stone
 import ch.oliverlanz.memento.domain.stones.StoneTopology
 import ch.oliverlanz.memento.domain.stones.Witherstone
+import net.minecraft.entity.attribute.EntityAttributes
 import net.minecraft.server.command.ServerCommandSource
 import net.minecraft.text.Text
 import net.minecraft.util.Formatting
 import net.minecraft.util.hit.HitResult
 import net.minecraft.util.math.BlockPos
 import org.slf4j.LoggerFactory
+import ch.oliverlanz.memento.application.visualization.EffectsHost
 
 /**
  * Application-layer command handlers.
@@ -23,44 +25,93 @@ object CommandHandlers {
 
     private val log = LoggerFactory.getLogger("memento")
 
+    @Volatile
+    private var effectsHost: EffectsHost? = null
+
+    fun attachVisualizationEngine(engine: EffectsHost) {
+        effectsHost = engine
+    }
+
+    fun detachVisualizationEngine() {
+        effectsHost = null
+    }
+
     enum class StoneKind { WITHERSTONE, LORESTONE }
 
     fun list(kind: StoneKind?, source: ServerCommandSource): Int {
-        val stones = StoneTopology.list()
-            .filter { stone ->
-                when (kind) {
-                    null -> true
-                    StoneKind.WITHERSTONE -> stone is Witherstone
-                    StoneKind.LORESTONE -> stone is Lorestone
+        return try {
+            val stones = StoneTopology.list()
+                .filter { stone ->
+                    when (kind) {
+                        null -> true
+                        StoneKind.WITHERSTONE -> stone is Witherstone
+                        StoneKind.LORESTONE -> stone is Lorestone
+                    }
                 }
+                .sortedBy { it.name }
+
+            if (stones.isEmpty()) {
+                source.sendFeedback({ Text.literal("No stones registered.").formatted(Formatting.GRAY) }, false)
+                return 1
             }
-            .sortedBy { it.name }
 
-        if (stones.isEmpty()) {
-            source.sendFeedback({ Text.literal("No stones registered.").formatted(Formatting.GRAY) }, false)
-            return 1
+            source.sendFeedback({ Text.literal("Registered stones (${stones.size}):").formatted(Formatting.GOLD) }, false)
+            stones.forEach { stone ->
+                source.sendFeedback({ Text.literal(" - ${formatStoneLine(stone)}") }, false)
+            }
+            1
+        } catch (e: Exception) {
+            log.error("[CMD] list failed", e)
+            source.sendError(Text.literal("Memento: could not list stones (see server log)."))
+            0
         }
-
-        source.sendFeedback({ Text.literal("Registered stones (${stones.size}):").formatted(Formatting.GOLD) }, false)
-        stones.forEach { stone ->
-            source.sendFeedback({ Text.literal(" - ${formatStoneLine(stone)}") }, false)
-        }
-        return 1
     }
 
     fun inspect(source: ServerCommandSource, name: String): Int {
+        return try {
+            val stone = StoneTopology.get(name)
+            if (stone == null) {
+                source.sendError(Text.literal("No stone named '$name'."))
+                return 0
+            }
+
+            val lines = formatStoneInspect(stone)
+            source.sendFeedback({ Text.literal(lines.first()).formatted(Formatting.GOLD) }, false)
+            lines.drop(1).forEach { line ->
+                source.sendFeedback({ Text.literal(line).formatted(Formatting.GRAY) }, false)
+            }
+            1
+        } catch (e: Exception) {
+            log.error("[CMD] inspect failed name='{}'", name, e)
+            source.sendError(Text.literal("Memento: could not inspect stone (see server log)."))
+            0
+        }
+    }
+
+    fun visualize(source: ServerCommandSource, name: String): Int {
+        log.info("[CMD] visualize name='{}' by={}", name, source.name)
+
         val stone = StoneTopology.get(name)
         if (stone == null) {
             source.sendError(Text.literal("No stone named '$name'."))
             return 0
         }
 
-        val lines = formatStoneInspect(stone)
-        source.sendFeedback({ Text.literal(lines.first()).formatted(Formatting.GOLD) }, false)
-        lines.drop(1).forEach { line ->
-            source.sendFeedback({ Text.literal(line).formatted(Formatting.GRAY) }, false)
+        val engine = effectsHost
+        if (engine == null) {
+            source.sendError(Text.literal("Visualization engine is not ready yet."))
+            return 0
         }
-        return 1
+
+        return try {
+            engine.visualizeStone(stone)
+            source.sendFeedback({ Text.literal("Visualizing '$name' for a short time.").formatted(Formatting.YELLOW) }, false)
+            1
+        } catch (e: Exception) {
+            log.error("[CMD] visualize failed name='{}'", name, e)
+            source.sendError(Text.literal("Memento: could not visualize stone (see server log)."))
+            0
+        }
     }
 
     fun addWitherstone(source: ServerCommandSource, name: String, radius: Int, daysToMaturity: Int): Int {
@@ -70,14 +121,19 @@ object CommandHandlers {
 
         val pos = resolveTargetBlockOrFail(source) ?: return 0
 
-        StoneTopology.addOrReplaceWitherstone(
-            name = name,
-            dimension = dim,
-            position = pos,
-            radius = radius,
-            daysToMaturity = daysToMaturity,
-            trigger = WitherstoneTransitionTrigger.OP_COMMAND
-        )
+                        try {
+        StoneTopology.addWitherstone(
+                    name = name,
+                    dimension = dim,
+                    position = pos,
+                    radius = radius,
+                    daysToMaturity = daysToMaturity,
+                    trigger = StoneLifecycleTrigger.OP_COMMAND
+                )
+                } catch (e: IllegalArgumentException) {
+                    source.sendError(Text.literal(e.message ?: "Invalid stone definition."))
+                    return 0
+                }
 
         source.sendFeedback(
             { Text.literal("Witherstone '$name' registered at ${pos.x},${pos.y},${pos.z} (r=$radius, days=$daysToMaturity).").formatted(Formatting.GREEN) },
@@ -93,12 +149,17 @@ object CommandHandlers {
 
         val pos = resolveTargetBlockOrFail(source) ?: return 0
 
-        StoneTopology.addOrReplaceLorestone(
-            name = name,
-            dimension = dim,
-            position = pos,
-            radius = radius
-        )
+                        try {
+        StoneTopology.addLorestone(
+                    name = name,
+                    dimension = dim,
+                    position = pos,
+                    radius = radius
+                )
+                } catch (e: IllegalArgumentException) {
+                    source.sendError(Text.literal(e.message ?: "Invalid stone definition."))
+                    return 0
+                }
 
         source.sendFeedback(
             { Text.literal("Lorestone '$name' registered at ${pos.x},${pos.y},${pos.z} (r=$radius).").formatted(Formatting.GREEN) },
@@ -109,76 +170,98 @@ object CommandHandlers {
 
     fun remove(source: ServerCommandSource, name: String): Int {
         log.info("[CMD] removeStone name='{}' by={}", name, source.name)
-        val existing = StoneTopology.get(name)
-        if (existing == null) {
-            source.sendError(Text.literal("No stone named '$name'."))
-            return 0
+        return try {
+            val existing = StoneTopology.get(name)
+            if (existing == null) {
+                source.sendError(Text.literal("No stone named '$name'."))
+                return 0
+            }
+
+            StoneTopology.remove(name)
+
+            source.sendFeedback({ Text.literal("Removed ${existing.javaClass.simpleName.lowercase()} '$name'.").formatted(Formatting.YELLOW) }, false)
+            1
+        } catch (e: Exception) {
+            log.error("[CMD] remove failed name='{}'", name, e)
+            source.sendError(Text.literal("Memento: could not remove stone (see server log)."))
+            0
         }
-
-        StoneTopology.remove(name)
-
-        source.sendFeedback({ Text.literal("Removed ${existing.javaClass.simpleName.lowercase()} '$name'.").formatted(Formatting.YELLOW) }, false)
-        return 1
     }
 
-    fun setRadius(source: ServerCommandSource, name: String, value: Int): Int {
-        log.info("[CMD] setRadius name='{}' radius={} by={}", name, value, source.name)
-        val stone = StoneTopology.get(name)
-        if (stone == null) {
-            source.sendError(Text.literal("No stone named '$name'."))
-            return 0
-        }
+        fun alterRadius(source: ServerCommandSource, name: String, value: Int): Int {
+        log.info("[CMD] alterRadius name='{}' radius={} by={}", name, value, source.name)
 
-        when (stone) {
-            is Witherstone -> StoneTopology.addOrReplaceWitherstone(
-                name = stone.name,
-                dimension = stone.dimension,
-                position = stone.position,
+        return try {
+            val ok = StoneTopology.alterRadius(
+                name = name,
                 radius = value,
-                daysToMaturity = stone.daysToMaturity,
-                trigger = WitherstoneTransitionTrigger.OP_COMMAND
+                trigger = StoneLifecycleTrigger.OP_COMMAND,
             )
-            is Lorestone -> StoneTopology.addOrReplaceLorestone(
-                name = stone.name,
-                dimension = stone.dimension,
-                position = stone.position,
-                radius = value
-            )
-        }
 
-        source.sendFeedback({ Text.literal("Updated radius for '$name' to $value.").formatted(Formatting.GREEN) }, false)
-        return 1
+            if (!ok) {
+                source.sendError(Text.literal("No stone named '$name'."))
+                0
+            } else {
+                source.sendFeedback(
+                    { Text.literal("Updated radius for '$name' to $value.").formatted(Formatting.GREEN) },
+                    false
+                )
+                1
+            }
+        } catch (e: Exception) {
+            log.error("[CMD] alterRadius failed name='{}' radius={}", name, value, e)
+            source.sendError(Text.literal("Memento: could not alter radius (see server log)."))
+            0
+        }
     }
 
-    fun setDaysToMaturity(source: ServerCommandSource, name: String, value: Int): Int {
-        log.info("[CMD] setDaysToMaturity name='{}' daysToMaturity={} by={}", name, value, source.name)
-        val stone = StoneTopology.get(name)
-        if (stone == null) {
-            source.sendError(Text.literal("No stone named '$name'."))
-            return 0
-        }
-        if (stone !is Witherstone) {
-            source.sendError(Text.literal("'$name' is not a witherstone."))
-            return 0
-        }
 
-        StoneTopology.addOrReplaceWitherstone(
-            name = stone.name,
-            dimension = stone.dimension,
-            position = stone.position,
-            radius = stone.radius,
-            daysToMaturity = value,
-            trigger = WitherstoneTransitionTrigger.OP_COMMAND
-        )
+        fun alterDaysToMaturity(source: ServerCommandSource, name: String, value: Int): Int {
+        log.info("[CMD] alterDaysToMaturity name='{}' daysToMaturity={} by={}", name, value, source.name)
 
-        source.sendFeedback({ Text.literal("Updated daysToMaturity for '$name' to $value.").formatted(Formatting.GREEN) }, false)
-        return 1
+        return try {
+            when (
+                StoneTopology.alterDaysToMaturity(
+                    name = name,
+                    daysToMaturity = value,
+                    trigger = StoneLifecycleTrigger.OP_COMMAND,
+                )
+            ) {
+                StoneTopology.AlterDaysResult.OK -> {
+                    source.sendFeedback(
+                        { Text.literal("Updated daysToMaturity for '$name' to $value.").formatted(Formatting.GREEN) },
+                        false
+                    )
+                    1
+                }
+
+                StoneTopology.AlterDaysResult.NOT_FOUND -> {
+                    source.sendError(Text.literal("No stone named '$name'."))
+                    0
+                }
+
+                StoneTopology.AlterDaysResult.NOT_SUPPORTED -> {
+                    source.sendError(Text.literal("Stone '$name' does not support daysToMaturity (Lorestone)."))
+                    0
+                }
+
+                StoneTopology.AlterDaysResult.ALREADY_CONSUMED -> {
+                    source.sendError(Text.literal("Stone '$name' is already consumed."))
+                    0
+                }
+            }
+        } catch (e: Exception) {
+            log.error("[CMD] alterDaysToMaturity failed name='{}' daysToMaturity={}", name, value, e)
+            source.sendError(Text.literal("Memento: could not alter daysToMaturity (see server log)."))
+            0
+        }
     }
+
 
     private fun resolveTargetBlockOrFail(source: ServerCommandSource): BlockPos? {
         val player = source.playerOrThrow
         val hit = player.raycast(
-            5.0,   // reach
+            15.0, // max distance
             0.0f,  // tick delta
             false
         )

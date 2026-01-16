@@ -44,6 +44,17 @@ object Commands {
                     )
                 )
 
+
+                /* ======================
+                 * VISUALIZE
+                 * ====================== */
+                .then(literal("visualize")
+                    .then(argument("name", StringArgumentType.word())
+                        .executes { ctx ->
+                            CommandHandlers.visualize(ctx.source, StringArgumentType.getString(ctx, "name"))
+                        }
+                    )
+                )
                 /* ======================
                  * ADD
                  * ====================== */
@@ -60,7 +71,7 @@ object Commands {
                                     MementoConstants.DEFAULT_DAYS_TO_MATURITY
                                 )
                             }
-                            .then(argument("radius", IntegerArgumentType.integer(1, 10))
+                            .then(argument("radius", IntegerArgumentType.integer(0, 10))
                                 .executes { ctx ->
                                     CommandHandlers.addWitherstone(
                                         ctx.source,
@@ -93,7 +104,7 @@ object Commands {
                                     MementoConstants.DEFAULT_CHUNKS_RADIUS
                                 )
                             }
-                            .then(argument("radius", IntegerArgumentType.integer(1, 10))
+                            .then(argument("radius", IntegerArgumentType.integer(0, 10))
                                 .executes { ctx ->
                                     CommandHandlers.addLorestone(
                                         ctx.source,
@@ -126,52 +137,32 @@ object Commands {
                     )
                 )
 
-                /* ======================
-                 * SET
-                 * ====================== */
-                .then(literal("set")
 
-                    // witherstone attributes
-                    .then(literal("witherstone")
-                        .then(argument("name", StringArgumentType.word())
-                            .then(literal("radius")
-                                .then(argument("value", IntegerArgumentType.integer(1, 10))
-                                    .executes { ctx ->
-                                        CommandHandlers.setRadius(
-                                            ctx.source,
-                                            StringArgumentType.getString(ctx, "name"),
-                                            IntegerArgumentType.getInteger(ctx, "value")
-                                        )
-                                    }
-                                )
-                            )
-                            .then(literal("daysToMaturity")
-                                .then(argument("value", IntegerArgumentType.integer(0, 10))
-                                    .executes { ctx ->
-                                        CommandHandlers.setDaysToMaturity(
-                                            ctx.source,
-                                            StringArgumentType.getString(ctx, "name"),
-                                            IntegerArgumentType.getInteger(ctx, "value")
-                                        )
-                                    }
-                                )
+                /* ======================
+                 * ALTER
+                 * ====================== */
+                .then(literal("alter")
+                    .then(argument("name", StringArgumentType.word())
+                        .then(literal("radius")
+                            .then(argument("value", IntegerArgumentType.integer(0, 10))
+                                .executes { ctx ->
+                                    CommandHandlers.alterRadius(
+                                        ctx.source,
+                                        StringArgumentType.getString(ctx, "name"),
+                                        IntegerArgumentType.getInteger(ctx, "value")
+                                    )
+                                }
                             )
                         )
-                    )
-
-                    // lorestone attributes
-                    .then(literal("lorestone")
-                        .then(argument("name", StringArgumentType.word())
-                            .then(literal("radius")
-                                .then(argument("value", IntegerArgumentType.integer(1, 10))
-                                    .executes { ctx ->
-                                        CommandHandlers.setRadius(
-                                            ctx.source,
-                                            StringArgumentType.getString(ctx, "name"),
-                                            IntegerArgumentType.getInteger(ctx, "value")
-                                        )
-                                    }
-                                )
+                        .then(literal("daysToMaturity")
+                            .then(argument("value", IntegerArgumentType.integer(0, 10))
+                                .executes { ctx ->
+                                    CommandHandlers.alterDaysToMaturity(
+                                        ctx.source,
+                                        StringArgumentType.getString(ctx, "name"),
+                                        IntegerArgumentType.getInteger(ctx, "value")
+                                    )
+                                }
                             )
                         )
                     )

@@ -1,102 +1,137 @@
 package ch.oliverlanz.memento
 
+import ch.oliverlanz.memento.application.CommandHandlers
 import ch.oliverlanz.memento.application.renewal.ChunkLoadScheduler
 import ch.oliverlanz.memento.application.renewal.RenewalInitialObserver
 import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge
 import ch.oliverlanz.memento.application.stone.StoneMaturityTimeBridge
 import ch.oliverlanz.memento.application.time.GameTimeTracker
-import ch.oliverlanz.memento.application.visualization.StoneVisualizationEngine
+import ch.oliverlanz.memento.application.visualization.EffectsHost
+import ch.oliverlanz.memento.domain.renewal.RenewalBatchLifecycleTransition
+import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerLogging
 import ch.oliverlanz.memento.domain.stones.StoneTopologyHooks
+import ch.oliverlanz.memento.infrastructure.MementoConstants
 import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents
+import net.minecraft.server.MinecraftServer
 import org.slf4j.LoggerFactory
 
 object Memento : ModInitializer {
 
-    private val log = LoggerFactory.getLogger("memento")
+    private val log = LoggerFactory.getLogger("Memento")
+
+    private var effectsHost: EffectsHost? = null
+    private val gameTimeTracker = GameTimeTracker()
+
+    // Renewal wiring (application/infrastructure)
+    private var renewalInitialObserver: RenewalInitialObserver? = null
+    private var chunkLoadScheduler: ChunkLoadScheduler? = null
+
+    private var renewalTickCounter: Int = 0
+
+    // Single listener to fan out RenewalTracker domain events to application/infrastructure components.
+    private val renewalEventListener: (RenewalEvent) -> Unit = { e ->
+        renewalInitialObserver?.onRenewalEvent(e)
+        chunkLoadScheduler?.onRenewalEvent(e)
+        RenewalRegenerationBridge.onRenewalEvent(e)
+
+        // EffectsHost only cares about batch lifecycle transitions.
+        if (e is RenewalBatchLifecycleTransition) {
+            effectsHost?.onRenewalEvent(e)
+        }
+    }
 
     override fun onInitialize() {
-        log.info("Initializing Memento (new authoritative pipeline)")
+        log.info("Initializing Memento")
 
+        // Register /memento command tree.
         Commands.register()
 
-        val scheduler = ChunkLoadScheduler(chunksPerTick = 1)
-        val initialObserver = RenewalInitialObserver()
-        val timeTracker = GameTimeTracker(clockEmitEveryTicks = 10)
+        // Chunk observations -> RenewalTracker
+        // (Domain remains observational; it only reacts to these hooks.)
+        ServerChunkEvents.CHUNK_LOAD.register { world, chunk ->
+            RenewalTrackerHooks.onChunkLoaded(world.registryKey, chunk.pos)
+        }
+        ServerChunkEvents.CHUNK_UNLOAD.register { world, chunk ->
+            RenewalTrackerHooks.onChunkUnloaded(world.registryKey, chunk.pos)
+        }
 
-        RenewalTracker.subscribe(scheduler::onRenewalEvent)
-        RenewalTracker.subscribe(initialObserver::onRenewalEvent)
-        RenewalTracker.subscribe(RenewalRegenerationBridge::onRenewalEvent)
+        // Attach server-scoped components.
+        ServerLifecycleEvents.SERVER_STARTED.register { server: MinecraftServer ->
+            // ------------------------------------------------------------
+            // Wiring order matters.
+            // All observers must be attached BEFORE any domain activity can emit events.
+            // Startup must not be a separate semantic code path.
+            // ------------------------------------------------------------
 
-        // -----------------------------------------------------------------
-        // Server lifecycle wiring
-        // -----------------------------------------------------------------
-
-        ServerLifecycleEvents.SERVER_STARTED.register(ServerLifecycleEvents.ServerStarted { server ->
-            // IMPORTANT: Attach all observers / bridges BEFORE StoneTopology.attach(),
-            // because attach() performs startup reconciliation which may emit transitions.
+            // Renewal: logging + observational seeding + paced execution.
             RenewalTrackerLogging.attachOnce()
+            renewalInitialObserver = RenewalInitialObserver().also { it.attach(server) }
+            chunkLoadScheduler = ChunkLoadScheduler(chunksPerTick = 1).also { it.attach(server) }
+
+            // Visualization host must be attached before any domain activity can emit events.
+            effectsHost = EffectsHost(server)
+            CommandHandlers.attachVisualizationEngine(effectsHost!!)
+
+            // Fan out tracker events.
+            RenewalTracker.subscribe(renewalEventListener)
+
+            // Application wiring that reacts to normal domain events.
             WitherstoneRenewalBridge.attach()
 
-            initialObserver.attach(server)
-            scheduler.attach(server)
-            timeTracker.attach(server)
-
-            // Time-driven stone maturity (semantic day events)
-            StoneMaturityTimeBridge.attach()
-
-            // Visualization is application-level and event-driven.
-            StoneVisualizationEngine.attach(server)
-
+            // Domain startup (loading stones must behave like normal creation).
             StoneTopologyHooks.onServerStarted(server)
 
-            // Some stones may already be persisted as MATURED. Startup reconciliation may therefore be a no-op.
-            // Reconcile AFTER StoneTopology is attached to ensure renewal batches exist for already-matured stones.
-            WitherstoneRenewalBridge.reconcileAfterStoneTopologyAttached(reason = "startup_post_attach")
-        })
+            // Drive stone maturity from semantic day events.
+            StoneMaturityTimeBridge.attach()
 
-        ServerLifecycleEvents.SERVER_STOPPING.register(ServerLifecycleEvents.ServerStopping {
-            scheduler.detach()
-            initialObserver.detach()
-            StoneMaturityTimeBridge.detach()
-            timeTracker.detach()
-            WitherstoneRenewalBridge.detach()
+            gameTimeTracker.attach(server)
 
-            StoneVisualizationEngine.detach()
+            renewalTickCounter = 0
+        }
+
+        // Detach cleanly.
+        ServerLifecycleEvents.SERVER_STOPPING.register {
+            gameTimeTracker.detach()
+
+            // Renewal detach first (avoid consuming stones while topology is stopping).
+            RenewalTracker.unsubscribe(renewalEventListener)
+
+            chunkLoadScheduler?.detach()
+            chunkLoadScheduler = null
+
+            renewalInitialObserver?.detach()
+            renewalInitialObserver = null
 
             RenewalRegenerationBridge.clear()
             RenewalTrackerLogging.detach()
+
+            StoneMaturityTimeBridge.detach()
+            WitherstoneRenewalBridge.detach()
             StoneTopologyHooks.onServerStopping()
-        })
 
-        // -----------------------------------------------------------------
-        // Execution loop
-        // -----------------------------------------------------------------
+            CommandHandlers.detachVisualizationEngine()
+            effectsHost = null
+        }
 
-        ServerTickEvents.END_SERVER_TICK.register(ServerTickEvents.EndTick {
-            // Renewal work (paced)
-            scheduler.tick()
+        // Transport tick only (NO direct domain logic here).
+        // (Application/infrastructure may still need a paced tick.)
+        ServerTickEvents.END_SERVER_TICK.register {
+            gameTimeTracker.tick()
 
-            // Time tracking (drives semantic events + application clock)
-            timeTracker.tick()
-        })
-
-        // -----------------------------------------------------------------
-        // Chunk lifecycle -> RenewalTracker (observational)
-        // -----------------------------------------------------------------
-
-        ServerChunkEvents.CHUNK_LOAD.register(ServerChunkEvents.Load { world, chunk ->
-            RenewalTrackerHooks.onChunkLoaded(world.registryKey, chunk.pos)
-        })
-
-        ServerChunkEvents.CHUNK_UNLOAD.register(ServerChunkEvents.Unload { world, chunk ->
-            RenewalTrackerHooks.onChunkUnloaded(world.registryKey, chunk.pos)
-        })
+            val scheduler = chunkLoadScheduler
+            if (scheduler != null) {
+                renewalTickCounter++
+                if (renewalTickCounter % MementoConstants.REGENERATION_CHUNK_INTERVAL_TICKS == 0) {
+                    scheduler.tick()
+                }
+            }
+        }
     }
 }

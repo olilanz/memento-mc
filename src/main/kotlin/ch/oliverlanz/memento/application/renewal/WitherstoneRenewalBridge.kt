@@ -1,62 +1,53 @@
 package ch.oliverlanz.memento.application.renewal
 
 import ch.oliverlanz.memento.domain.events.StoneDomainEvents
-import ch.oliverlanz.memento.domain.events.WitherstoneStateTransition
+import ch.oliverlanz.memento.domain.events.StoneLifecycleState
+import ch.oliverlanz.memento.domain.events.StoneLifecycleTransition
 import ch.oliverlanz.memento.domain.stones.StoneTopology
-import ch.oliverlanz.memento.domain.stones.WitherstoneState
+import ch.oliverlanz.memento.domain.stones.WitherstoneView
 import org.slf4j.LoggerFactory
 
 /**
- * Application-layer wiring:
- * - listens to Witherstone lifecycle transitions
- * - triggers topology reconciliation when stones become MATURED
+ * Application-layer wiring for renewal intent derivation.
+ *
+ * NOTE: Startup must not be a separate semantic code path. This bridge only reacts
+ * to normal domain events (Witherstone transitions) and asks the topology to ensure
+ * derived renewal intent exists for matured stones.
  *
  * Authority:
- * - StoneTopology is the sole authority for deriving renewal intent (chunk sets).
+ * - StoneTopology derives eligible chunk sets.
  * - RenewalTracker owns RenewalBatch lifecycle and state transitions.
  */
 object WitherstoneRenewalBridge {
 
-    private val log = LoggerFactory.getLogger("memento")
-
-    private var attached = false
+    private val log = LoggerFactory.getLogger("Memento")
+    private var attached: Boolean = false
 
     fun attach() {
         if (attached) return
-        StoneDomainEvents.subscribeToWitherstoneTransitions(::onWitherstoneTransition)
+        StoneDomainEvents.subscribeToLifecycleTransitions(::onLifecycleTransition)
         attached = true
     }
 
     fun detach() {
         if (!attached) return
-        StoneDomainEvents.unsubscribeFromWitherstoneTransitions(::onWitherstoneTransition)
+        StoneDomainEvents.unsubscribeFromLifecycleTransitions(::onLifecycleTransition)
         attached = false
     }
 
-    /**
-     * Called after StoneTopology has been attached (and persistence loaded).
-     *
-     * The bridge does not derive intent itself.
-     * It simply asks the topology to reconcile all currently-matured witherstones.
-     */
-    fun reconcileAfterStoneTopologyAttached(reason: String) {
-        val count = StoneTopology.reconcileAllMaturedWitherstones(reason)
-        log.info("[BRIDGE] reconcile done reason={} maturedWitherstones={}", reason, count)
-    }
-
-    private fun onWitherstoneTransition(e: WitherstoneStateTransition) {
-        // We care only about MATURED transitions.
-        if (e.to != WitherstoneState.MATURED) return
+    private fun onLifecycleTransition(e: StoneLifecycleTransition) {
+        val witherstone = e.stone as? WitherstoneView ?: return
+        if (e.to != StoneLifecycleState.MATURED) return
 
         val applied = StoneTopology.reconcileRenewalIntentForMaturedWitherstone(
-            stoneName = e.stone.name,
+            stoneName = witherstone.name,
             reason = "transition_${e.trigger}",
         )
 
         if (applied) {
             log.info(
                 "[BRIDGE] matured reconciliation applied witherstone='{}' trigger={}",
-                e.stone.name,
+                witherstone.name,
                 e.trigger,
             )
         }

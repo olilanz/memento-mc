@@ -1,76 +1,60 @@
 package ch.oliverlanz.memento.domain.events
 
 import ch.oliverlanz.memento.domain.stones.StoneView
-import ch.oliverlanz.memento.domain.stones.WitherstoneState
-import ch.oliverlanz.memento.domain.stones.WitherstoneView
 
 /**
- * Canonical structured event emitted when a stone is created (first time a name appears).
- */
-data class StoneCreated(
-    val stone: StoneView,
-)
-
-/**
- * Canonical structured event emitted by the shadow StoneTopology.
+ * Canonical lifecycle state shared across all stones.
  *
- * Single event type only: lifecycle state transitions.
- * Domain code does not log; logging is attached by subscribers.
+ * This is intentionally domain-near: stones are not CRUD entities.
+ * They move through a lifecycle from being placed into the world to being consumed.
  */
-data class WitherstoneStateTransition(
-    val stone: WitherstoneView,
-    val from: WitherstoneState,
-    val to: WitherstoneState,
-    val trigger: WitherstoneTransitionTrigger,
-)
+enum class StoneLifecycleState {
+    PLACED,
+    MATURING,
+    MATURED,
+    CONSUMED,
+}
 
-enum class WitherstoneTransitionTrigger {
+/**
+ * Canonical triggers for lifecycle transitions.
+ *
+ * Triggers are observational metadata, not branching semantics.
+ */
+enum class StoneLifecycleTrigger {
     SERVER_START,
     NIGHTLY_TICK,
     OP_COMMAND,
     RENEWAL_COMPLETED,
+    MANUAL_REMOVE,
 }
+
+/**
+ * Canonical structured event emitted by StoneTopology.
+ *
+ * Single event type only: lifecycle state transitions.
+ * Domain code does not log; logging is attached by subscribers.
+ */
+data class StoneLifecycleTransition(
+    val stone: StoneView,
+    val from: StoneLifecycleState?,
+    val to: StoneLifecycleState,
+    val trigger: StoneLifecycleTrigger,
+)
 
 object StoneDomainEvents {
 
-    private val witherstoneTransitionListeners = linkedSetOf<(WitherstoneStateTransition) -> Unit>()
-    private val stoneCreatedListeners = linkedSetOf<(StoneCreated) -> Unit>()
+    private val lifecycleListeners = linkedSetOf<(StoneLifecycleTransition) -> Unit>()
 
-    // ---------------------------------------------------------------------
-    // Witherstone lifecycle transitions
-    // ---------------------------------------------------------------------
-
-    fun subscribe(listener: (WitherstoneStateTransition) -> Unit) {
-        witherstoneTransitionListeners.add(listener)
+    fun subscribeToLifecycleTransitions(listener: (StoneLifecycleTransition) -> Unit) {
+        lifecycleListeners.add(listener)
     }
 
-    fun unsubscribe(listener: (WitherstoneStateTransition) -> Unit) {
-        witherstoneTransitionListeners.remove(listener)
+    fun unsubscribeFromLifecycleTransitions(listener: (StoneLifecycleTransition) -> Unit) {
+        lifecycleListeners.remove(listener)
     }
 
-    // Wrappers used by StoneTopologyHooks (kept for readability)
-    fun subscribeToWitherstoneTransitions(listener: (WitherstoneStateTransition) -> Unit) = subscribe(listener)
-    fun unsubscribeFromWitherstoneTransitions(listener: (WitherstoneStateTransition) -> Unit) = unsubscribe(listener)
-
-    internal fun publish(event: WitherstoneStateTransition) {
-        val snapshot = witherstoneTransitionListeners.toList()
-        for (l in snapshot) l(event)
-    }
-
-    // ---------------------------------------------------------------------
-    // Stone creation
-    // ---------------------------------------------------------------------
-
-    fun subscribeToStoneCreated(listener: (StoneCreated) -> Unit) {
-        stoneCreatedListeners.add(listener)
-    }
-
-    fun unsubscribeFromStoneCreated(listener: (StoneCreated) -> Unit) {
-        stoneCreatedListeners.remove(listener)
-    }
-
-    internal fun publish(event: StoneCreated) {
-        val snapshot = stoneCreatedListeners.toList()
+    internal fun publish(event: StoneLifecycleTransition) {
+        val snapshot = lifecycleListeners.toList()
         for (l in snapshot) l(event)
     }
 }

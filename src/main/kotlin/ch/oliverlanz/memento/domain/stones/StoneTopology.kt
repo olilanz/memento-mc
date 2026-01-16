@@ -1,9 +1,9 @@
 package ch.oliverlanz.memento.domain.stones
 
 import ch.oliverlanz.memento.domain.events.StoneDomainEvents
-import ch.oliverlanz.memento.domain.events.StoneCreated
-import ch.oliverlanz.memento.domain.events.WitherstoneStateTransition
-import ch.oliverlanz.memento.domain.events.WitherstoneTransitionTrigger
+import ch.oliverlanz.memento.domain.events.StoneLifecycleState
+import ch.oliverlanz.memento.domain.events.StoneLifecycleTransition
+import ch.oliverlanz.memento.domain.events.StoneLifecycleTrigger
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrigger
 import ch.oliverlanz.memento.infrastructure.MementoConstants
@@ -58,7 +58,7 @@ object StoneTopology {
         log.info("[STONE] register after load count={}", stones.size)
 
         // Startup reconciliation: persisted state may already indicate maturity.
-        evaluate(trigger = WitherstoneTransitionTrigger.SERVER_START)
+        evaluate(trigger = StoneLifecycleTrigger.SERVER_START)
 
         persist()
     }
@@ -80,100 +80,178 @@ object StoneTopology {
         stones[name]
 
     // ---------------------------------------------------------------------
-    // Mutations (commands + lifecycle triggers)
+    // Mutations (admin / operator alterations)
     // ---------------------------------------------------------------------
 
-    fun addOrReplaceWitherstone(
+    /**
+     * Alter a stone's radius in-place.
+     *
+     * This preserves the stone's identity (name) and does not recreate entities.
+     */
+    fun alterRadius(name: String, radius: Int, trigger: StoneLifecycleTrigger): Boolean {
+        requireInitialized()
+        require(radius >= 0) { "radius must be >= 0." }
+
+        val stone = stones[name] ?: return false
+        stone.radius = radius
+
+        // Radius changes can affect derived renewal intent.
+        when (stone) {
+            is Lorestone -> {
+                // Protection area changed; reconcile all matured witherstones under current topology.
+                reconcileAllMaturedWitherstones(reason = "alter_radius_lorestone")
+            }
+            is Witherstone -> {
+                // Influence area changed; reconcile this stone if it is already matured.
+                reconcileRenewalIntentForMaturedWitherstone(stone.name, reason = "alter_radius_witherstone")
+            }
+        }
+
+        persist()
+        return true
+    }
+
+    /**
+     * Alter daysToMaturity for a witherstone.
+     *
+     * If the resulting value reaches 0 (or below), maturity is evaluated immediately.
+     */
+    fun alterDaysToMaturity(name: String, daysToMaturity: Int, trigger: StoneLifecycleTrigger): AlterDaysResult {
+        requireInitialized()
+        require(daysToMaturity >= 0) { "daysToMaturity must be >= 0." }
+
+        val stone = stones[name] ?: return AlterDaysResult.NOT_FOUND
+        val w = stone as? Witherstone ?: return AlterDaysResult.NOT_SUPPORTED
+
+        if (w.state == WitherstoneState.CONSUMED) return AlterDaysResult.ALREADY_CONSUMED
+
+        w.daysToMaturity = daysToMaturity
+
+        // Ensure immediate lifecycle progression (including daysToMaturity == 0).
+        evaluate(trigger = trigger)
+
+        persist()
+        return AlterDaysResult.OK
+    }
+
+    enum class AlterDaysResult {
+        OK,
+        NOT_FOUND,
+        NOT_SUPPORTED,
+        ALREADY_CONSUMED,
+    }
+    // ---------------------------------------------------------------------
+    fun addWitherstone(
         name: String,
         dimension: RegistryKey<World>,
         position: BlockPos,
         radius: Int,
         daysToMaturity: Int,
-        trigger: WitherstoneTransitionTrigger,
+        trigger: StoneLifecycleTrigger,
     ) {
         requireInitialized()
+        require(name.isNotBlank()) { "Stone name must not be blank." }
+        require(radius >= 0) { "radius must be >= 0." }
+        require(daysToMaturity >= 0) { "daysToMaturity must be >= 0." }
+        require(!stones.containsKey(name)) { "A stone named '$name' already exists." }
 
-        val existing = stones[name] as? Witherstone
-        val wasCreated = existing == null
-
-        val stone = existing ?: Witherstone(
+        val w = Witherstone(
             name = name,
             dimension = dimension,
             position = position,
-            daysToMaturity = MementoConstants.DEFAULT_DAYS_TO_MATURITY,
-            state = WitherstoneState.MATURING,
+            daysToMaturity = daysToMaturity,
+            state = WitherstoneState.PLACED,
+        )
+        w.radius = radius
+        stones[name] = w
+
+        // Lifecycle: stones enter existence as PLACED.
+        StoneDomainEvents.publish(
+            StoneLifecycleTransition(
+                stone = w,
+                from = null,
+                to = StoneLifecycleState.PLACED,
+                trigger = trigger,
+            )
         )
 
-        // Apply updates (shadow-only; explicit, deterministic)
-        stone.radius = radius
-        stone.daysToMaturity = daysToMaturity
-
-        // Allow commands to replace dimension/position deterministically.
-        // (No gameplay impact yet; observational only.)
-        val replaced = Witherstone(
-            name = stone.name,
-            dimension = dimension,
-            position = position,
-            daysToMaturity = stone.daysToMaturity,
-            state = stone.state,
-        ).also { it.radius = stone.radius }
-
-        stones[name] = replaced
-
-        if (wasCreated) {
-            StoneDomainEvents.publish(
-                StoneCreated(
-                    stone = replaced,
-                )
-            )
-        }
-
-        // Operator may force maturity by setting daysToMaturity <= 0.
+        // Ensure immediate lifecycle progression (including daysToMaturity == 0).
         evaluate(trigger = trigger)
 
         persist()
-
-        // If the witherstone is already matured, its derived renewal intent must reflect the latest topology
-        // (including Lorestone protection). This keeps batch shape deterministic under operator edits.
-        val updated = stones[name] as? Witherstone
-        if (updated != null && updated.state == WitherstoneState.MATURED) {
-            reconcileRenewalIntentFor(updated, reason = "witherstone_upsert")
-        }
     }
 
-    fun addOrReplaceLorestone(
+    fun addLorestone(
         name: String,
         dimension: RegistryKey<World>,
         position: BlockPos,
         radius: Int,
     ) {
         requireInitialized()
-        val previous = stones[name]
-        val wasCreated = previous == null || previous !is Lorestone
+        require(name.isNotBlank()) { "Stone name must not be blank." }
+        require(radius >= 0) { "radius must be >= 0." }
+        require(!stones.containsKey(name)) { "A stone named '$name' already exists." }
 
+        val l = Lorestone(
+            name = name,
+            dimension = dimension,
+            position = position,
+        )
+        l.radius = radius
+        stones[name] = l
 
-        stones[name] = Lorestone(name = name, dimension = dimension, position = position).also { it.radius = radius }
-
-        val createdLore = stones[name] as? Lorestone
-        if (wasCreated && createdLore != null) {
-            StoneDomainEvents.publish(
-                StoneCreated(
-                    stone = createdLore,
-                )
+        // Lifecycle: stones enter existence as PLACED.
+        StoneDomainEvents.publish(
+            StoneLifecycleTransition(
+                stone = l,
+                from = null,
+                to = StoneLifecycleState.PLACED,
+                trigger = StoneLifecycleTrigger.OP_COMMAND,
             )
-        }
-        persist()
+        )
 
         // Lorestone applies immediately: derived renewal intent must reflect the updated topology.
-        val lore = stones[name] as? Lorestone ?: return
-        reconcileMaturedWitherstonesAffectedByLorestone(lore, reason = "lorestone_upsert")
+        reconcileMaturedWitherstonesAffectedByLorestone(l, reason = "lorestone_created")
+
+        persist()
     }
+
+    // Mutations (commands + lifecycle triggers)
+    // ---------------------------------------------------------------------
 
     fun remove(name: String) {
         requireInitialized()
 
         val removed = stones.remove(name)
         persist()
+
+        // Unified terminal lifecycle: removal is expressed as CONSUMED.
+        when (removed) {
+            is Witherstone -> {
+                val from = StoneLifecycleState.valueOf(removed.state.name)
+                StoneDomainEvents.publish(
+                    StoneLifecycleTransition(
+                        stone = removed,
+                        from = from,
+                        to = StoneLifecycleState.CONSUMED,
+                        trigger = StoneLifecycleTrigger.MANUAL_REMOVE,
+                    )
+                )
+            }
+
+            is Lorestone -> {
+                StoneDomainEvents.publish(
+                    StoneLifecycleTransition(
+                        stone = removed,
+                        from = StoneLifecycleState.PLACED,
+                        to = StoneLifecycleState.CONSUMED,
+                        trigger = StoneLifecycleTrigger.MANUAL_REMOVE,
+                    )
+                )
+            }
+
+            null -> Unit
+        }
 
         when (removed) {
             is Lorestone -> {
@@ -195,13 +273,13 @@ object StoneTopology {
      *
      * Emits transitions as stones cross lifecycle boundaries.
      */
-    fun advanceDays(days: Int, trigger: WitherstoneTransitionTrigger) {
+    fun advanceDays(days: Int, trigger: StoneLifecycleTrigger) {
         requireInitialized()
         require(days >= 0) { "days must be >= 0" }
         repeat(days) { ageOnce(trigger) }
     }
 
-    fun ageOnce(trigger: WitherstoneTransitionTrigger) {
+    fun ageOnce(trigger: StoneLifecycleTrigger) {
         requireInitialized()
 
         for (s in stones.values) {
@@ -223,7 +301,7 @@ object StoneTopology {
      * - server startup reconciliation
      * - administrative time adjustments
      */
-    fun evaluate(trigger: WitherstoneTransitionTrigger) {
+    fun evaluate(trigger: StoneLifecycleTrigger) {
         requireInitialized()
 
         val snapshot = stones.values.toList()
@@ -239,6 +317,10 @@ object StoneTopology {
                 transition(w, WitherstoneState.MATURING, trigger)
             }
         }
+
+        // Derived renewal intent is a function of topology + matured witherstones.
+        // Keep the RenewalTracker up to date after every evaluation, regardless of trigger source.
+        reconcileAllMaturedWitherstones(reason = "evaluate_${trigger}")
     }
 
     /**
@@ -255,7 +337,7 @@ object StoneTopology {
         transition(
             stone = s,
             to = WitherstoneState.CONSUMED,
-            trigger = WitherstoneTransitionTrigger.RENEWAL_COMPLETED,
+            trigger = StoneLifecycleTrigger.RENEWAL_COMPLETED,
         )
 
         stones.remove(stoneName)
@@ -394,17 +476,17 @@ object StoneTopology {
     // Internal
     // ---------------------------------------------------------------------
 
-    private fun transition(stone: Witherstone, to: WitherstoneState, trigger: WitherstoneTransitionTrigger) {
+    private fun transition(stone: Witherstone, to: WitherstoneState, trigger: StoneLifecycleTrigger) {
         val from = stone.state
         if (from == to) return
 
         stone.state = to
 
         StoneDomainEvents.publish(
-            WitherstoneStateTransition(
+            StoneLifecycleTransition(
                 stone = stone,
-                from = from,
-                to = to,
+                from = StoneLifecycleState.valueOf(from.name),
+                to = StoneLifecycleState.valueOf(to.name),
                 trigger = trigger,
             )
         )
