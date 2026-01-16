@@ -9,25 +9,35 @@ import net.minecraft.particle.ParticleTypes
 class WitherstonePlacementEffect(private val stone: WitherstoneView) : EffectBase() {
 
     override fun onConfigure(profile: EffectProfile) {
-        profile.lifetimeGameHours = GameHours(1.0) // 1000 game ticks
-
-        // Subtle initial burst to make placements perceptible.
-        profile.burstDurationGameHours = GameHours(0.05) // ~50 game ticks (~2.5s)
-        profile.burstMultiplier = 2.0
+        // Placement: short-lived, intense, unmistakable.
+        profile.lifetime = GameHours(1.0)
+        profile.anchorVerticalSpan = 0..0
+        profile.surfaceVerticalSpan = 0..1 // 2 blocks high (y+1..y+2)
 
         profile.anchorSampler = StoneBlockSampler(stone)
-        profile.anchorSystem = StoneParticleSystems.anchorFor(stone)
-        profile.anchorRatePerGameHour = 150.0 // 0.15 per server tick
+        // Anchors are always green and sparkly, so stone location is unambiguous.
+        profile.anchorSystem = EffectBase.ParticleSystemPrototype(
+            particle = ParticleTypes.HAPPY_VILLAGER,
+            count = 18,
+            spreadX = 0.18,
+            spreadY = 0.18,
+            spreadZ = 0.18,
+            speed = 0.01,
+            baseYOffset = 1.2,
+        )
+        profile.anchorTotalEmissions = 700
 
-        profile.surfaceSampler = SingleChunkSurfaceSampler(stone)
-        profile.surfaceDustSystem = StoneParticleSystems.surfaceDustFor(stone)
-        profile.surfaceDustRatePerGameHour = 150.0 // 0.15 per server tick
-        profile.surfaceDustSubsetSize = 32
-        profile.surfaceDustSubsetSeed = stone.position.asLong()
-
-        profile.surfacePresenceSystem = StoneParticleSystems.surfacePresenceFor(ParticleTypes.ASH)
-        profile.surfacePresenceRatePerGameHour = 50.0 // 0.05 per server tick
-
-        profile.yOffsetSpread = 0..3
+        profile.surfaceSampler = SingleChunkSurfaceSampler(stone, subsetSize = 32)
+        // Surface: noisy and obvious during placement.
+        profile.surfaceSystem = EffectBase.ParticleSystemPrototype(
+            particle = ParticleTypes.ASH,
+            count = 14,
+            spreadX = 0.28,
+            spreadY = 0.12,
+            spreadZ = 0.28,
+            speed = 0.02,
+            baseYOffset = 1.0,
+        )
+        profile.surfaceTotalEmissions = 700
     }
 }

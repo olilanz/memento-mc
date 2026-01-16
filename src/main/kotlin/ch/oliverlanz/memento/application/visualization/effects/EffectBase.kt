@@ -36,6 +36,9 @@ abstract class EffectBase {
     private var alive: Boolean = true
     private var elapsedGameHours: GameHours = GameHours(0.0)
 
+    private var anchorEmitted: Int = 0
+    private var surfaceEmitted: Int = 0
+
     /**
      * Lazily configured profile.
      *
@@ -46,9 +49,6 @@ abstract class EffectBase {
 
     // Cache full samples per sampler (stable for lifetime of the effect).
     private val sampleCache = mutableMapOf<StoneSampler, Set<BlockPos>>()
-
-    // Cache deterministic subsets per sampler (stable for lifetime of the effect).
-    private val subsetCache = mutableMapOf<StoneSampler, Set<BlockPos>>()
 
     /**
      * FINAL tick entry point. Subclasses must NOT override this.
@@ -62,7 +62,7 @@ abstract class EffectBase {
         }
 
         // Finite lifetime (if configured)
-        profile.lifetimeGameHours?.let { limit ->
+        profile.lifetime?.let { limit ->
             if (elapsedGameHours.value >= limit.value) {
                 alive = false
                 return false
@@ -71,8 +71,7 @@ abstract class EffectBase {
 
         // Default pipelines (only active when configured)
         runAnchorPlan(world, deltaGameHours)
-        runSurfaceDustPlan(world, deltaGameHours)
-        runSurfacePresencePlan(world, deltaGameHours)
+        runSurfacePlan(world, deltaGameHours)
 
         // Optional extension hook (not used in this slice)
         onTick(world, clock)
@@ -101,10 +100,19 @@ abstract class EffectBase {
     private fun runAnchorPlan(world: ServerWorld, deltaGameHours: GameHours) {
         val sampler = profile.anchorSampler ?: return
         val system = profile.anchorSystem ?: return
-        val occurrences = occurrencesForRate(
-            ratePerGameHour = effectiveRate(profile.anchorRatePerGameHour),
-            deltaGameHours = deltaGameHours
-        )
+
+        val occurrences = when (val lifetime = profile.lifetime) {
+            null -> occurrencesForInfinite(
+                emissionsPerGameHour = profile.anchorEmissionsPerGameHour,
+                deltaGameHours = deltaGameHours
+            )
+            else -> occurrencesForFiniteTotal(
+                total = profile.anchorTotalEmissions,
+                alreadyEmitted = anchorEmitted,
+                deltaGameHours = deltaGameHours,
+                lifetime = lifetime
+            )
+        }
         if (occurrences <= 0) return
 
         val base = samplesFor(world, sampler)
@@ -116,92 +124,84 @@ abstract class EffectBase {
                 positions = base,
                 system = system,
                 perBlockChance = 1.0,
-                yOffsetSpread = profile.yOffsetSpread
+                yOffsetSpread = profile.anchorVerticalSpan
             )
         }
+
+        anchorEmitted += occurrences
     }
 
-    private fun runSurfaceDustPlan(world: ServerWorld, deltaGameHours: GameHours) {
+    private fun runSurfacePlan(world: ServerWorld, deltaGameHours: GameHours) {
         val sampler = profile.surfaceSampler ?: return
-        val system = profile.surfaceDustSystem ?: return
-        val occurrences = occurrencesForRate(
-            ratePerGameHour = effectiveRate(profile.surfaceDustRatePerGameHour),
-            deltaGameHours = deltaGameHours
-        )
-        if (occurrences <= 0) return
+        val system = profile.surfaceSystem ?: return
 
-        val base = samplesFor(world, sampler)
-        if (base.isEmpty()) return
-
-        val selected = fixedSubsetFor(
-            sampler = sampler,
-            base = base,
-            n = profile.surfaceDustSubsetSize,
-            seed = profile.surfaceDustSubsetSeed
-        )
-
-        repeat(occurrences) {
-            emitParticles(
-                world = world,
-                positions = selected,
-                system = system,
-                perBlockChance = 1.0,
-                yOffsetSpread = 0..0 // exact reproduction of dust plan
+        val occurrences = when (val lifetime = profile.lifetime) {
+            null -> {
+                var occ = occurrencesForInfinite(
+                    emissionsPerGameHour = profile.surfaceEmissionsPerGameHour,
+                    deltaGameHours = deltaGameHours
+                )
+                // Surface emission safeguard for infinite effects:
+                // ensure spatial presence even at very low temporal rates.
+                if (occ <= 0 && profile.surfaceEmissionsPerGameHour > 0) occ = 1
+                occ
+            }
+            else -> occurrencesForFiniteTotal(
+                total = profile.surfaceTotalEmissions,
+                alreadyEmitted = surfaceEmitted,
+                deltaGameHours = deltaGameHours,
+                lifetime = lifetime
             )
         }
-    }
-
-    private fun runSurfacePresencePlan(world: ServerWorld, deltaGameHours: GameHours) {
-        val sampler = profile.surfaceSampler ?: return
-        val system = profile.surfacePresenceSystem ?: return
-        val occurrences = occurrencesForRate(
-            ratePerGameHour = effectiveRate(profile.surfacePresenceRatePerGameHour),
-            deltaGameHours = deltaGameHours
-        )
         if (occurrences <= 0) return
 
         val base = samplesFor(world, sampler)
         if (base.isEmpty()) return
 
         repeat(occurrences) {
-            val pos = base.elementAt(Random.nextInt(base.size))
             emitParticles(
                 world = world,
-                positions = setOf(pos),
+                positions = base,
                 system = system,
                 perBlockChance = 1.0,
-                yOffsetSpread = profile.yOffsetSpread
+                yOffsetSpread = profile.surfaceVerticalSpan
             )
         }
+
+        surfaceEmitted += occurrences
     }
 
-    /* ---------- Rate helpers ---------- */
+    private fun occurrencesForFiniteTotal(
+        total: Int,
+        alreadyEmitted: Int,
+        deltaGameHours: GameHours,
+        lifetime: GameHours,
+    ): Int {
+        if (total <= 0) return 0
+        val remaining = total - alreadyEmitted
+        if (remaining <= 0) return 0
+        if (deltaGameHours.value <= 0.0) return 0
+        if (lifetime.value <= 0.0) return 0
 
-    private fun effectiveRate(baseRatePerGameHour: Double): Double {
-        if (baseRatePerGameHour <= 0.0) return 0.0
-        val burstDuration = profile.burstDurationGameHours
-        val burstMultiplier = profile.burstMultiplier
-        return if (burstDuration.value > 0.0 && elapsedGameHours.value < burstDuration.value && burstMultiplier > 1.0) {
-            baseRatePerGameHour * burstMultiplier
-        } else {
-            baseRatePerGameHour
-        }
+        // Spread remaining emissions uniformly across the remaining lifetime.
+        val expected = remaining.toDouble() * (deltaGameHours.value / lifetime.value)
+        if (expected <= 0.0) return 0
+
+        val k = floor(expected).toInt()
+        val frac = expected - k
+        val occurrences = k + if (Random.nextDouble() < frac) 1 else 0
+        return occurrences.coerceAtMost(remaining)
     }
 
-    /**
-     * Convert a rate (occurrences per game hour) into an integer number of occurrences for this update.
-     *
-     * We use an "integer + fractional Bernoulli" model:
-     * - k = floor(expected)
-     * - +1 with probability frac(expected)
-     *
-     * This is deterministic-in-expectation and scales correctly when time is advanced manually.
-     */
-    private fun occurrencesForRate(ratePerGameHour: Double, deltaGameHours: GameHours): Int {
-        if (ratePerGameHour <= 0.0) return 0
+    private fun occurrencesForInfinite(
+        emissionsPerGameHour: Int,
+        deltaGameHours: GameHours,
+    ): Int {
+        if (emissionsPerGameHour <= 0) return 0
         if (deltaGameHours.value <= 0.0) return 0
 
-        val expected = ratePerGameHour * deltaGameHours.value
+        // For infinite effects, emit a steady trickle derived from game time.
+        val expected = emissionsPerGameHour.toDouble() * deltaGameHours.value
         if (expected <= 0.0) return 0
 
         val k = floor(expected).toInt()
@@ -213,20 +213,6 @@ abstract class EffectBase {
 
     private fun samplesFor(world: ServerWorld, sampler: StoneSampler): Set<BlockPos> =
         sampleCache.getOrPut(sampler) { sampler.sample(world) }
-
-    private fun fixedSubsetFor(
-        sampler: StoneSampler,
-        base: Set<BlockPos>,
-        n: Int,
-        seed: Long
-    ): Set<BlockPos> {
-        // Cache per sampler; deterministic subset is stable for the lifetime of this effect.
-        return subsetCache.getOrPut(sampler) {
-            if (base.size <= n) return@getOrPut base
-            val rnd = Random(seed)
-            base.shuffled(rnd).take(n).toSet()
-        }
-    }
 
     /* ---------- Particle emission ---------- */
 

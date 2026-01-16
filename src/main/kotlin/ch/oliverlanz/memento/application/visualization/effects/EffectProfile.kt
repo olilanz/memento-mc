@@ -6,59 +6,42 @@ import ch.oliverlanz.memento.application.visualization.samplers.StoneSampler
 /**
  * Declarative configuration for a visual effect.
  *
- * Semantics live here; mechanics are owned by EffectBase.
- *
- * Notes on units:
- * - lifetime is expressed in GAME HOURS (Minecraft: 1 hour = 1000 game ticks).
- * - emission rates are expressed per GAME HOUR and are integrated using GameClock.deltaTicks.
+ * Locked semantics:
+ * - One lifecycle per effect instance (expressed in game time).
+ * - Two emitters: anchor and surface.
+ * - Each emitter declares what, where, and total emissions over the effect lifetime.
+ * - No tick-based concepts.
+ * - Finite effects declare totals over a finite lifetime.
+ * - Infinite effects declare emissions per game hour.
  */
 class EffectProfile {
 
-    /** Optional finite lifetime expressed in GAME HOURS. Null means domain-managed / infinite. */
-    var lifetimeGameHours: GameHours? = null
+    /** Optional finite lifetime. Null means infinite / external termination. */
+    var lifetime: GameHours? = null
 
-    /**
-     * Optional burst window at the start of the effect.
-     * When elapsedGameHours < burstDurationGameHours, rates are multiplied by burstMultiplier.
-     *
-     * Defaults are neutral (no burst).
-     */
-    var burstDurationGameHours: GameHours = GameHours(0.0)
-    var burstMultiplier: Double = 1.0
+    /** Anchor vertical span (whole blocks) applied on top of the anchor system's baseYOffset. */
+    var anchorVerticalSpan: IntRange = 0..0
 
-    /** Sampler for the anchor projection. Null disables anchor projection. */
+    /** Surface vertical span (whole blocks) applied on top of the surface system's baseYOffset. */
+    var surfaceVerticalSpan: IntRange = 0..0
+
+    /** Anchor emitter (identity). */
     var anchorSampler: StoneSampler? = null
-
-    /** Particle system prototype used for the anchor projection. Null disables anchor projection. */
     var anchorSystem: EffectBase.ParticleSystemPrototype? = null
 
-    /** Anchor emission rate expressed as occurrences per GAME HOUR. */
-    var anchorRatePerGameHour: Double = 0.0
+    /** Total emissions over the finite lifetime. Ignored when lifetime is null. */
+    var anchorTotalEmissions: Int = 0
 
-    /** Sampler for surface projections. Null disables surface projections. */
+    /** Emissions per game hour when lifetime is null (infinite effects). */
+    var anchorEmissionsPerGameHour: Int = 0
+
+    /** Surface emitter (area presence). */
     var surfaceSampler: StoneSampler? = null
+    var surfaceSystem: EffectBase.ParticleSystemPrototype? = null
 
-    /** Particle system used for deterministic surface dust. Null disables dust plan. */
-    var surfaceDustSystem: EffectBase.ParticleSystemPrototype? = null
+    /** Total emissions over the finite lifetime. Ignored when lifetime is null. */
+    var surfaceTotalEmissions: Int = 0
 
-    /** Deterministic surface dust emission rate expressed as occurrences per GAME HOUR. */
-    var surfaceDustRatePerGameHour: Double = 0.0
-
-    /** Size of deterministic surface subset for the dust plan. */
-    var surfaceDustSubsetSize: Int = 32
-
-    /** Seed for deterministic subset selection. */
-    var surfaceDustSubsetSeed: Long = 0L
-
-    /** Particle system used for local surface presence. Null disables presence plan. */
-    var surfacePresenceSystem: EffectBase.ParticleSystemPrototype? = null
-
-    /** Local surface presence emission rate expressed as occurrences per GAME HOUR. */
-    var surfacePresenceRatePerGameHour: Double = 0.0
-
-    /**
-     * Inclusive vertical spread (whole blocks) applied on top of the system's baseYOffset.
-     * Example: 1..4 means +1, +2, +3 or +4 blocks.
-     */
-    var yOffsetSpread: IntRange = 0..0
+    /** Emissions per game hour when lifetime is null (infinite effects). */
+    var surfaceEmissionsPerGameHour: Int = 0
 }
