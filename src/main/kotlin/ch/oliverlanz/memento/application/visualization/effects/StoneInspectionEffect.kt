@@ -1,5 +1,6 @@
 package ch.oliverlanz.memento.application.visualization.effects
 
+import ch.oliverlanz.memento.application.time.GameHours
 import ch.oliverlanz.memento.application.visualization.samplers.SingleChunkSurfaceSampler
 import ch.oliverlanz.memento.application.visualization.samplers.StoneBlockSampler
 import ch.oliverlanz.memento.domain.stones.StoneView
@@ -8,10 +9,10 @@ import net.minecraft.particle.ParticleTypes
 class StoneInspectionEffect(private val stone: StoneView) : EffectBase() {
 
     override fun onConfigure(profile: EffectProfile) {
-        profile.lifetimeGameHours = 0.25 // 250 game ticks
+        profile.lifetimeGameHours = GameHours(0.25) // 250 game ticks
 
         // Inspection should read immediately.
-        profile.burstDurationGameHours = 0.05 // ~50 game ticks (~2.5s)
+        profile.burstDurationGameHours = GameHours(0.05) // ~50 game ticks (~2.5s)
         profile.burstMultiplier = 2.0
 
         profile.anchorSampler = StoneBlockSampler(stone)

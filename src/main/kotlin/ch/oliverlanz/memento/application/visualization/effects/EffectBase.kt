@@ -1,6 +1,9 @@
 package ch.oliverlanz.memento.application.visualization.effects
 
 import ch.oliverlanz.memento.application.time.GameClock
+import ch.oliverlanz.memento.application.time.GameHours
+import ch.oliverlanz.memento.application.time.asGameTicks
+import ch.oliverlanz.memento.application.time.toGameHours
 import ch.oliverlanz.memento.application.visualization.samplers.StoneSampler
 import net.minecraft.particle.ParticleEffect
 import net.minecraft.server.world.ServerWorld
@@ -31,7 +34,7 @@ abstract class EffectBase {
     )
 
     private var alive: Boolean = true
-    private var elapsedGameHours: Double = 0.0
+    private var elapsedGameHours: GameHours = GameHours(0.0)
 
     /**
      * Lazily configured profile.
@@ -53,14 +56,14 @@ abstract class EffectBase {
     final fun tick(world: ServerWorld, clock: GameClock): Boolean {
         if (!alive) return false
 
-        val deltaGameHours = clock.deltaTicks.toDouble() / 1000.0
-        if (deltaGameHours > 0.0) {
-            elapsedGameHours += deltaGameHours
+        val deltaGameHours = clock.deltaTicks.asGameTicks().toGameHours()
+        if (deltaGameHours.value > 0.0) {
+            elapsedGameHours = GameHours(elapsedGameHours.value + deltaGameHours.value)
         }
 
         // Finite lifetime (if configured)
         profile.lifetimeGameHours?.let { limit ->
-            if (elapsedGameHours >= limit) {
+            if (elapsedGameHours.value >= limit.value) {
                 alive = false
                 return false
             }
@@ -95,7 +98,7 @@ abstract class EffectBase {
 
     /* ---------- Plans ---------- */
 
-    private fun runAnchorPlan(world: ServerWorld, deltaGameHours: Double) {
+    private fun runAnchorPlan(world: ServerWorld, deltaGameHours: GameHours) {
         val sampler = profile.anchorSampler ?: return
         val system = profile.anchorSystem ?: return
         val occurrences = occurrencesForRate(
@@ -118,7 +121,7 @@ abstract class EffectBase {
         }
     }
 
-    private fun runSurfaceDustPlan(world: ServerWorld, deltaGameHours: Double) {
+    private fun runSurfaceDustPlan(world: ServerWorld, deltaGameHours: GameHours) {
         val sampler = profile.surfaceSampler ?: return
         val system = profile.surfaceDustSystem ?: return
         val occurrences = occurrencesForRate(
@@ -148,7 +151,7 @@ abstract class EffectBase {
         }
     }
 
-    private fun runSurfacePresencePlan(world: ServerWorld, deltaGameHours: Double) {
+    private fun runSurfacePresencePlan(world: ServerWorld, deltaGameHours: GameHours) {
         val sampler = profile.surfaceSampler ?: return
         val system = profile.surfacePresenceSystem ?: return
         val occurrences = occurrencesForRate(
@@ -178,7 +181,7 @@ abstract class EffectBase {
         if (baseRatePerGameHour <= 0.0) return 0.0
         val burstDuration = profile.burstDurationGameHours
         val burstMultiplier = profile.burstMultiplier
-        return if (burstDuration > 0.0 && elapsedGameHours < burstDuration && burstMultiplier > 1.0) {
+        return if (burstDuration.value > 0.0 && elapsedGameHours.value < burstDuration.value && burstMultiplier > 1.0) {
             baseRatePerGameHour * burstMultiplier
         } else {
             baseRatePerGameHour
@@ -194,11 +197,11 @@ abstract class EffectBase {
      *
      * This is deterministic-in-expectation and scales correctly when time is advanced manually.
      */
-    private fun occurrencesForRate(ratePerGameHour: Double, deltaGameHours: Double): Int {
+    private fun occurrencesForRate(ratePerGameHour: Double, deltaGameHours: GameHours): Int {
         if (ratePerGameHour <= 0.0) return 0
-        if (deltaGameHours <= 0.0) return 0
+        if (deltaGameHours.value <= 0.0) return 0
 
-        val expected = ratePerGameHour * deltaGameHours
+        val expected = ratePerGameHour * deltaGameHours.value
         if (expected <= 0.0) return 0
 
         val k = floor(expected).toInt()
