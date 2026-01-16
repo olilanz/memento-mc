@@ -13,5 +13,7 @@ class StoneBlockSampler(
     private val stone: StoneView
 ) : StoneSampler {
 
-    override fun sample(world: ServerWorld): Set<BlockPos> = setOf(stone.position)
+    private val cached: List<BlockPos> = listOf(stone.position)
+
+    override fun candidates(world: ServerWorld): List<BlockPos> = cached
 }

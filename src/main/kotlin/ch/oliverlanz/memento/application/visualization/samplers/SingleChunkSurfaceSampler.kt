@@ -13,20 +13,19 @@ import net.minecraft.world.Heightmap
  */
 class SingleChunkSurfaceSampler(
     private val stone: StoneView,
-    /**
-     * Optional deterministic subset size.
-     *
-     * Locked semantics: subset selection is a sampling concern.
-     */
-    private val subsetSize: Int? = null,
 ) : StoneSampler {
 
-    override fun sample(world: ServerWorld): Set<BlockPos> {
+    private var cached: List<BlockPos>? = null
+
+    override fun candidates(world: ServerWorld): List<BlockPos> {
+        cached?.let { return it }
+
         val chunkPos = ChunkPos(stone.position)
         val baseX = chunkPos.x shl 4
         val baseZ = chunkPos.z shl 4
 
-        val out = HashSet<BlockPos>(16 * 16)
+        // Deterministic order: x then z (nested loops), derived from chunk-local coordinates.
+        val out = ArrayList<BlockPos>(16 * 16)
         for (dx in 0 until 16) {
             val x = baseX + dx
             for (dz in 0 until 16) {
@@ -36,11 +35,8 @@ class SingleChunkSurfaceSampler(
             }
         }
 
-        val n = subsetSize
-        if (n == null || n <= 0 || out.size <= n) return out
-
-        // Deterministic subset derived from the stone position.
-        val rnd = kotlin.random.Random(stone.position.asLong())
-        return out.shuffled(rnd).take(n).toSet()
+        val immutable = out.toList()
+        cached = immutable
+        return immutable
     }
 }
