@@ -4,12 +4,14 @@ import ch.oliverlanz.memento.application.time.GameClock
 import ch.oliverlanz.memento.application.time.GameHours
 import ch.oliverlanz.memento.application.time.asGameTicks
 import ch.oliverlanz.memento.application.time.toGameHours
+import ch.oliverlanz.memento.application.visualization.samplers.StoneBlockSampler
+import ch.oliverlanz.memento.domain.stones.StoneView
 import net.minecraft.particle.ParticleEffect
 import net.minecraft.server.world.ServerWorld
 import net.minecraft.util.math.BlockPos
+import java.util.Random as JavaRandom
 import kotlin.math.floor
 import kotlin.random.Random
-import java.util.Random as JavaRandom
 
 /**
  * Base class for all visualization effects.
@@ -19,8 +21,19 @@ import java.util.Random as JavaRandom
  * - Subclasses are declarative: override onConfigure(profile) only.
  * - Semantics (lifetime, rates, particles, samplers) live in EffectProfile.
  * - Mechanics (ticking, sampling caches, emission) live here.
+ *
+ * IMPORTANT (locked emission model):
+ * - Effects are ALWAYS rate-based (emissionsPerGameHour).
+ * - lifetime (when configured) only gates *when to stop*, never emission logic.
+ * - No totals, no "finite-vs-infinite" branching, no remaining-emissions math.
+ *
+ * IMPORTANT (locked anchor model):
+ * - Anchor configuration is universal and owned by the base class.
+ * - Subclasses do NOT configure anchor sampler or anchor emission rate.
  */
-abstract class EffectBase {
+abstract class EffectBase(
+    protected val stone: StoneView
+) {
 
     data class ParticleSystemPrototype(
         val particle: ParticleEffect,
@@ -36,13 +49,11 @@ abstract class EffectBase {
     private var alive: Boolean = true
     private var elapsedGameHours: GameHours = GameHours(0.0)
 
-    private var anchorEmitted: Int = 0
-
     /**
      * Lazily configured profile.
      *
      * Kotlin nuance: this MUST NOT run during base construction, because onConfigure()
-     * may depend on subclass constructor properties (e.g. stone views).
+     * may depend on subclass constructor properties.
      */
     private val profile: EffectProfile by lazy {
         defaultProfile().also { onConfigure(it) }
@@ -81,6 +92,9 @@ abstract class EffectBase {
 
     /**
      * Declarative configuration hook.
+     *
+     * Subclasses should only override effect-specific deltas (most commonly surface sampler,
+     * lifetime and surface pacing, and occasionally particle prototype tweaks).
      */
     protected open fun onConfigure(profile: EffectProfile) = Unit
 
@@ -99,25 +113,29 @@ abstract class EffectBase {
      * Default, fully configured profile.
      *
      * Subclasses should only override the few properties that are specific to the
-     * effect instance (most commonly samplers, lifetime and emission rates).
+     * effect instance (most commonly surface sampler, lifetime and surface emission rate).
      */
     private fun defaultProfile(): EffectProfile = EffectProfile().also { p ->
         // Anchor defaults (shared across all effects)
-        p.anchorVerticalSpan = 0..0
+        p.anchorVerticalSpan = 0..16
+        p.anchorSampler = StoneBlockSampler(stone)
+        p.anchorEmissionsPerGameHour = 80
         p.anchorSystem = ParticleSystemPrototype(
             particle = net.minecraft.particle.ParticleTypes.HAPPY_VILLAGER,
-            count = 18,
-            spreadX = 0.18,
-            spreadY = 0.18,
-            spreadZ = 0.18,
-            speed = 0.01,
+            count = 10,
+            spreadX = 0.30,
+            spreadY = 0.60,
+            spreadZ = 0.30,
+            speed = 0.02,
             baseYOffset = 1.2,
         )
 
         // Surface defaults (shared baseline; subclasses may override particle/system details)
         p.surfaceVerticalSpan = 0..0
+        p.surfaceSampler = null                     // Surface sampler intentionally left null by default.
+        p.surfaceEmissionsPerGameHour = 200         // Rate defaults live in the base (not 0).
         p.surfaceSystem = ParticleSystemPrototype(
-            particle = net.minecraft.particle.ParticleTypes.ASH,
+            particle = net.minecraft.particle.ParticleTypes.END_ROD,
             count = 6,
             spreadX = 0.30,
             spreadY = 0.10,
@@ -125,15 +143,6 @@ abstract class EffectBase {
             speed = 0.01,
             baseYOffset = 1.0,
         )
-
-        // Samplers intentionally left null by default.
-        p.anchorSampler = null
-        p.surfaceSampler = null
-
-        // Rates/totals default to 0 (disabled) unless configured.
-        p.anchorTotalEmissions = 0
-        p.anchorEmissionsPerGameHour = 0
-        p.surfaceEmissionsPerGameHour = 0
     }
 
     /* ---------- Plans ---------- */
@@ -142,18 +151,14 @@ abstract class EffectBase {
         val sampler = profile.anchorSampler ?: return
         val system = profile.anchorSystem ?: return
 
-        val occurrences = when (val lifetime = profile.lifetime) {
-            null -> occurrencesForInfinite(
-                emissionsPerGameHour = profile.anchorEmissionsPerGameHour,
-                deltaGameHours = deltaGameHours
-            )
-            else -> occurrencesForFiniteTotal(
-                total = profile.anchorTotalEmissions,
-                alreadyEmitted = anchorEmitted,
-                deltaGameHours = deltaGameHours,
-                lifetime = lifetime
-            )
-        }
+        var occurrences = occurrencesForRate(
+            emissionsPerGameHour = profile.anchorEmissionsPerGameHour,
+            deltaGameHours = deltaGameHours
+        )
+
+        // Anchor safeguard:
+        // ensure visible spatial presence even at very low temporal rates.
+        if (occurrences <= 0 && profile.anchorEmissionsPerGameHour > 0) occurrences = 1
         if (occurrences <= 0) return
 
         repeat(occurrences) {
@@ -165,22 +170,18 @@ abstract class EffectBase {
                 yOffsetSpread = profile.anchorVerticalSpan
             )
         }
-
-        anchorEmitted += occurrences
     }
 
     private fun runSurfacePlan(world: ServerWorld, deltaGameHours: GameHours) {
         val sampler = profile.surfaceSampler ?: return
         val system = profile.surfaceSystem ?: return
 
-        // Surface emission is always rate-based.
-        // Finite effects are bounded by lifetime (handled in tick()).
-        var occurrences = occurrencesForInfinite(
+        var occurrences = occurrencesForRate(
             emissionsPerGameHour = profile.surfaceEmissionsPerGameHour,
             deltaGameHours = deltaGameHours
         )
 
-        // Surface emission safeguard:
+        // Surface safeguard:
         // ensure spatial presence even at very low temporal rates.
         if (occurrences <= 0 && profile.surfaceEmissionsPerGameHour > 0) occurrences = 1
         if (occurrences <= 0) return
@@ -194,39 +195,16 @@ abstract class EffectBase {
                 yOffsetSpread = profile.surfaceVerticalSpan
             )
         }
-
     }
 
-    private fun occurrencesForFiniteTotal(
-        total: Int,
-        alreadyEmitted: Int,
-        deltaGameHours: GameHours,
-        lifetime: GameHours,
-    ): Int {
-        if (total <= 0) return 0
-        val remaining = total - alreadyEmitted
-        if (remaining <= 0) return 0
-        if (deltaGameHours.value <= 0.0) return 0
-        if (lifetime.value <= 0.0) return 0
-
-        // Spread remaining emissions uniformly across the remaining lifetime.
-        val expected = remaining.toDouble() * (deltaGameHours.value / lifetime.value)
-        if (expected <= 0.0) return 0
-
-        val k = floor(expected).toInt()
-        val frac = expected - k
-        val occurrences = k + if (Random.nextDouble() < frac) 1 else 0
-        return occurrences.coerceAtMost(remaining)
-    }
-
-    private fun occurrencesForInfinite(
+    private fun occurrencesForRate(
         emissionsPerGameHour: Int,
         deltaGameHours: GameHours,
     ): Int {
         if (emissionsPerGameHour <= 0) return 0
         if (deltaGameHours.value <= 0.0) return 0
 
-        // For infinite effects, emit a steady trickle derived from game time.
+        // Emit a steady trickle derived from game time.
         val expected = emissionsPerGameHour.toDouble() * deltaGameHours.value
         if (expected <= 0.0) return 0
 
