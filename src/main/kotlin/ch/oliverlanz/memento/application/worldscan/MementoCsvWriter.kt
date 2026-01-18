@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.application.run
+package ch.oliverlanz.memento.application.worldscan
 
 import ch.oliverlanz.memento.domain.memento.WorldMementoTopology
 import ch.oliverlanz.memento.infrastructure.MementoConstants
@@ -19,7 +19,7 @@ object MementoCsvWriter {
         val path = root.resolve(MementoConstants.MEMENTO_RUN_CSV_FILE)
 
         val sb = StringBuilder()
-        sb.append("world,regionx,regionz,chunkx,chunkz,timeinhabited_ticks,surface_y,biome_id,is_spawn,dominant_stone,has_lorestone_influence,has_witherstone_influence\n")
+        sb.append("world,regionx,regionz,chunkx,chunkz,timeinhabited_ticks,lastupdate_ticks,surface_y,biome_id,is_spawn,dominant_stone,has_lorestone_influence,has_witherstone_influence\n")
 
         topology.entries.forEach { entry ->
             val w = entry.key.world.value.toString()
@@ -34,6 +34,7 @@ object MementoCsvWriter {
                 .append(',').append(entry.key.chunkX)
                 .append(',').append(entry.key.chunkZ)
                 .append(',').append(entry.signals.inhabitedTimeTicks)
+                .append(',').append(entry.signals.lastUpdateTicks)
                 .append(',').append(surfaceY)
                 .append(',').append(biome)
                 .append(',').append(if (entry.signals.isSpawnChunk) 1 else 0)

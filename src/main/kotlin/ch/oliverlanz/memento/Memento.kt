@@ -7,7 +7,7 @@ import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge
 import ch.oliverlanz.memento.application.stone.StoneMaturityTimeBridge
 import ch.oliverlanz.memento.application.time.GameTimeTracker
 import ch.oliverlanz.memento.application.visualization.EffectsHost
-import ch.oliverlanz.memento.application.run.MementoRunController
+import ch.oliverlanz.memento.application.worldscan.MementoRunController
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchLifecycleTransition
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker

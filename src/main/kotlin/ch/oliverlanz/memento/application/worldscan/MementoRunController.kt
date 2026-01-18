@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.application.run
+package ch.oliverlanz.memento.application.worldscan
 import ch.oliverlanz.memento.domain.memento.WorldMementoSubstrate
 import ch.oliverlanz.memento.infrastructure.MementoConstants
 import net.minecraft.server.MinecraftServer

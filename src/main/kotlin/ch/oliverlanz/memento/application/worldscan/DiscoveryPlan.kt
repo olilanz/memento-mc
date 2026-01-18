@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.application.run
+package ch.oliverlanz.memento.application.worldscan
 
 import net.minecraft.registry.RegistryKey
 import net.minecraft.world.World
@@ -37,4 +37,8 @@ data class RegionRef(
 data class ChunkRef(
     val localX: Int,
     val localZ: Int,
+    /** Sector offset in 4KiB sectors as stored in the region location table (0 => empty slot). */
+    val sectorOffset: Int,
+    /** Sector count in 4KiB sectors as stored in the region location table. */
+    val sectorCount: Int,
 )

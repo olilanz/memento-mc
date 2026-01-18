@@ -13,7 +13,7 @@ import net.minecraft.util.hit.HitResult
 import net.minecraft.util.math.BlockPos
 import org.slf4j.LoggerFactory
 import ch.oliverlanz.memento.application.visualization.EffectsHost
-import ch.oliverlanz.memento.application.run.MementoRunController
+import ch.oliverlanz.memento.application.worldscan.MementoRunController
 
 /**
  * Application-layer command handlers.
