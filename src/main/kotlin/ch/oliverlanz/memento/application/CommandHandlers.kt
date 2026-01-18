@@ -13,6 +13,7 @@ import net.minecraft.util.hit.HitResult
 import net.minecraft.util.math.BlockPos
 import org.slf4j.LoggerFactory
 import ch.oliverlanz.memento.application.visualization.EffectsHost
+import ch.oliverlanz.memento.application.run.MementoRunController
 
 /**
  * Application-layer command handlers.
@@ -28,12 +29,23 @@ object CommandHandlers {
     @Volatile
     private var effectsHost: EffectsHost? = null
 
+    @Volatile
+    private var runController: MementoRunController? = null
+
     fun attachVisualizationEngine(engine: EffectsHost) {
         effectsHost = engine
     }
 
     fun detachVisualizationEngine() {
         effectsHost = null
+    }
+
+    fun attachRunController(controller: MementoRunController) {
+        runController = controller
+    }
+
+    fun detachRunController() {
+        runController = null
     }
 
     enum class StoneKind { WITHERSTONE, LORESTONE }
@@ -110,6 +122,24 @@ object CommandHandlers {
         } catch (e: Exception) {
             log.error("[CMD] visualize failed name='{}'", name, e)
             source.sendError(Text.literal("Memento: could not visualize stone (see server log)."))
+            0
+        }
+    }
+
+    fun run(source: ServerCommandSource): Int {
+        log.info("[CMD] run by={}", source.name)
+
+        val controller = runController
+        if (controller == null) {
+            source.sendError(Text.literal("Run controller is not ready yet."))
+            return 0
+        }
+
+        return try {
+            controller.start(source)
+        } catch (e: Exception) {
+            log.error("[CMD] run failed", e)
+            source.sendError(Text.literal("Memento: could not start run (see server log)."))
             0
         }
     }
