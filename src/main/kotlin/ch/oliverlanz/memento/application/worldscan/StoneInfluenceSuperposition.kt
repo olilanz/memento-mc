@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.application.run
+package ch.oliverlanz.memento.application.worldscan
 
 import ch.oliverlanz.memento.domain.memento.ChunkMementoView
 import ch.oliverlanz.memento.domain.memento.WorldMementoSubstrate

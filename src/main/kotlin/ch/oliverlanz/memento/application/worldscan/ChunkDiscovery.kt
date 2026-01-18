@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.application.run
+package ch.oliverlanz.memento.application.worldscan
 
 import org.slf4j.LoggerFactory
 import java.io.IOException
@@ -45,11 +45,19 @@ class ChunkDiscovery {
             val b1 = header[base + 1].toInt() and 0xFF
             val b2 = header[base + 2].toInt() and 0xFF
             val sectorOffset = (b0 shl 16) or (b1 shl 8) or b2
+            val sectorCount = header[base + 3].toInt() and 0xFF
 
             if (sectorOffset != 0) {
                 val localX = i % REGION_WIDTH
                 val localZ = i / REGION_WIDTH
-                out.add(ChunkRef(localX = localX, localZ = localZ))
+                out.add(
+                    ChunkRef(
+                        localX = localX,
+                        localZ = localZ,
+                        sectorOffset = sectorOffset,
+                        sectorCount = sectorCount,
+                    ),
+                )
             }
         }
         return out

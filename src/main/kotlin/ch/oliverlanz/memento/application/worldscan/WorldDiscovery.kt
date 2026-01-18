@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.application.run
+package ch.oliverlanz.memento.application.worldscan
 
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer

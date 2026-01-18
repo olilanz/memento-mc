@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.application.run
+package ch.oliverlanz.memento.application.worldscan
 
 import net.minecraft.server.MinecraftServer
 import net.minecraft.util.WorldSavePath

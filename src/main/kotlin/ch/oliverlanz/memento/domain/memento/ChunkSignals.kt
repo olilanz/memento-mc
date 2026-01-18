@@ -6,6 +6,8 @@ import net.minecraft.world.World
 
 data class ChunkSignals(
     val inhabitedTimeTicks: Long,
+    /** World tick when the chunk was last saved (as stored in chunk NBT). */
+    val lastUpdateTicks: Long,
     val surfaceY: Int?,
     val biomeId: Identifier?,
     val isSpawnChunk: Boolean,
