@@ -55,6 +55,15 @@ object Commands {
                         }
                     )
                 )
+
+                /* ======================
+                 * RUN
+                 * ====================== */
+                .then(literal("run")
+                    .executes { ctx ->
+                        CommandHandlers.run(ctx.source)
+                    }
+                )
                 /* ======================
                  * ADD
                  * ====================== */
