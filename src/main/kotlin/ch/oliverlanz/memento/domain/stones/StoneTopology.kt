@@ -33,6 +33,13 @@ object StoneTopology {
 
     private val stones = linkedMapOf<String, Stone>()
 
+    /**
+     * Derived influence snapshot.
+     *
+     * This is rebuilt atomically whenever the stone set changes.
+     */
+    private var influenceTree: StoneInfluenceTree = StoneInfluenceTree.EMPTY
+
     private var server: MinecraftServer? = null
     private var initialized = false
 
@@ -57,6 +64,9 @@ object StoneTopology {
 
         log.info("[STONE] register after load count={}", stones.size)
 
+        // Build derived influence snapshot for the loaded register.
+        rebuildInfluenceTree()
+
         // Startup reconciliation: persisted state may already indicate maturity.
         evaluate(trigger = StoneLifecycleTrigger.SERVER_START)
 
@@ -67,6 +77,7 @@ object StoneTopology {
         server = null
         initialized = false
         stones.clear()
+        influenceTree = StoneInfluenceTree.EMPTY
     }
 
     // ---------------------------------------------------------------------
@@ -78,6 +89,15 @@ object StoneTopology {
 
     fun get(name: String): Stone? =
         stones[name]
+
+    /**
+     * Read-only snapshot of current stone influence at chunk granularity.
+     *
+     * This view is deterministic and updated whenever the stone set changes.
+     * Consumers must treat it as immutable.
+     */
+    fun influenceSnapshot(): StoneInfluenceTree = influenceTree
+
 
     // ---------------------------------------------------------------------
     // Mutations (admin / operator alterations)
@@ -93,7 +113,10 @@ object StoneTopology {
         require(radius >= 0) { "radius must be >= 0." }
 
         val stone = stones[name] ?: return false
+        if (stone.radius == radius) return true
         stone.radius = radius
+        // Any radius change affects the derived influence snapshot.
+        rebuildInfluenceTree()
 
         // Radius changes can affect derived renewal intent.
         when (stone) {
@@ -165,6 +188,9 @@ object StoneTopology {
         w.radius = radius
         stones[name] = w
 
+        // Stone set changed: rebuild derived influence snapshot.
+        rebuildInfluenceTree()
+
         // Lifecycle: stones enter existence as PLACED.
         StoneDomainEvents.publish(
             StoneLifecycleTransition(
@@ -200,6 +226,9 @@ object StoneTopology {
         l.radius = radius
         stones[name] = l
 
+        // Stone set changed: rebuild derived influence snapshot.
+        rebuildInfluenceTree()
+
         // Lifecycle: stones enter existence as PLACED.
         StoneDomainEvents.publish(
             StoneLifecycleTransition(
@@ -223,6 +252,9 @@ object StoneTopology {
         requireInitialized()
 
         val removed = stones.remove(name)
+
+        // Rebuild snapshot eagerly: removal affects dominance for potentially many chunks.
+        if (removed != null) rebuildInfluenceTree()
         persist()
 
         // Unified terminal lifecycle: removal is expressed as CONSUMED.
@@ -341,6 +373,8 @@ object StoneTopology {
         )
 
         stones.remove(stoneName)
+
+        rebuildInfluenceTree()
         persist()
     }
 
@@ -475,6 +509,79 @@ object StoneTopology {
     // ---------------------------------------------------------------------
     // Internal
     // ---------------------------------------------------------------------
+
+    /**
+     * Rebuild the immutable derived influence snapshot.
+     *
+     * This is a mechanical, deterministic computation based on the current stone register.
+     * It does not change domain semantics; it makes the existing topology easier to query.
+     */
+    private fun rebuildInfluenceTree() {
+        // Group stones by dimension while preserving register order.
+        val byDimension = LinkedHashMap<RegistryKey<World>, MutableList<Stone>>()
+        for (s in stones.values) {
+            byDimension.getOrPut(s.dimension) { mutableListOf() }.add(s)
+        }
+
+        val dimensionsOut = LinkedHashMap<RegistryKey<World>, DimensionInfluence>()
+
+        for ((dimension, dimStones) in byDimension) {
+            // Build: stone -> chunks (deterministic chunk order per stone).
+            val byStone = LinkedHashMap<String, Set<ChunkPos>>()
+            for (s in dimStones) {
+                byStone[s.name] = computeInfluenceChunks(s)
+            }
+
+            // Build: chunk -> dominant stone kind (Lorestone wins, then Witherstone).
+            val dominantByChunk = LinkedHashMap<ChunkPos, kotlin.reflect.KClass<out Stone>>()
+            for (s in dimStones) {
+                val kind = s::class
+                for (chunk in byStone[s.name].orEmpty()) {
+                    val existing = dominantByChunk[chunk]
+                    if (existing == null) {
+                        dominantByChunk[chunk] = kind
+                        continue
+                    }
+
+                    // Dominance rules are owned here: Lorestone always wins.
+                    // Note: we store only the dominant *kind*.
+                    if (existing == Lorestone::class) continue
+                    if (kind == Lorestone::class) {
+                        dominantByChunk[chunk] = kind
+                    }
+                }
+            }
+
+            dimensionsOut[dimension] = DimensionInfluence(
+                byStone = byStone,
+                dominantByChunk = dominantByChunk,
+            )
+        }
+
+        influenceTree = StoneInfluenceTree(dimensions = dimensionsOut)
+    }
+
+    /**
+     * Compute the set of chunks within [stone]'s spatial radius.
+     *
+     * This uses [StoneSpatial.containsChunk] to stay consistent with existing topology semantics.
+     */
+    private fun computeInfluenceChunks(stone: Stone): Set<ChunkPos> {
+        val center = StoneSpatial.centerChunk(stone)
+        val r = stone.radius
+
+        // See deriveEligibleChunksFor: extend by 1 chunk to account for StoneSpatial's margin.
+        val search = r + 1
+
+        val out = LinkedHashSet<ChunkPos>()
+        for (dx in -search..search) {
+            for (dz in -search..search) {
+                val candidate = ChunkPos(center.x + dx, center.z + dz)
+                if (StoneSpatial.containsChunk(stone, candidate)) out.add(candidate)
+            }
+        }
+        return out
+    }
 
     private fun transition(stone: Witherstone, to: WitherstoneState, trigger: StoneLifecycleTrigger) {
         val from = stone.state
