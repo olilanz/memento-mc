@@ -1,15 +1,13 @@
 package ch.oliverlanz.memento.domain.memento
 
-/** Influence flags projected onto a chunk. */
-data class StoneInfluenceFlags(
-    val hasWitherstoneInfluence: Boolean,
-    val hasLorestoneInfluence: Boolean,
-)
+import ch.oliverlanz.memento.domain.stones.Stone
+import kotlin.reflect.KClass
 
 data class ChunkMementoView(
     val key: ChunkKey,
     val signals: ChunkSignals,
-    val influence: StoneInfluenceFlags,
+    /** Dominant influence for this chunk, if any. Lore dominance is already resolved by StoneTopology. */
+    val dominantStoneKind: KClass<out Stone>?,
 )
 
 /** Domain-owned, shaped surface produced by superimposing influence onto the substrate. */
