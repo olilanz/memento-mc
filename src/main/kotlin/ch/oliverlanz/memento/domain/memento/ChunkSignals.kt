@@ -4,12 +4,18 @@ import net.minecraft.registry.RegistryKey
 import net.minecraft.util.Identifier
 import net.minecraft.world.World
 
+/**
+ * Signals observed for an existing chunk.
+ *
+ * Semantics:
+ * - NULL means the signal could not be retrieved (error)
+ * - Absence must never be normalized to 0
+ */
 data class ChunkSignals(
-    val inhabitedTimeTicks: Long,
-    /** World tick when the chunk was last saved (as stored in chunk NBT). */
-    val lastUpdateTicks: Long,
+    val inhabitedTimeTicks: Long?,
+    val lastUpdateTicks: Long?,
     val surfaceY: Int?,
-    val biomeId: Identifier?,
+    val biomeId: String?,
     val isSpawnChunk: Boolean,
 )
 
