@@ -1,32 +1,37 @@
 package ch.oliverlanz.memento.domain.memento
 
 import ch.oliverlanz.memento.domain.stones.StoneTopology
+import ch.oliverlanz.memento.domain.stones.Stone
+import net.minecraft.registry.RegistryKey
+import net.minecraft.util.math.ChunkPos
+import net.minecraft.world.World
+import kotlin.reflect.KClass
 
 /**
  * Superimposes stone influence onto a substrate.
  *
- * Slice 1 semantics:
- * - Produces two booleans per chunk.
- * - Implementation is a tracer-bullet placeholder (deterministic but not yet spatially correct).
+ * Slice 2 semantics:
+ * - Uses [StoneTopology] as the sole authority for influence dominance.
+ * - Projects the dominant stone kind per chunk (as a Kotlin class) onto the substrate.
+ * - No duplicated dominance logic exists outside [StoneTopology].
  */
 object StoneInfluenceProjector {
 
     fun project(substrate: WorldMementoSubstrate): WorldMementoTopology {
-        // Touching StoneTopology here is important: this stage is domain-owned.
-        // Real spatial projection will replace the placeholder logic in later slices.
-        val stonesCount = StoneTopology.list().size
+        // Cache per-dimension dominance maps to avoid repeated lookups per row.
+        val dominantByChunkByWorld = linkedMapOf<RegistryKey<World>, Map<ChunkPos, KClass<out Stone>>>()
 
         val entries = substrate.snapshot().map { (key, signals) ->
-            val seed = (key.chunkX * 31 + key.chunkZ * 17 + key.regionX * 13 + key.regionZ) xor stonesCount
-            val hasLore = seed % 11 == 0
-            val hasWither = seed % 7 == 0
+            val dominantByChunk = dominantByChunkByWorld.getOrPut(key.world) {
+                StoneTopology.getInfluencedChunkSet(key.world)
+            }
+
+            val dominant = dominantByChunk[ChunkPos(key.chunkX, key.chunkZ)]
+
             ChunkMementoView(
                 key = key,
                 signals = signals,
-                influence = StoneInfluenceFlags(
-                    hasWitherstoneInfluence = hasWither,
-                    hasLorestoneInfluence = hasLore,
-                )
+                dominantStoneKind = dominant,
             )
         }
 
