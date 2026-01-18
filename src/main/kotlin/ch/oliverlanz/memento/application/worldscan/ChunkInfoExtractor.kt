@@ -12,7 +12,10 @@ import kotlin.math.min
 /**
  * Application-layer, tick-paced extractor.
  *
- * Slice: runtime metadata inspection (Option 2).
+ * Semantics:
+ * - Only EXISTING chunks are processed
+ * - Missing metadata is an error and surfaces as NULL
+ * - No chunk generation
  */
 class ChunkInfoExtractor {
 
@@ -28,9 +31,7 @@ class ChunkInfoExtractor {
     private var currentWorld: ServerWorld? = null
     private var runtimeReader: ChunkRuntimeMetadataReader? = null
 
-    private var metaOk = 0L
-    private var metaFailed = 0L
-    private var metaMissing = 0L
+    private var metaErrors = 0L
 
     fun start(plan: WorldDiscoveryPlan, substrate: WorldMementoSubstrate) {
         this.plan = plan
@@ -43,9 +44,7 @@ class ChunkInfoExtractor {
         currentWorld = null
         runtimeReader = null
 
-        metaOk = 0
-        metaFailed = 0
-        metaMissing = 0
+        metaErrors = 0
     }
 
     fun readNext(server: MinecraftServer, maxChunkSlots: Int): Boolean {
@@ -95,6 +94,25 @@ class ChunkInfoExtractor {
                 val chunkZ = region.z * 32 + chunkRef.localZ
                 val chunkPos = ChunkPos(chunkX, chunkZ)
 
+                val metadata = try {
+                    runtimeReader!!.read(chunkPos)
+                } catch (e: Exception) {
+                    metaErrors++
+                    log.error(
+                        "[RUN] metadata read failed world={} chunk=({}, {}) error={}",
+                        worldPlan.world.value,
+                        chunkX,
+                        chunkZ,
+                        e.message,
+                    )
+                    ChunkRuntimeMetadata(null, null)
+                }
+
+                // Skip non-existing chunks entirely
+                if (metadata == null) {
+                    continue
+                }
+
                 val key = ChunkKey(
                     world = worldPlan.world,
                     regionX = region.x,
@@ -103,13 +121,9 @@ class ChunkInfoExtractor {
                     chunkZ = chunkZ,
                 )
 
-                val meta = runtimeReader!!.read(chunkPos)
-                if (meta.ok) metaOk++ else metaFailed++
-                if (!meta.hasValues) metaMissing++
-
                 val signals = ChunkSignals(
-                    inhabitedTimeTicks = meta.inhabitedTimeTicks,
-                    lastUpdateTicks = meta.lastUpdateTicks,
+                    inhabitedTimeTicks = metadata.inhabitedTimeTicks,
+                    lastUpdateTicks = metadata.lastUpdateTicks,
                     surfaceY = null,
                     biomeId = null,
                     isSpawnChunk = (chunkX == 0 && chunkZ == 0),
@@ -126,13 +140,9 @@ class ChunkInfoExtractor {
     }
 
     private fun finishAll(): Boolean {
-        val total = metaOk + metaFailed
         log.info(
-            "[RUN] chunk metadata extraction summary total={} ok={} failed={} missingOrZero={}",
-            total,
-            metaOk,
-            metaFailed,
-            metaMissing,
+            "[RUN] chunk metadata extraction completed metadataErrors={}",
+            metaErrors,
         )
         return false
     }
