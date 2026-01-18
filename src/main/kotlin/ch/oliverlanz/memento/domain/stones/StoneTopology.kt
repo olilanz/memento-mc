@@ -599,6 +599,32 @@ object StoneTopology {
         )
     }
 
+
+    /**
+     * Returns the immutable set of chunks influenced by the given stone
+     * in its own dimension.
+     */
+    internal fun getInfluencedChunkSet(stone: Stone): Set<ChunkPos> {
+        val dim = stone.dimension
+        return influenceTree
+            .dimensions[dim]
+            ?.byStone
+            ?.get(stone.name)
+            ?: emptySet()
+    }
+
+    /**
+     * Returns the immutable map of all influenced chunks and their dominant
+     * stone kind for the given dimension.
+     */
+    internal fun getInfluencedChunkSet(
+        dimension: RegistryKey<World>
+    ): Map<ChunkPos, kotlin.reflect.KClass<out Stone>> {
+        return influenceTree
+            .dimensions[dimension]
+            ?.dominantByChunk
+            ?: emptyMap()
+    }
     private fun persist() {
         val s = server ?: return
         StoneTopologyPersistence.save(s, stones.values.toList())
