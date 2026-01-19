@@ -55,9 +55,12 @@ class ChunkInfoExtractor {
         while (remaining > 0) {
             val worldPlan = p.worlds.getOrNull(worldIdx) ?: return finishAll()
             val region = worldPlan.regions.getOrNull(regionIdx) ?: run {
+                // Finished this world: advance and reset world-scoped state
                 worldIdx++
                 regionIdx = 0
                 chunkIdx = 0
+                currentWorld = null
+                runtimeReader = null
                 continue
             }
 
