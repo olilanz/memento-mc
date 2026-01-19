@@ -24,17 +24,39 @@ class ChunkDiscovery {
 
     fun discover(plan: WorldDiscoveryPlan): WorldDiscoveryPlan {
         val discovered = plan.worlds.map { world ->
+            val stats = WorldChunkDiscoveryStats(world = world.world.value.toString(), regionFilesFound = world.regions.size)
+
             val regionsWithChunks = world.regions.map { region ->
-                val chunks = discoverExistingChunks(region.file)
+                val chunks = discoverExistingChunks(region.file, stats)
+                if (chunks.isEmpty()) {
+                    stats.regionsWithNoChunks++
+                } else {
+                    stats.regionsWithChunks++
+                    stats.chunksDiscovered += chunks.size
+                }
                 region.copy(chunks = chunks)
             }
+
+            // INFO level: summary only (no per-file spam)
+            log.info(
+                "[RUN] region file scan completed world={} regionFilesFound={} regionFilesUsed={} regionFilesSkippedEmpty={} regionsWithChunks={} regionsWithNoChunks={} chunksDiscovered={}",
+                stats.world,
+                stats.regionFilesFound,
+                stats.regionFilesUsed,
+                stats.regionFilesSkippedTooSmall,
+                stats.regionsWithChunks,
+                stats.regionsWithNoChunks,
+                stats.chunksDiscovered,
+            )
+
             world.copy(regions = regionsWithChunks)
         }
+
         return WorldDiscoveryPlan(worlds = discovered)
     }
 
-    private fun discoverExistingChunks(regionFile: Path): List<ChunkRef> {
-        val header = tryReadLocationTable(regionFile) ?: return emptyList()
+    private fun discoverExistingChunks(regionFile: Path, stats: WorldChunkDiscoveryStats): List<ChunkRef> {
+        val header = tryReadLocationTable(regionFile, stats) ?: return emptyList()
 
         // 1024 entries * 4 bytes = 4096 bytes. Header entry index maps to (localX, localZ):
         // localX = i % 32, localZ = i / 32
@@ -68,25 +90,30 @@ class ChunkDiscovery {
      *
      * Error handling is intentionally "log + skip" to keep /memento run inspectable and robust.
      */
-    private fun tryReadLocationTable(regionFile: Path): ByteArray? {
+    private fun tryReadLocationTable(regionFile: Path, stats: WorldChunkDiscoveryStats): ByteArray? {
         val size = try {
             Files.size(regionFile)
         } catch (e: IOException) {
-            log.info("[RUN] region file unreadable; skipping file={} error={}", regionFile, e.message)
+            stats.regionFilesSkippedUnreadable++
+            log.debug("[RUN] region file unreadable; skipping file={} error={}", regionFile, e.message)
             return null
         } catch (e: SecurityException) {
-            log.info("[RUN] region file access denied; skipping file={} error={}", regionFile, e.message)
+            stats.regionFilesSkippedUnreadable++
+            log.debug("[RUN] region file access denied; skipping file={} error={}", regionFile, e.message)
             return null
         }
 
         if (size < LOCATION_TABLE_BYTES.toLong()) {
-            log.info(
+            stats.regionFilesSkippedTooSmall++
+            log.trace(
                 "[RUN] region file too small; skipping file={} sizeBytes={}",
                 regionFile,
                 size,
             )
             return null
         }
+
+        stats.regionFilesUsed++
 
         return try {
             Files.newInputStream(regionFile).use { input ->
@@ -98,7 +125,8 @@ class ChunkDiscovery {
                     readTotal += r
                 }
                 if (readTotal < buf.size) {
-                    log.info(
+                    stats.regionFilesSkippedHeaderShortRead++
+                    log.debug(
                         "[RUN] region header short read; skipping file={} readBytes={} expectedBytes={}",
                         regionFile,
                         readTotal,
@@ -110,13 +138,28 @@ class ChunkDiscovery {
                 }
             }
         } catch (e: IOException) {
-            log.info("[RUN] region file read failed; skipping file={} error={}", regionFile, e.message)
+            stats.regionFilesSkippedReadFailed++
+            log.debug("[RUN] region file read failed; skipping file={} error={}", regionFile, e.message)
             null
         } catch (e: SecurityException) {
-            log.info("[RUN] region file read denied; skipping file={} error={}", regionFile, e.message)
+            stats.regionFilesSkippedReadFailed++
+            log.debug("[RUN] region file read denied; skipping file={} error={}", regionFile, e.message)
             null
         }
     }
+
+    private data class WorldChunkDiscoveryStats(
+        val world: String,
+        val regionFilesFound: Int,
+        var regionFilesUsed: Int = 0,
+        var regionFilesSkippedTooSmall: Int = 0,
+        var regionFilesSkippedUnreadable: Int = 0,
+        var regionFilesSkippedReadFailed: Int = 0,
+        var regionFilesSkippedHeaderShortRead: Int = 0,
+        var regionsWithChunks: Int = 0,
+        var regionsWithNoChunks: Int = 0,
+        var chunksDiscovered: Int = 0,
+    )
 
     private companion object {
         private const val REGION_WIDTH: Int = 32

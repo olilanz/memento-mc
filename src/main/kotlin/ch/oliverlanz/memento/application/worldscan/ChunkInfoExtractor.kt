@@ -33,6 +33,14 @@ class ChunkInfoExtractor {
 
     private var metaErrors = 0L
 
+    // World-scoped stats (INFO-level only at start + completion)
+    private var currentWorldId: String? = null
+    private var worldRegionsPlanned = 0
+    private var worldChunksPlanned = 0
+    private var worldChunksProcessed = 0
+    private var worldChunksMissingMetadata = 0
+    private var worldMetaErrors = 0L
+
     fun start(plan: WorldDiscoveryPlan, substrate: WorldMementoSubstrate) {
         this.plan = plan
         this.substrate = substrate
@@ -43,6 +51,13 @@ class ChunkInfoExtractor {
 
         currentWorld = null
         runtimeReader = null
+
+        currentWorldId = null
+        worldRegionsPlanned = 0
+        worldChunksPlanned = 0
+        worldChunksProcessed = 0
+        worldChunksMissingMetadata = 0
+        worldMetaErrors = 0
 
         metaErrors = 0
     }
@@ -55,18 +70,21 @@ class ChunkInfoExtractor {
         while (remaining > 0) {
             val worldPlan = p.worlds.getOrNull(worldIdx) ?: return finishAll()
             val region = worldPlan.regions.getOrNull(regionIdx) ?: run {
-                // Finished this world: advance and reset world-scoped state
+                // Finished this world: emit summary, advance, and reset world-scoped state
+                finishWorld()
                 worldIdx++
                 regionIdx = 0
                 chunkIdx = 0
                 currentWorld = null
                 runtimeReader = null
+                currentWorldId = null
                 continue
             }
 
             if (currentWorld == null) {
                 val w = server.getWorld(worldPlan.world)
                 if (w == null) {
+                    log.debug("[RUN] world not loaded; skipping world={}", worldPlan.world.value)
                     worldIdx++
                     regionIdx = 0
                     chunkIdx = 0
@@ -74,6 +92,21 @@ class ChunkInfoExtractor {
                 }
                 currentWorld = w
                 runtimeReader = ChunkRuntimeMetadataReader(w)
+
+                // INFO: start marker for a potentially long-running operation
+                currentWorldId = worldPlan.world.value.toString()
+                worldRegionsPlanned = worldPlan.regions.size
+                worldChunksPlanned = worldPlan.regions.sumOf { it.chunks.size }
+                worldChunksProcessed = 0
+                worldChunksMissingMetadata = 0
+                worldMetaErrors = 0
+
+                log.info(
+                    "[RUN] chunk metadata extraction started world={} regions={} chunksPlanned={}",
+                    currentWorldId,
+                    worldRegionsPlanned,
+                    worldChunksPlanned,
+                )
             }
 
             val chunks = region.chunks
@@ -101,6 +134,7 @@ class ChunkInfoExtractor {
                     runtimeReader!!.read(chunkPos)
                 } catch (e: Exception) {
                     metaErrors++
+                    worldMetaErrors++
                     log.error(
                         "[RUN] metadata read failed world={} chunk=({}, {}) error={}",
                         worldPlan.world.value,
@@ -113,8 +147,11 @@ class ChunkInfoExtractor {
 
                 // Skip non-existing chunks entirely
                 if (metadata == null) {
+                    worldChunksMissingMetadata++
                     continue
                 }
+
+                worldChunksProcessed++
 
                 val key = ChunkKey(
                     world = worldPlan.world,
@@ -143,10 +180,24 @@ class ChunkInfoExtractor {
     }
 
     private fun finishAll(): Boolean {
+        // If the tick budget ends exactly on a world boundary, we may still have an active world.
+        finishWorld()
         log.info(
             "[RUN] chunk metadata extraction completed metadataErrors={}",
             metaErrors,
         )
         return false
+    }
+
+    private fun finishWorld() {
+        val id = currentWorldId ?: return
+        log.info(
+            "[RUN] chunk metadata extraction completed world={} chunksPlanned={} chunksProcessed={} chunksMissingMetadata={} metadataErrors={}",
+            id,
+            worldChunksPlanned,
+            worldChunksProcessed,
+            worldChunksMissingMetadata,
+            worldMetaErrors,
+        )
     }
 }
