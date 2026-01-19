@@ -18,29 +18,26 @@ object MementoCsvWriter {
         val root = server.getSavePath(WorldSavePath.ROOT)
         val path = root.resolve(MementoConstants.MEMENTO_RUN_CSV_FILE)
 
+        // LOCKED SCHEMA (scanner responsibility only; no derived fields, no optional fields):
+        // dimension,chunk_x,chunk_z,inhabited_ticks,dominant_stone,surface_y,biome_id,is_spawn_chunk
         val sb = StringBuilder()
-        sb.append("world,regionx,regionz,chunkx,chunkz,timeinhabited_ticks,lastupdate_ticks,surface_y,biome_id,is_spawn,dominant_stone,has_lorestone_influence,has_witherstone_influence\n")
+        sb.append("dimension,chunk_x,chunk_z,inhabited_ticks,dominant_stone,surface_y,biome_id,is_spawn_chunk\n")
 
         topology.entries.forEach { entry ->
-            val w = entry.key.world.value.toString()
-            val biome = entry.signals.biomeId?.toString() ?: ""
+            val dim = entry.key.world.value.toString()
+            val biome = entry.signals.biomeId ?: ""
             val surfaceY = entry.signals.surfaceY?.toString() ?: ""
-
+            val inhabited = entry.signals.inhabitedTimeTicks?.toString() ?: ""
             val dominant = entry.dominantStoneKind?.simpleName ?: ""
 
-            sb.append(w)
-                .append(',').append(entry.key.regionX)
-                .append(',').append(entry.key.regionZ)
+            sb.append(dim)
                 .append(',').append(entry.key.chunkX)
                 .append(',').append(entry.key.chunkZ)
-                .append(',').append(entry.signals.inhabitedTimeTicks)
-                .append(',').append(entry.signals.lastUpdateTicks)
+                .append(',').append(inhabited)
+                .append(',').append(dominant)
                 .append(',').append(surfaceY)
                 .append(',').append(biome)
                 .append(',').append(if (entry.signals.isSpawnChunk) 1 else 0)
-                .append(',').append(dominant)
-                .append(',').append(if (entry.hasLorestoneInfluence) 1 else 0)
-                .append(',').append(if (entry.hasWitherstoneInfluence) 1 else 0)
                 .append('\n')
         }
 
