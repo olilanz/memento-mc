@@ -7,6 +7,7 @@ import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge
 import ch.oliverlanz.memento.application.stone.StoneMaturityTimeBridge
 import ch.oliverlanz.memento.application.time.GameTimeTracker
 import ch.oliverlanz.memento.application.visualization.EffectsHost
+import ch.oliverlanz.memento.application.worldscan.MementoRunController
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchLifecycleTransition
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
@@ -28,6 +29,8 @@ object Memento : ModInitializer {
 
     private var effectsHost: EffectsHost? = null
     private val gameTimeTracker = GameTimeTracker()
+
+    private var runController: MementoRunController? = null
 
     // Renewal wiring (application/infrastructure)
     private var renewalInitialObserver: RenewalInitialObserver? = null
@@ -79,6 +82,11 @@ object Memento : ModInitializer {
             effectsHost = EffectsHost(server)
             CommandHandlers.attachVisualizationEngine(effectsHost!!)
 
+            runController = MementoRunController().also {
+                it.attach(server)
+                CommandHandlers.attachRunController(it)
+            }
+
             // Fan out tracker events.
             RenewalTracker.subscribe(renewalEventListener)
 
@@ -117,6 +125,9 @@ object Memento : ModInitializer {
             StoneTopologyHooks.onServerStopping()
 
             CommandHandlers.detachVisualizationEngine()
+            CommandHandlers.detachRunController()
+            runController?.detach()
+            runController = null
             effectsHost = null
         }
 
@@ -124,6 +135,8 @@ object Memento : ModInitializer {
         // (Application/infrastructure may still need a paced tick.)
         ServerTickEvents.END_SERVER_TICK.register {
             gameTimeTracker.tick()
+
+            runController?.tick()
 
             val scheduler = chunkLoadScheduler
             if (scheduler != null) {
