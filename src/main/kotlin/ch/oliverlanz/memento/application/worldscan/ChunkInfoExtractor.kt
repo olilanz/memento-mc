@@ -1,5 +1,6 @@
 package ch.oliverlanz.memento.application.worldscan
 
+import ch.oliverlanz.memento.application.chunk.ChunkLoadRequest
 import ch.oliverlanz.memento.domain.memento.ChunkKey
 import ch.oliverlanz.memento.domain.memento.ChunkSignals
 import ch.oliverlanz.memento.domain.memento.WorldMementoSubstrate
@@ -9,7 +10,6 @@ import net.minecraft.util.math.BlockPos
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.Heightmap
 import org.slf4j.LoggerFactory
-import kotlin.math.min
 
 class ChunkInfoExtractor {
 
@@ -25,6 +25,10 @@ class ChunkInfoExtractor {
     private var currentWorld: ServerWorld? = null
     private var runtimeReader: ChunkRuntimeMetadataReader? = null
 
+    private val scannedKeys: MutableSet<ChunkKey> = mutableSetOf()
+
+    private var pending: PendingScan? = null
+
     fun start(plan: WorldDiscoveryPlan, substrate: WorldMementoSubstrate) {
         this.plan = plan
         this.substrate = substrate
@@ -33,15 +37,131 @@ class ChunkInfoExtractor {
         chunkIdx = 0
         currentWorld = null
         runtimeReader = null
+        scannedKeys.clear()
+        pending = null
     }
 
+    /**
+     * Provider-style scan: offer at most one chunk-load request.
+     *
+     * The driver controls when to load; the extractor only decides what is next.
+     */
+    fun nextChunkLoad(server: MinecraftServer, label: String): ChunkLoadRequest? {
+        val p = plan ?: return null
+        val s = substrate ?: return null
+
+        // If we already offered a chunk and are waiting for it to be observed, do not advance.
+        val inFlight = pending
+        if (inFlight != null) {
+            return ChunkLoadRequest(
+                label = label,
+                dimension = inFlight.worldKey,
+                pos = inFlight.pos,
+            )
+        }
+
+        val candidate = findNextCandidate(server, p, s) ?: return null
+        pending = candidate
+        return ChunkLoadRequest(
+            label = label,
+            dimension = candidate.worldKey,
+            pos = candidate.pos,
+        )
+    }
+
+    /**
+     * Must be called on observed chunk loads.
+     *
+     * Only advances the scan cursor when the observed load matches the currently pending request.
+     */
+    fun onChunkLoaded(server: MinecraftServer, worldKey: net.minecraft.registry.RegistryKey<net.minecraft.world.World>, pos: ChunkPos) {
+        val p = plan ?: return
+        val s = substrate ?: return
+        val pend = pending ?: return
+        if (pend.worldKey != worldKey) return
+        if (pend.pos != pos) return
+
+        val world = currentWorld
+        val reader = runtimeReader
+        if (world == null || reader == null) {
+            // Defensive: re-establish world context.
+            val w = server.getWorld(worldKey) ?: return
+            currentWorld = w
+            runtimeReader = ChunkRuntimeMetadataReader(w)
+        }
+
+        val w = currentWorld ?: return
+        val r = runtimeReader ?: return
+
+        val metadata = r.readIfLoaded(pos) ?: return
+
+        val centerX = pos.x * 16 + 8
+        val centerZ = pos.z * 16 + 8
+        val surfaceY = w.getTopY(Heightmap.Type.WORLD_SURFACE, centerX, centerZ)
+
+        val biomeId = w
+            .getBiome(BlockPos(centerX, surfaceY, centerZ))
+            .value()
+            .toString()
+
+        val signals = ChunkSignals(
+            inhabitedTimeTicks = metadata.inhabitedTimeTicks,
+            lastUpdateTicks = null,
+            surfaceY = surfaceY,
+            biomeId = biomeId,
+            isSpawnChunk = false,
+        )
+        s.upsert(pend.key, signals)
+        scannedKeys.add(pend.key)
+
+        // Commit advancement by consuming exactly one chunk slot.
+        chunkIdx++
+        pending = null
+    }
+
+    fun isComplete(): Boolean {
+        val p = plan ?: return true
+        // Complete when we have no pending request AND no next candidate.
+        if (pending != null) return false
+
+        // Avoid mutating state during completion check; use a copy of indices.
+        var wi = worldIdx
+        var ri = regionIdx
+        var ci = chunkIdx
+        while (true) {
+            val worldPlan = p.worlds.getOrNull(wi) ?: return true
+            val region = worldPlan.regions.getOrNull(ri) ?: run {
+                wi++
+                ri = 0
+                ci = 0
+                continue
+            }
+            val chunks = region.chunks
+            if (ci >= chunks.size) {
+                ri++
+                ci = 0
+                continue
+            }
+            // There is still at least one chunk slot to consider.
+            return false
+        }
+    }
+
+    // Legacy tick-based API kept for compatibility; no longer used by 0.9.6 provider model.
     fun readNext(server: MinecraftServer, maxChunkSlots: Int): Boolean {
         val p = plan ?: return false
         val s = substrate ?: return false
+        log.warn("[SCAN] legacy tick-based extraction invoked; prefer provider model")
+        return false
+    }
 
-        var remaining = maxChunkSlots
-        while (remaining > 0) {
-            val worldPlan = p.worlds.getOrNull(worldIdx) ?: return false
+    private fun findNextCandidate(
+        server: MinecraftServer,
+        plan: WorldDiscoveryPlan,
+        substrate: WorldMementoSubstrate,
+    ): PendingScan? {
+        while (true) {
+            val worldPlan = plan.worlds.getOrNull(worldIdx) ?: return null
             val region = worldPlan.regions.getOrNull(regionIdx) ?: run {
                 worldIdx++
                 regionIdx = 0
@@ -70,50 +190,36 @@ class ChunkInfoExtractor {
                 continue
             }
 
-            val processedNow = min(remaining, chunks.size - chunkIdx)
-            for (i in 0 until processedNow) {
-                val ref = chunks[chunkIdx + i]
+            val ref = chunks[chunkIdx]
+            val chunkX = region.x * 32 + ref.localX
+            val chunkZ = region.z * 32 + ref.localZ
+            val chunkPos = ChunkPos(chunkX, chunkZ)
 
-                val chunkX = region.x * 32 + ref.localX
-                val chunkZ = region.z * 32 + ref.localZ
-                val chunkPos = ChunkPos(chunkX, chunkZ)
+            val key = ChunkKey(
+                world = worldPlan.world,
+                regionX = region.x,
+                regionZ = region.z,
+                chunkX = chunkX,
+                chunkZ = chunkZ,
+            )
 
-                val metadata = runtimeReader!!.loadAndReadExisting(chunkPos)
-                    ?: continue
-
-                val w = currentWorld!!
-                val centerX = chunkX * 16 + 8
-                val centerZ = chunkZ * 16 + 8
-                val surfaceY = w.getTopY(Heightmap.Type.WORLD_SURFACE, centerX, centerZ)
-
-                val biomeId = w
-                    .getBiome(BlockPos(centerX, surfaceY, centerZ))
-                    .value()
-                    .toString()
-
-                val key = ChunkKey(
-                    world = worldPlan.world,
-                    regionX = region.x,
-                    regionZ = region.z,
-                    chunkX = chunkX,
-                    chunkZ = chunkZ,
-                )
-
-                val signals = ChunkSignals(
-                    inhabitedTimeTicks = metadata.inhabitedTimeTicks,
-                    lastUpdateTicks = null,
-                    surfaceY = surfaceY,
-                    biomeId = biomeId,
-                    isSpawnChunk = false,
-                )
-
-                s.upsert(key, signals)
+            // Skip chunks already scanned (e.g. if we later ingest external loads).
+            if (scannedKeys.contains(key)) {
+                chunkIdx++
+                continue
             }
 
-            chunkIdx += processedNow
-            remaining -= processedNow
+            return PendingScan(
+                worldKey = worldPlan.world,
+                pos = chunkPos,
+                key = key,
+            )
         }
-
-        return true
     }
+
+    private data class PendingScan(
+        val worldKey: net.minecraft.registry.RegistryKey<net.minecraft.world.World>,
+        val pos: ChunkPos,
+        val key: ChunkKey,
+    )
 }

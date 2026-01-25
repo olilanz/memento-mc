@@ -1,10 +1,15 @@
 package ch.oliverlanz.memento.application.worldscan
+
+import ch.oliverlanz.memento.application.chunk.ChunkLoadProvider
+import ch.oliverlanz.memento.application.chunk.ChunkLoadRequest
 import ch.oliverlanz.memento.domain.memento.WorldMementoSubstrate
-import ch.oliverlanz.memento.infrastructure.MementoConstants
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.command.ServerCommandSource
 import net.minecraft.server.network.ServerPlayerEntity
 import net.minecraft.text.Text
+import net.minecraft.util.math.ChunkPos
+import net.minecraft.registry.RegistryKey
+import net.minecraft.world.World
 import org.slf4j.LoggerFactory
 import java.util.UUID
 
@@ -16,7 +21,7 @@ import java.util.UUID
  * - Triggered explicitly by an operator.
  * - Executes discovery immediately, then chunk extraction in tick-paced slices.
  */
-class MementoRunController {
+class MementoRunController : ChunkLoadProvider {
 
     private val log = LoggerFactory.getLogger("memento")
 
@@ -86,16 +91,20 @@ class MementoRunController {
         return 1
     }
 
-    /** Called each server tick by [ch.oliverlanz.memento.Memento]. */
-    fun tick() {
+    /** Provider hook: the driver asks for the next chunk only when it is polite to do so. */
+    override fun nextChunkLoad(): ChunkLoadRequest? {
+        if (!isRunning) return null
+        val s = server ?: return null
+        return extractor.nextChunkLoad(s, label = "scan")
+    }
+
+    /** Called for any observed chunk load. Advances extraction only when it matches the pending scan request. */
+    fun onChunkLoaded(dimension: RegistryKey<World>, pos: ChunkPos) {
         if (!isRunning) return
-
         val s = server ?: return
-        val p = plan ?: return
-        val sub = substrate ?: return
 
-        val more = try {
-            extractor.readNext(s, MementoConstants.MEMENTO_RUN_CHUNK_SLOTS_PER_TICK)
+        try {
+            extractor.onChunkLoaded(s, dimension, pos)
         } catch (e: Exception) {
             log.error("[RUN] extraction failed", e)
             notifyInitiator(s, "Memento: run failed (see server log).")
@@ -103,9 +112,19 @@ class MementoRunController {
             return
         }
 
-        if (more) {
-            return
-        }
+        tryFinalizeIfComplete(s)
+    }
+
+    /** Called each server tick by [ch.oliverlanz.memento.Memento]. Kept lightweight. */
+    fun tick() {
+        if (!isRunning) return
+        val s = server ?: return
+        tryFinalizeIfComplete(s)
+    }
+
+    private fun tryFinalizeIfComplete(server: MinecraftServer) {
+        val sub = substrate ?: return
+        if (!extractor.isComplete()) return
 
         // Stage 3: influence superposition (immediate)
         val influenceStart = System.nanoTime()
@@ -113,7 +132,7 @@ class MementoRunController {
             StoneInfluenceSuperposition.apply(sub)
         } catch (e: Exception) {
             log.error("[RUN] influence superposition failed", e)
-            notifyInitiator(s, "Memento: run failed during influence superposition (see server log).")
+            notifyInitiator(server, "Memento: run failed during influence superposition (see server log).")
             clearRunState()
             return
         }
@@ -123,19 +142,19 @@ class MementoRunController {
         // Stage 4: CSV generation (immediate)
         val writeStart = System.nanoTime()
         val path = try {
-            MementoCsvWriter.write(s, topology)
+            MementoCsvWriter.write(server, topology)
         } catch (e: Exception) {
             log.error("[RUN] csv write failed", e)
-            notifyInitiator(s, "Memento: run failed writing CSV (see server log).")
+            notifyInitiator(server, "Memento: run failed writing CSV (see server log).")
             clearRunState()
             return
         }
         val writeMs = (System.nanoTime() - writeStart) / 1_000_000
 
         val totalMs = (System.nanoTime() - startedNanos) / 1_000_000
-        log.info("[RUN] completed totalMs={} csvPath={}", totalMs, path)
+        log.info("[RUN] completed totalMs={} csvPath={} writeMs={}", totalMs, path, writeMs)
 
-        notifyInitiator(s, "Memento: run completed. Wrote ${topology.entries.size} rows to ${path.fileName}.")
+        notifyInitiator(server, "Memento: run completed. Wrote ${topology.entries.size} rows to ${path.fileName}.")
         clearRunState()
     }
 
