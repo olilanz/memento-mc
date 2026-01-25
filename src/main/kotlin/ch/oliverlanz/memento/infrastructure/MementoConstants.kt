@@ -27,6 +27,12 @@ object MementoConstants {
     /** Regeneration pacing: process one chunk every N server ticks. Mincraft does 20 ticks per second. */
     const val REGENERATION_CHUNK_INTERVAL_TICKS: Int = 8
 
+    /** Chunk load driver: while ACTIVE, request at most one chunk load every N server ticks. */
+    const val CHUNK_LOAD_ACTIVE_INTERVAL_TICKS: Int = REGENERATION_CHUNK_INTERVAL_TICKS
+
+    /** Chunk load driver: after any chunk load is observed, remain PASSIVE for N ticks before becoming ACTIVE again. */
+    const val CHUNK_LOAD_PASSIVE_GRACE_TICKS: Int = 60
+
     /**
      * Conceptual "renewal checkpoint" time-of-night.
      *
