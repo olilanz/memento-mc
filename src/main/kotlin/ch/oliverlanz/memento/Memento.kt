@@ -36,7 +36,7 @@ object Memento : ModInitializer {
     private var renewalInitialObserver: RenewalInitialObserver? = null
     private var chunkLoadDriver: ChunkLoadDriver? = null
 
-    private var renewalTickCounter: Int = 0
+    // Driver is ticked every server tick; it handles its own pacing.
 
     // Single listener to fan out RenewalTracker domain events to application/infrastructure components.
     private val renewalEventListener: (RenewalEvent) -> Unit = { e ->
@@ -60,6 +60,7 @@ object Memento : ModInitializer {
         // (Domain remains observational; it only reacts to these hooks.)
         ServerChunkEvents.CHUNK_LOAD.register { world, chunk ->
             RenewalTrackerHooks.onChunkLoaded(world.registryKey, chunk.pos)
+            chunkLoadDriver?.onChunkLoaded(world.registryKey, chunk.pos)
         }
         ServerChunkEvents.CHUNK_UNLOAD.register { world, chunk ->
             RenewalTrackerHooks.onChunkUnloaded(world.registryKey, chunk.pos)
@@ -76,7 +77,10 @@ object Memento : ModInitializer {
             // Renewal: logging + observational seeding + paced execution.
             RenewalTrackerLogging.attachOnce()
             renewalInitialObserver = RenewalInitialObserver().also { it.attach(server) }
-            chunkLoadDriver = ChunkLoadDriver(chunksPerTick = 1).also { it.attach(server) }
+            chunkLoadDriver = ChunkLoadDriver(
+                activeLoadIntervalTicks = MementoConstants.CHUNK_LOAD_ACTIVE_INTERVAL_TICKS,
+                passiveGraceTicks = MementoConstants.CHUNK_LOAD_PASSIVE_GRACE_TICKS,
+            ).also { it.attach(server) }
 
             // Visualization host must be attached before any domain activity can emit events.
             effectsHost = EffectsHost(server)
@@ -100,8 +104,6 @@ object Memento : ModInitializer {
             StoneMaturityTimeBridge.attach()
 
             gameTimeTracker.attach(server)
-
-            renewalTickCounter = 0
         }
 
         // Detach cleanly.
@@ -138,13 +140,7 @@ object Memento : ModInitializer {
 
             runController?.tick()
 
-            val driver = chunkLoadDriver
-            if (driver != null) {
-                renewalTickCounter++
-                if (renewalTickCounter % MementoConstants.REGENERATION_CHUNK_INTERVAL_TICKS == 0) {
-                    driver.tick()
-                }
-            }
+            chunkLoadDriver?.tick()
         }
     }
 }

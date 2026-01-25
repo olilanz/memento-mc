@@ -7,7 +7,6 @@ import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.stones.StoneTopology
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
-import net.minecraft.server.world.ServerWorld
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
 import net.minecraft.world.chunk.ChunkStatus
@@ -17,22 +16,43 @@ import java.util.ArrayDeque
 /**
  * ChunkLoadDriver performs chunk-load requests over time.
  *
- * Slice 1 (0.9.6): This is a mechanical extraction of the previous renewal-specific
- * ChunkLoadScheduler. Behaviour is intentionally preserved.
+ * Slice 2 (0.9.6): Introduce active/passive pacing.
  *
- * Later slices will:
- * - add active/passive (idle-aware) pacing
- * - accept load-intent from multiple clients (renewal + scanning)
- * - decouple from domain events
+ * - PASSIVE whenever the server is already loading chunks (players/other mods/etc.)
+ * - After the last observed chunk load, remain PASSIVE for [passiveGraceTicks]
+ * - When there is pending work and grace has elapsed, enter ACTIVE
+ * - In ACTIVE, request at most one chunk load every [activeLoadIntervalTicks]
+ * - When the queue is empty, enter IDLE
+ *
+ * Note: This class still accepts renewal events directly (Slice 1 compatibility).
+ * Later slices will replace this with explicit load-intent from application services.
  */
 class ChunkLoadDriver(
-    private val chunksPerTick: Int,
+    private val activeLoadIntervalTicks: Int,
+    private val passiveGraceTicks: Int,
 ) {
 
     private val log = LoggerFactory.getLogger("memento")
 
+    private enum class Mode {
+        IDLE,
+        PASSIVE,
+        ACTIVE,
+    }
+
     private var running: Boolean = false
     private var server: MinecraftServer? = null
+
+    // Driver-local tick counter (increments once per END_SERVER_TICK).
+    private var tick: Long = 0L
+
+    // Any chunk load (regardless of origin) pushes us into PASSIVE.
+    private var passiveUntilTick: Long = 0L
+
+    // Prevent multiple proactive loads in flight.
+    private var loadInFlight: WorkItem? = null
+
+    private var mode: Mode = Mode.IDLE
 
     private data class WorkItem(
         val batchName: String,
@@ -48,6 +68,10 @@ class ChunkLoadDriver(
     fun attach(server: MinecraftServer) {
         this.server = server
         this.running = true
+        this.tick = 0L
+        this.passiveUntilTick = 0L
+        this.loadInFlight = null
+        this.mode = Mode.IDLE
     }
 
     fun detach() {
@@ -55,17 +79,46 @@ class ChunkLoadDriver(
         this.server = null
         queue.clear()
         queuedKeys.clear()
+        loadInFlight = null
+        mode = Mode.IDLE
+        tick = 0L
+        passiveUntilTick = 0L
     }
 
     /**
-     * Slice 1: keep event-driven boundary identical to previous scheduler.
+     * Must be called for ANY chunk load (player/other mods/driver initiated).
+     *
+     * This is an activity signal only. The scanner / renewal tracker remain
+     * responsible for reacting to the loaded chunk.
+     */
+    fun onChunkLoaded(dimension: RegistryKey<World>, pos: ChunkPos) {
+        if (!running) return
+
+        // Any load activity makes us polite.
+        passiveUntilTick = tick + passiveGraceTicks
+
+        // If we initiated a load, consider it fulfilled once the engine confirms the load.
+        val inflight = loadInFlight
+        if (inflight != null && inflight.dimension == dimension && inflight.pos == pos) {
+            loadInFlight = null
+        }
+
+        // Best-effort: if this chunk is in our queue, drop it to avoid redundant loading.
+        // (This is conservative; later slices will unify keys across multiple requesters.)
+        // Remove all items for the same dimension+pos.
+        purgeChunk(dimension, pos)
+
+        mode = if (queue.isEmpty()) Mode.IDLE else Mode.PASSIVE
+    }
+
+    /**
+     * Slice 1 compatibility: keep event-driven boundary identical to previous scheduler.
      *
      * Later slices will replace this with explicit load-intent from application services.
      */
     fun onRenewalEvent(e: RenewalEvent) {
         when (e) {
             is BatchWaitingForRenewal -> {
-                // Event-driven boundary: build our own work queue from the chunk set.
                 var added = 0
                 for (pos in e.chunks) {
                     val key = key(e.batchName, e.dimension, pos)
@@ -82,13 +135,16 @@ class ChunkLoadDriver(
                         queue.size
                     )
                 }
+                // New work keeps us from being idle; remain passive for grace.
+                if (mode == Mode.IDLE) {
+                    mode = Mode.PASSIVE
+                    passiveUntilTick = maxOf(passiveUntilTick, tick + passiveGraceTicks)
+                }
             }
 
             is GatePassed -> {
                 if (e.to == RenewalBatchState.RENEWAL_COMPLETE) {
-                    // Finalization belongs here (application boundary).
                     StoneTopology.consume(e.batchName)
-                    // Drop any leftover queued work for this batch (best-effort cleanup).
                     purgeBatch(e.batchName)
                     log.info("[LOADER] batch='{}' completed -> witherstone consumed", e.batchName)
                 }
@@ -98,26 +154,64 @@ class ChunkLoadDriver(
         }
     }
 
+    /**
+     * Called once per server tick.
+     */
     fun tick() {
         if (!running) return
         val s = server ?: return
 
-        var budget = chunksPerTick
-        while (budget > 0 && queue.isNotEmpty()) {
-            val item = queue.removeFirst()
-            queuedKeys.remove(key(item.batchName, item.dimension, item.pos))
+        tick++
 
-            val ok = requestChunkLoadBestEffort(s, item.dimension, item.pos)
-            if (!ok) {
-                // simple requeue: try again later
-                val k = key(item.batchName, item.dimension, item.pos)
-                if (queuedKeys.add(k)) {
-                    queue.addLast(item)
-                }
-            }
-
-            budget--
+        // State update.
+        if (queue.isEmpty()) {
+            mode = Mode.IDLE
+            return
         }
+
+        // Any in-flight load blocks further proactive loads.
+        if (loadInFlight != null) {
+            mode = Mode.PASSIVE
+            return
+        }
+
+        // Respect passive window after any observed chunk load.
+        if (tick < passiveUntilTick) {
+            mode = Mode.PASSIVE
+            return
+        }
+
+        // Only attempt work every Nth tick while active.
+        if (activeLoadIntervalTicks <= 0) return
+        if (tick % activeLoadIntervalTicks.toLong() != 0L) {
+            mode = Mode.ACTIVE
+            return
+        }
+
+        mode = Mode.ACTIVE
+        val item = queue.removeFirstOrNull() ?: run {
+            mode = Mode.IDLE
+            return
+        }
+        queuedKeys.remove(key(item.batchName, item.dimension, item.pos))
+
+        val ok = requestChunkLoadBestEffort(s, item.dimension, item.pos)
+        if (ok) {
+            loadInFlight = item
+        } else {
+            // Requeue for later.
+            val k = key(item.batchName, item.dimension, item.pos)
+            if (queuedKeys.add(k)) {
+                queue.addLast(item)
+            }
+            // Failed attempt should not cause a tight loop; treat it as activity and back off.
+            passiveUntilTick = tick + passiveGraceTicks
+            mode = Mode.PASSIVE
+        }
+    }
+
+    fun debugState(): String {
+        return "mode=$mode tick=$tick passiveUntil=$passiveUntilTick inflight=${loadInFlight != null} queueSize=${queue.size}"
     }
 
     private fun purgeBatch(batchName: String) {
@@ -129,12 +223,32 @@ class ChunkLoadDriver(
         }
         queue.clear()
         queue.addAll(kept)
+        if (loadInFlight?.batchName == batchName) {
+            loadInFlight = null
+        }
+    }
+
+    private fun purgeChunk(dimension: RegistryKey<World>, pos: ChunkPos) {
+        if (queue.isEmpty()) return
+        val kept: ArrayDeque<WorkItem> = ArrayDeque(queue.size)
+        for (item in queue) {
+            if (item.dimension == dimension && item.pos == pos) {
+                queuedKeys.remove(key(item.batchName, item.dimension, item.pos))
+            } else {
+                kept.addLast(item)
+            }
+        }
+        queue.clear()
+        queue.addAll(kept)
+        val inflight = loadInFlight
+        if (inflight != null && inflight.dimension == dimension && inflight.pos == pos) {
+            loadInFlight = null
+        }
     }
 
     private fun requestChunkLoadBestEffort(server: MinecraftServer, dimension: RegistryKey<World>, pos: ChunkPos): Boolean {
         val world = server.getWorld(dimension) ?: return false
         return try {
-            // Force a load/generation. The tracker will observe the load event and mark renewal evidence.
             world.getChunk(pos.x, pos.z, ChunkStatus.FULL, true)
             log.debug("[LOADER] requested load dim='{}' chunk=({}, {})", world.registryKey.value, pos.x, pos.z)
             true
@@ -154,5 +268,4 @@ class ChunkLoadDriver(
         batchName + "|" + dim.value.toString() + "|" + pos.x + "," + pos.z
 }
 
-private fun MinecraftServer.getWorld(key: RegistryKey<World>): ServerWorld? =
-    this.getWorld(key) as? ServerWorld
+private fun <T> ArrayDeque<T>.removeFirstOrNull(): T? = if (this.isEmpty()) null else this.removeFirst()
