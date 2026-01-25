@@ -16,13 +16,14 @@ import java.util.ArrayDeque
 /**
  * ChunkLoadDriver performs chunk-load requests over time.
  *
- * Slice 2 (0.9.6): Introduce active/passive pacing.
+ * Simplified semantics (0.9.6 refinement):
  *
- * - PASSIVE whenever the server is already loading chunks (players/other mods/etc.)
- * - After the last observed chunk load, remain PASSIVE for [passiveGraceTicks]
- * - When there is pending work and grace has elapsed, enter ACTIVE
- * - In ACTIVE, request at most one chunk load every [activeLoadIntervalTicks]
- * - When the queue is empty, enter IDLE
+ * - The driver is "inactive" by default.
+ * - Any observed chunk load (player/other mods/driver) resets a quiet/settle timer.
+ * - If the world has been quiet for [passiveGraceTicks] AND the queue is non-empty,
+ *   the driver requests at most one chunk load every [activeLoadIntervalTicks].
+ * - The driver requests only ONE load at a time: a request is considered pending until
+ *   the engine confirms it via [onChunkLoaded].
  *
  * Note: This class still accepts renewal events directly (Slice 1 compatibility).
  * Later slices will replace this with explicit load-intent from application services.
@@ -34,25 +35,20 @@ class ChunkLoadDriver(
 
     private val log = LoggerFactory.getLogger("memento")
 
-    private enum class Mode {
-        IDLE,
-        PASSIVE,
-        ACTIVE,
-    }
-
     private var running: Boolean = false
     private var server: MinecraftServer? = null
 
     // Driver-local tick counter (increments once per END_SERVER_TICK).
     private var tick: Long = 0L
 
-    // Any chunk load (regardless of origin) pushes us into PASSIVE.
-    private var passiveUntilTick: Long = 0L
+    // Last tick when ANY chunk load was observed (regardless of origin).
+    private var lastObservedChunkLoadTick: Long = 0L
 
-    // Prevent multiple proactive loads in flight.
-    private var loadInFlight: WorkItem? = null
-
-    private var mode: Mode = Mode.IDLE
+    /**
+     * A load request that has been issued to the engine and has not yet been
+     * observed via [onChunkLoaded]. This enforces "one request at a time".
+     */
+    private var pendingLoadRequest: WorkItem? = null
 
     private data class WorkItem(
         val batchName: String,
@@ -69,9 +65,8 @@ class ChunkLoadDriver(
         this.server = server
         this.running = true
         this.tick = 0L
-        this.passiveUntilTick = 0L
-        this.loadInFlight = null
-        this.mode = Mode.IDLE
+        this.lastObservedChunkLoadTick = 0L
+        this.pendingLoadRequest = null
     }
 
     fun detach() {
@@ -79,10 +74,9 @@ class ChunkLoadDriver(
         this.server = null
         queue.clear()
         queuedKeys.clear()
-        loadInFlight = null
-        mode = Mode.IDLE
+        pendingLoadRequest = null
         tick = 0L
-        passiveUntilTick = 0L
+        lastObservedChunkLoadTick = 0L
     }
 
     /**
@@ -94,21 +88,24 @@ class ChunkLoadDriver(
     fun onChunkLoaded(dimension: RegistryKey<World>, pos: ChunkPos) {
         if (!running) return
 
-        // Any load activity makes us polite.
-        passiveUntilTick = tick + passiveGraceTicks
+        // Any load activity makes us polite: reset quiet/settle timer.
+        lastObservedChunkLoadTick = tick
 
         // If we initiated a load, consider it fulfilled once the engine confirms the load.
-        val inflight = loadInFlight
-        if (inflight != null && inflight.dimension == dimension && inflight.pos == pos) {
-            loadInFlight = null
+        val pending = pendingLoadRequest
+        if (pending != null && pending.dimension == dimension && pending.pos == pos) {
+            pendingLoadRequest = null
+            log.info(
+                "[DRIVER] load confirmed batch='{}' dim='{}' chunk=({}, {})",
+                pending.batchName,
+                dimension.value.toString(),
+                pos.x,
+                pos.z
+            )
         }
 
         // Best-effort: if this chunk is in our queue, drop it to avoid redundant loading.
-        // (This is conservative; later slices will unify keys across multiple requesters.)
-        // Remove all items for the same dimension+pos.
         purgeChunk(dimension, pos)
-
-        mode = if (queue.isEmpty()) Mode.IDLE else Mode.PASSIVE
     }
 
     /**
@@ -135,11 +132,6 @@ class ChunkLoadDriver(
                         queue.size
                     )
                 }
-                // New work keeps us from being idle; remain passive for grace.
-                if (mode == Mode.IDLE) {
-                    mode = Mode.PASSIVE
-                    passiveUntilTick = maxOf(passiveUntilTick, tick + passiveGraceTicks)
-                }
             }
 
             is GatePassed -> {
@@ -163,68 +155,64 @@ class ChunkLoadDriver(
 
         tick++
 
-        // State update.
-        if (queue.isEmpty()) {
-            mode = Mode.IDLE
-            return
-        }
+        if (queue.isEmpty()) return
 
-        // Any in-flight load blocks further proactive loads.
-        if (loadInFlight != null) {
-            mode = Mode.PASSIVE
-            return
-        }
+        // Only one proactive request at a time.
+        if (pendingLoadRequest != null) return
 
-        // Respect passive window after any observed chunk load.
-        if (tick < passiveUntilTick) {
-            mode = Mode.PASSIVE
-            return
-        }
+        // Respect settle window after any observed chunk load.
+        val quietTicks = tick - lastObservedChunkLoadTick
+        if (quietTicks < passiveGraceTicks) return
 
-        // Only attempt work every Nth tick while active.
+        // Only attempt work every Nth tick while eligible.
         if (activeLoadIntervalTicks <= 0) return
-        if (tick % activeLoadIntervalTicks.toLong() != 0L) {
-            mode = Mode.ACTIVE
-            return
-        }
+        if (tick % activeLoadIntervalTicks.toLong() != 0L) return
 
-        mode = Mode.ACTIVE
-        val item = queue.removeFirstOrNull() ?: run {
-            mode = Mode.IDLE
-            return
-        }
+        val item = queue.removeFirstOrNull() ?: return
         queuedKeys.remove(key(item.batchName, item.dimension, item.pos))
 
         val ok = requestChunkLoadBestEffort(s, item.dimension, item.pos)
         if (ok) {
-            loadInFlight = item
+            pendingLoadRequest = item
+            log.info(
+                "[DRIVER] proactive load requested batch='{}' dim='{}' chunk=({}, {}) quietTicks={}",
+                item.batchName,
+                item.dimension.value.toString(),
+                item.pos.x,
+                item.pos.z,
+                quietTicks
+            )
         } else {
-            // Requeue for later.
+            // Requeue for later (best effort).
             val k = key(item.batchName, item.dimension, item.pos)
             if (queuedKeys.add(k)) {
                 queue.addLast(item)
             }
-            // Failed attempt should not cause a tight loop; treat it as activity and back off.
-            passiveUntilTick = tick + passiveGraceTicks
-            mode = Mode.PASSIVE
+            // Treat failure as "activity" to avoid tight loops.
+            lastObservedChunkLoadTick = tick
         }
     }
 
     fun debugState(): String {
-        return "mode=$mode tick=$tick passiveUntil=$passiveUntilTick inflight=${loadInFlight != null} queueSize=${queue.size}"
+        val quietTicks = tick - lastObservedChunkLoadTick
+        return "tick=$tick quietTicks=$quietTicks pending=${pendingLoadRequest != null} queueSize=${queue.size}"
     }
 
     private fun purgeBatch(batchName: String) {
         if (queue.isEmpty()) return
         val kept: ArrayDeque<WorkItem> = ArrayDeque(queue.size)
         for (item in queue) {
-            if (item.batchName != batchName) kept.addLast(item)
-            else queuedKeys.remove(key(item.batchName, item.dimension, item.pos))
+            if (item.batchName != batchName) {
+                kept.addLast(item)
+            } else {
+                queuedKeys.remove(key(item.batchName, item.dimension, item.pos))
+            }
         }
         queue.clear()
         queue.addAll(kept)
-        if (loadInFlight?.batchName == batchName) {
-            loadInFlight = null
+
+        if (pendingLoadRequest?.batchName == batchName) {
+            pendingLoadRequest = null
         }
     }
 
@@ -240,9 +228,11 @@ class ChunkLoadDriver(
         }
         queue.clear()
         queue.addAll(kept)
-        val inflight = loadInFlight
-        if (inflight != null && inflight.dimension == dimension && inflight.pos == pos) {
-            loadInFlight = null
+
+        val pending = pendingLoadRequest
+        if (pending != null && pending.dimension == dimension && pending.pos == pos) {
+            // Defensive: if we see the requested chunk via purge path, consider it confirmed.
+            pendingLoadRequest = null
         }
     }
 
