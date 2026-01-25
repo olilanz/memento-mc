@@ -158,7 +158,7 @@ object RenewalTracker {
             emit(ChunkObserved(batchName = batch.name, trigger = RenewalTrigger.CHUNK_LOAD, chunk = pos, state = batch.state))
 
             // If a chunk loads while we are waiting for renewal, treat it as renewal evidence.
-            // This is intentionally compatible with ChunkLoadScheduler forcing loads as a completion signal.
+            // This is intentionally compatible with the application ChunkLoadDriver forcing loads as a completion signal.
             if (batch.state == RenewalBatchState.WAITING_FOR_RENEWAL) {
                 batch.observeRenewed(pos)
 

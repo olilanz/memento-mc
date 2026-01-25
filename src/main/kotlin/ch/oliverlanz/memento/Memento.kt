@@ -1,7 +1,7 @@
 package ch.oliverlanz.memento
 
 import ch.oliverlanz.memento.application.CommandHandlers
-import ch.oliverlanz.memento.application.renewal.ChunkLoadScheduler
+import ch.oliverlanz.memento.application.chunk.ChunkLoadDriver
 import ch.oliverlanz.memento.application.renewal.RenewalInitialObserver
 import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge
 import ch.oliverlanz.memento.application.stone.StoneMaturityTimeBridge
@@ -34,14 +34,14 @@ object Memento : ModInitializer {
 
     // Renewal wiring (application/infrastructure)
     private var renewalInitialObserver: RenewalInitialObserver? = null
-    private var chunkLoadScheduler: ChunkLoadScheduler? = null
+    private var chunkLoadDriver: ChunkLoadDriver? = null
 
     private var renewalTickCounter: Int = 0
 
     // Single listener to fan out RenewalTracker domain events to application/infrastructure components.
     private val renewalEventListener: (RenewalEvent) -> Unit = { e ->
         renewalInitialObserver?.onRenewalEvent(e)
-        chunkLoadScheduler?.onRenewalEvent(e)
+        chunkLoadDriver?.onRenewalEvent(e)
         RenewalRegenerationBridge.onRenewalEvent(e)
 
         // EffectsHost only cares about batch lifecycle transitions.
@@ -76,7 +76,7 @@ object Memento : ModInitializer {
             // Renewal: logging + observational seeding + paced execution.
             RenewalTrackerLogging.attachOnce()
             renewalInitialObserver = RenewalInitialObserver().also { it.attach(server) }
-            chunkLoadScheduler = ChunkLoadScheduler(chunksPerTick = 1).also { it.attach(server) }
+            chunkLoadDriver = ChunkLoadDriver(chunksPerTick = 1).also { it.attach(server) }
 
             // Visualization host must be attached before any domain activity can emit events.
             effectsHost = EffectsHost(server)
@@ -111,8 +111,8 @@ object Memento : ModInitializer {
             // Renewal detach first (avoid consuming stones while topology is stopping).
             RenewalTracker.unsubscribe(renewalEventListener)
 
-            chunkLoadScheduler?.detach()
-            chunkLoadScheduler = null
+            chunkLoadDriver?.detach()
+            chunkLoadDriver = null
 
             renewalInitialObserver?.detach()
             renewalInitialObserver = null
@@ -138,11 +138,11 @@ object Memento : ModInitializer {
 
             runController?.tick()
 
-            val scheduler = chunkLoadScheduler
-            if (scheduler != null) {
+            val driver = chunkLoadDriver
+            if (driver != null) {
                 renewalTickCounter++
                 if (renewalTickCounter % MementoConstants.REGENERATION_CHUNK_INTERVAL_TICKS == 0) {
-                    scheduler.tick()
+                    driver.tick()
                 }
             }
         }
