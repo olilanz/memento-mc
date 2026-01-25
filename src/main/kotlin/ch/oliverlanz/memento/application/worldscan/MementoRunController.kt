@@ -4,12 +4,11 @@ import ch.oliverlanz.memento.application.chunk.ChunkLoadProvider
 import ch.oliverlanz.memento.application.chunk.ChunkLoadRequest
 import ch.oliverlanz.memento.domain.memento.WorldMementoSubstrate
 import net.minecraft.server.MinecraftServer
+import net.minecraft.server.world.ServerWorld
 import net.minecraft.server.command.ServerCommandSource
 import net.minecraft.server.network.ServerPlayerEntity
 import net.minecraft.text.Text
-import net.minecraft.util.math.ChunkPos
-import net.minecraft.registry.RegistryKey
-import net.minecraft.world.World
+import net.minecraft.world.chunk.WorldChunk
 import org.slf4j.LoggerFactory
 import java.util.UUID
 
@@ -99,12 +98,12 @@ class MementoRunController : ChunkLoadProvider {
     }
 
     /** Called for any observed chunk load. Advances extraction only when it matches the pending scan request. */
-    fun onChunkLoaded(dimension: RegistryKey<World>, pos: ChunkPos) {
+    fun onChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
         if (!isRunning) return
         val s = server ?: return
 
         try {
-            extractor.onChunkLoaded(s, dimension, pos)
+            extractor.onChunkLoaded(world, chunk)
         } catch (e: Exception) {
             log.error("[RUN] extraction failed", e)
             notifyInitiator(s, "Memento: run failed (see server log).")
