@@ -1,6 +1,5 @@
 package ch.oliverlanz.memento.application.chunk
 
-import ch.oliverlanz.memento.domain.renewal.BatchWaitingForRenewal
 import ch.oliverlanz.memento.domain.renewal.GatePassed
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchState
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
@@ -48,18 +47,18 @@ class ChunkLoadDriver(
      * A load request that has been issued to the engine and has not yet been
      * observed via [onChunkLoaded]. This enforces "one request at a time".
      */
-    private var pendingLoadRequest: WorkItem? = null
+    private var pendingLoadRequest: ChunkLoadRequest? = null
 
-    private data class WorkItem(
-        val batchName: String,
-        val dimension: RegistryKey<World>,
-        val pos: ChunkPos,
-    )
+    private val providers: MutableList<ChunkLoadProvider> = mutableListOf()
 
-    private val queue: ArrayDeque<WorkItem> = ArrayDeque()
+    private val queue: ArrayDeque<ChunkLoadRequest> = ArrayDeque()
 
     // Used to prevent runaway duplicate queueing.
     private val queuedKeys: MutableSet<String> = mutableSetOf()
+
+    fun registerProvider(provider: ChunkLoadProvider) {
+        providers.add(provider)
+    }
 
     fun attach(server: MinecraftServer) {
         this.server = server
@@ -74,6 +73,7 @@ class ChunkLoadDriver(
         this.server = null
         queue.clear()
         queuedKeys.clear()
+        providers.clear()
         pendingLoadRequest = null
         tick = 0L
         lastObservedChunkLoadTick = 0L
@@ -97,7 +97,7 @@ class ChunkLoadDriver(
             pendingLoadRequest = null
             log.info(
                 "[DRIVER] load confirmed batch='{}' dim='{}' chunk=({}, {})",
-                pending.batchName,
+                pending.label,
                 dimension.value.toString(),
                 pos.x,
                 pos.z
@@ -115,29 +115,10 @@ class ChunkLoadDriver(
      */
     fun onRenewalEvent(e: RenewalEvent) {
         when (e) {
-            is BatchWaitingForRenewal -> {
-                var added = 0
-                for (pos in e.chunks) {
-                    val key = key(e.batchName, e.dimension, pos)
-                    if (queuedKeys.add(key)) {
-                        queue.addLast(WorkItem(e.batchName, e.dimension, pos))
-                        added++
-                    }
-                }
-                if (added > 0) {
-                    log.debug(
-                        "[LOADER] batch='{}' waitingForRenewal chunksAdded={} queueSize={}",
-                        e.batchName,
-                        added,
-                        queue.size
-                    )
-                }
-            }
-
             is GatePassed -> {
                 if (e.to == RenewalBatchState.RENEWAL_COMPLETE) {
                     StoneTopology.consume(e.batchName)
-                    purgeBatch(e.batchName)
+                    purgeLabel(e.batchName)
                     log.info("[LOADER] batch='{}' completed -> witherstone consumed", e.batchName)
                 }
             }
@@ -155,6 +136,13 @@ class ChunkLoadDriver(
 
         tick++
 
+        if (queue.isEmpty() && pendingLoadRequest == null) {
+            // Only the driver is active: attempt to fetch one unit of work from providers.
+            // Provider order defines priority.
+            val offered = offerOneFromProviders()
+            if (!offered) return
+        }
+
         if (queue.isEmpty()) return
 
         // Only one proactive request at a time.
@@ -169,14 +157,14 @@ class ChunkLoadDriver(
         if (tick % activeLoadIntervalTicks.toLong() != 0L) return
 
         val item = queue.removeFirstOrNull() ?: return
-        queuedKeys.remove(key(item.batchName, item.dimension, item.pos))
+        queuedKeys.remove(key(item.label, item.dimension, item.pos))
 
         val ok = requestChunkLoadBestEffort(s, item.dimension, item.pos)
         if (ok) {
             pendingLoadRequest = item
             log.info(
                 "[DRIVER] proactive load requested batch='{}' dim='{}' chunk=({}, {}) quietTicks={}",
-                item.batchName,
+                item.label,
                 item.dimension.value.toString(),
                 item.pos.x,
                 item.pos.z,
@@ -184,7 +172,7 @@ class ChunkLoadDriver(
             )
         } else {
             // Requeue for later (best effort).
-            val k = key(item.batchName, item.dimension, item.pos)
+            val k = key(item.label, item.dimension, item.pos)
             if (queuedKeys.add(k)) {
                 queue.addLast(item)
             }
@@ -198,30 +186,30 @@ class ChunkLoadDriver(
         return "tick=$tick quietTicks=$quietTicks pending=${pendingLoadRequest != null} queueSize=${queue.size}"
     }
 
-    private fun purgeBatch(batchName: String) {
+    private fun purgeLabel(label: String) {
         if (queue.isEmpty()) return
-        val kept: ArrayDeque<WorkItem> = ArrayDeque(queue.size)
+        val kept: ArrayDeque<ChunkLoadRequest> = ArrayDeque(queue.size)
         for (item in queue) {
-            if (item.batchName != batchName) {
+            if (item.label != label) {
                 kept.addLast(item)
             } else {
-                queuedKeys.remove(key(item.batchName, item.dimension, item.pos))
+                queuedKeys.remove(key(item.label, item.dimension, item.pos))
             }
         }
         queue.clear()
         queue.addAll(kept)
 
-        if (pendingLoadRequest?.batchName == batchName) {
+        if (pendingLoadRequest?.label == label) {
             pendingLoadRequest = null
         }
     }
 
     private fun purgeChunk(dimension: RegistryKey<World>, pos: ChunkPos) {
         if (queue.isEmpty()) return
-        val kept: ArrayDeque<WorkItem> = ArrayDeque(queue.size)
+        val kept: ArrayDeque<ChunkLoadRequest> = ArrayDeque(queue.size)
         for (item in queue) {
             if (item.dimension == dimension && item.pos == pos) {
-                queuedKeys.remove(key(item.batchName, item.dimension, item.pos))
+                queuedKeys.remove(key(item.label, item.dimension, item.pos))
             } else {
                 kept.addLast(item)
             }
@@ -234,6 +222,26 @@ class ChunkLoadDriver(
             // Defensive: if we see the requested chunk via purge path, consider it confirmed.
             pendingLoadRequest = null
         }
+    }
+
+    private fun offerOneFromProviders(): Boolean {
+        for (p in providers) {
+            val next = p.nextChunkLoad() ?: continue
+            val k = key(next.label, next.dimension, next.pos)
+            if (queuedKeys.add(k)) {
+                queue.addLast(next)
+                log.debug(
+                    "[DRIVER] accepted work label='{}' dim='{}' chunk=({}, {}) queueSize={}",
+                    next.label,
+                    next.dimension.value.toString(),
+                    next.pos.x,
+                    next.pos.z,
+                    queue.size
+                )
+            }
+            return true
+        }
+        return false
     }
 
     private fun requestChunkLoadBestEffort(server: MinecraftServer, dimension: RegistryKey<World>, pos: ChunkPos): Boolean {
@@ -254,8 +262,8 @@ class ChunkLoadDriver(
         }
     }
 
-    private fun key(batchName: String, dim: RegistryKey<World>, pos: ChunkPos): String =
-        batchName + "|" + dim.value.toString() + "|" + pos.x + "," + pos.z
+    private fun key(label: String, dim: RegistryKey<World>, pos: ChunkPos): String =
+        label + "|" + dim.value.toString() + "|" + pos.x + "," + pos.z
 }
 
 private fun <T> ArrayDeque<T>.removeFirstOrNull(): T? = if (this.isEmpty()) null else this.removeFirst()
