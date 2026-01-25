@@ -2,6 +2,7 @@ package ch.oliverlanz.memento
 
 import ch.oliverlanz.memento.application.CommandHandlers
 import ch.oliverlanz.memento.application.chunk.ChunkLoadDriver
+import ch.oliverlanz.memento.application.renewal.RenewalChunkLoadProvider
 import ch.oliverlanz.memento.application.renewal.RenewalInitialObserver
 import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge
 import ch.oliverlanz.memento.application.stone.StoneMaturityTimeBridge
@@ -35,12 +36,14 @@ object Memento : ModInitializer {
     // Renewal wiring (application/infrastructure)
     private var renewalInitialObserver: RenewalInitialObserver? = null
     private var chunkLoadDriver: ChunkLoadDriver? = null
+    private var renewalChunkLoadProvider: RenewalChunkLoadProvider? = null
 
     // Driver is ticked every server tick; it handles its own pacing.
 
     // Single listener to fan out RenewalTracker domain events to application/infrastructure components.
     private val renewalEventListener: (RenewalEvent) -> Unit = { e ->
         renewalInitialObserver?.onRenewalEvent(e)
+        renewalChunkLoadProvider?.onRenewalEvent(e)
         chunkLoadDriver?.onRenewalEvent(e)
         RenewalRegenerationBridge.onRenewalEvent(e)
 
@@ -61,6 +64,7 @@ object Memento : ModInitializer {
         ServerChunkEvents.CHUNK_LOAD.register { world, chunk ->
             RenewalTrackerHooks.onChunkLoaded(world.registryKey, chunk.pos)
             chunkLoadDriver?.onChunkLoaded(world.registryKey, chunk.pos)
+            renewalChunkLoadProvider?.onChunkLoaded(world.registryKey, chunk.pos)
         }
         ServerChunkEvents.CHUNK_UNLOAD.register { world, chunk ->
             RenewalTrackerHooks.onChunkUnloaded(world.registryKey, chunk.pos)
@@ -77,10 +81,18 @@ object Memento : ModInitializer {
             // Renewal: logging + observational seeding + paced execution.
             RenewalTrackerLogging.attachOnce()
             renewalInitialObserver = RenewalInitialObserver().also { it.attach(server) }
+
+            // Renewal provider (passive). Driver pulls one chunk at a time.
+            renewalChunkLoadProvider = RenewalChunkLoadProvider()
+
             chunkLoadDriver = ChunkLoadDriver(
                 activeLoadIntervalTicks = MementoConstants.CHUNK_LOAD_ACTIVE_INTERVAL_TICKS,
                 passiveGraceTicks = MementoConstants.CHUNK_LOAD_PASSIVE_GRACE_TICKS,
-            ).also { it.attach(server) }
+            ).also {
+                it.attach(server)
+                // Provider order defines priority.
+                it.registerProvider(renewalChunkLoadProvider!!)
+            }
 
             // Visualization host must be attached before any domain activity can emit events.
             effectsHost = EffectsHost(server)
@@ -115,6 +127,8 @@ object Memento : ModInitializer {
 
             chunkLoadDriver?.detach()
             chunkLoadDriver = null
+
+            renewalChunkLoadProvider = null
 
             renewalInitialObserver?.detach()
             renewalInitialObserver = null
