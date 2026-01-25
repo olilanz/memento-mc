@@ -9,6 +9,7 @@ import net.minecraft.server.world.ServerWorld
 import net.minecraft.util.math.BlockPos
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.Heightmap
+import net.minecraft.world.chunk.WorldChunk
 import org.slf4j.LoggerFactory
 
 class ChunkInfoExtractor {
@@ -23,7 +24,6 @@ class ChunkInfoExtractor {
     private var chunkIdx = 0
 
     private var currentWorld: ServerWorld? = null
-    private var runtimeReader: ChunkRuntimeMetadataReader? = null
 
     private val scannedKeys: MutableSet<ChunkKey> = mutableSetOf()
 
@@ -36,7 +36,6 @@ class ChunkInfoExtractor {
         regionIdx = 0
         chunkIdx = 0
         currentWorld = null
-        runtimeReader = null
         scannedKeys.clear()
         pending = null
     }
@@ -74,38 +73,27 @@ class ChunkInfoExtractor {
      *
      * Only advances the scan cursor when the observed load matches the currently pending request.
      */
-    fun onChunkLoaded(server: MinecraftServer, worldKey: net.minecraft.registry.RegistryKey<net.minecraft.world.World>, pos: ChunkPos) {
+    fun onChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
         val p = plan ?: return
         val s = substrate ?: return
         val pend = pending ?: return
-        if (pend.worldKey != worldKey) return
-        if (pend.pos != pos) return
+        if (pend.worldKey != world.registryKey) return
+        if (pend.pos != chunk.pos) return
+        currentWorld = world
 
-        val world = currentWorld
-        val reader = runtimeReader
-        if (world == null || reader == null) {
-            // Defensive: re-establish world context.
-            val w = server.getWorld(worldKey) ?: return
-            currentWorld = w
-            runtimeReader = ChunkRuntimeMetadataReader(w)
-        }
 
-        val w = currentWorld ?: return
-        val r = runtimeReader ?: return
-
-        val metadata = r.readIfLoaded(pos) ?: return
-
+        val pos = chunk.pos
         val centerX = pos.x * 16 + 8
         val centerZ = pos.z * 16 + 8
-        val surfaceY = w.getTopY(Heightmap.Type.WORLD_SURFACE, centerX, centerZ)
+        val surfaceY = world.getTopY(Heightmap.Type.WORLD_SURFACE, centerX, centerZ)
 
-        val biomeId = w
+        val biomeId = world
             .getBiome(BlockPos(centerX, surfaceY, centerZ))
             .value()
             .toString()
 
         val signals = ChunkSignals(
-            inhabitedTimeTicks = metadata.inhabitedTimeTicks,
+            inhabitedTimeTicks = chunk.inhabitedTime,
             lastUpdateTicks = null,
             surfaceY = surfaceY,
             biomeId = biomeId,
@@ -167,7 +155,6 @@ class ChunkInfoExtractor {
                 regionIdx = 0
                 chunkIdx = 0
                 currentWorld = null
-                runtimeReader = null
                 continue
             }
 
@@ -180,7 +167,6 @@ class ChunkInfoExtractor {
                     continue
                 }
                 currentWorld = w
-                runtimeReader = ChunkRuntimeMetadataReader(w)
             }
 
             val chunks = region.chunks

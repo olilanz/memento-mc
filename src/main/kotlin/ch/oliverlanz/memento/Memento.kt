@@ -59,7 +59,7 @@ object Memento : ModInitializer {
             RenewalTrackerHooks.onChunkLoaded(world.registryKey, chunk.pos)
             chunkLoadDriver?.onChunkLoaded(world.registryKey, chunk.pos)
             renewalChunkLoadProvider?.onChunkLoaded(world.registryKey, chunk.pos)
-            runController?.onChunkLoaded(world.registryKey, chunk.pos)
+            runController?.onChunkLoaded(world, chunk)
         }
 
         ServerChunkEvents.CHUNK_UNLOAD.register { world, chunk ->
