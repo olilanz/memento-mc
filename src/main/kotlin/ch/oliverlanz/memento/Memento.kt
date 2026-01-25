@@ -33,21 +33,17 @@ object Memento : ModInitializer {
 
     private var runController: MementoRunController? = null
 
-    // Renewal wiring (application/infrastructure)
+    // Renewal wiring (application / infrastructure)
     private var renewalInitialObserver: RenewalInitialObserver? = null
-    private var chunkLoadDriver: ChunkLoadDriver? = null
     private var renewalChunkLoadProvider: RenewalChunkLoadProvider? = null
+    private var chunkLoadDriver: ChunkLoadDriver? = null
 
-    // Driver is ticked every server tick; it handles its own pacing.
-
-    // Single listener to fan out RenewalTracker domain events to application/infrastructure components.
+    // Single listener to fan out RenewalTracker domain events
     private val renewalEventListener: (RenewalEvent) -> Unit = { e ->
         renewalInitialObserver?.onRenewalEvent(e)
         renewalChunkLoadProvider?.onRenewalEvent(e)
-        chunkLoadDriver?.onRenewalEvent(e)
         RenewalRegenerationBridge.onRenewalEvent(e)
 
-        // EffectsHost only cares about batch lifecycle transitions.
         if (e is RenewalBatchLifecycleTransition) {
             effectsHost?.onRenewalEvent(e)
         }
@@ -56,33 +52,30 @@ object Memento : ModInitializer {
     override fun onInitialize() {
         log.info("Initializing Memento")
 
-        // Register /memento command tree.
         Commands.register()
 
-        // Chunk observations -> RenewalTracker
-        // (Domain remains observational; it only reacts to these hooks.)
+        // Chunk observations → domain + application
         ServerChunkEvents.CHUNK_LOAD.register { world, chunk ->
             RenewalTrackerHooks.onChunkLoaded(world.registryKey, chunk.pos)
             chunkLoadDriver?.onChunkLoaded(world.registryKey, chunk.pos)
             renewalChunkLoadProvider?.onChunkLoaded(world.registryKey, chunk.pos)
+            runController?.onChunkLoaded(world.registryKey, chunk.pos)
         }
+
         ServerChunkEvents.CHUNK_UNLOAD.register { world, chunk ->
             RenewalTrackerHooks.onChunkUnloaded(world.registryKey, chunk.pos)
         }
 
-        // Attach server-scoped components.
         ServerLifecycleEvents.SERVER_STARTED.register { server: MinecraftServer ->
+
             // ------------------------------------------------------------
             // Wiring order matters.
-            // All observers must be attached BEFORE any domain activity can emit events.
-            // Startup must not be a separate semantic code path.
             // ------------------------------------------------------------
 
-            // Renewal: logging + observational seeding + paced execution.
             RenewalTrackerLogging.attachOnce()
             renewalInitialObserver = RenewalInitialObserver().also { it.attach(server) }
 
-            // Renewal provider (passive). Driver pulls one chunk at a time.
+            // Renewal provider (highest priority)
             renewalChunkLoadProvider = RenewalChunkLoadProvider()
 
             chunkLoadDriver = ChunkLoadDriver(
@@ -90,11 +83,9 @@ object Memento : ModInitializer {
                 passiveGraceTicks = MementoConstants.CHUNK_LOAD_PASSIVE_GRACE_TICKS,
             ).also {
                 it.attach(server)
-                // Provider order defines priority.
                 it.registerProvider(renewalChunkLoadProvider!!)
             }
 
-            // Visualization host must be attached before any domain activity can emit events.
             effectsHost = EffectsHost(server)
             CommandHandlers.attachVisualizationEngine(effectsHost!!)
 
@@ -103,26 +94,21 @@ object Memento : ModInitializer {
                 CommandHandlers.attachRunController(it)
             }
 
-            // Fan out tracker events.
+            // World scanner provider (lower priority)
+            chunkLoadDriver?.registerProvider(runController!!)
+
+            // Fan out domain events
             RenewalTracker.subscribe(renewalEventListener)
 
-            // Application wiring that reacts to normal domain events.
             WitherstoneRenewalBridge.attach()
-
-            // Domain startup (loading stones must behave like normal creation).
             StoneTopologyHooks.onServerStarted(server)
-
-            // Drive stone maturity from semantic day events.
             StoneMaturityTimeBridge.attach()
-
             gameTimeTracker.attach(server)
         }
 
-        // Detach cleanly.
         ServerLifecycleEvents.SERVER_STOPPING.register {
-            gameTimeTracker.detach()
 
-            // Renewal detach first (avoid consuming stones while topology is stopping).
+            gameTimeTracker.detach()
             RenewalTracker.unsubscribe(renewalEventListener)
 
             chunkLoadDriver?.detach()
@@ -142,18 +128,17 @@ object Memento : ModInitializer {
 
             CommandHandlers.detachVisualizationEngine()
             CommandHandlers.detachRunController()
+
             runController?.detach()
             runController = null
+
             effectsHost = null
         }
 
-        // Transport tick only (NO direct domain logic here).
-        // (Application/infrastructure may still need a paced tick.)
+        // Transport tick only
         ServerTickEvents.END_SERVER_TICK.register {
             gameTimeTracker.tick()
-
             runController?.tick()
-
             chunkLoadDriver?.tick()
         }
     }
