@@ -6,7 +6,6 @@ import ch.oliverlanz.memento.domain.memento.ChunkSignals
 import ch.oliverlanz.memento.domain.memento.WorldMementoSubstrate
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld
-import net.minecraft.util.math.BlockPos
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.Heightmap
 import net.minecraft.world.chunk.WorldChunk
@@ -82,15 +81,17 @@ class ChunkInfoExtractor {
         currentWorld = world
 
 
-        val pos = chunk.pos
-        val centerX = pos.x * 16 + 8
-        val centerZ = pos.z * 16 + 8
-        val surfaceY = world.getTopY(Heightmap.Type.WORLD_SURFACE, centerX, centerZ)
+        // IMPORTANT: never call World#getTopY / World#getChunk / World#getBiome here.
+        // This callback may run while chunk generation is still resolving on the main thread,
+        // and any synchronous chunk access can deadlock the server.
+        //
+        // We only read from the already-loaded chunk instance provided by the engine.
 
-        val biomeId = world
-            .getBiome(BlockPos(centerX, surfaceY, centerZ))
-            .value()
-            .toString()
+        val surfaceY = chunk.getHeightmap(Heightmap.Type.WORLD_SURFACE).get(8, 8)
+
+        // Biome lookup via ServerWorld can re-enter chunk access. Keep it non-blocking.
+        // (CSV schema remains unchanged; value may be refined later.)
+        val biomeId = "unknown"
 
         val signals = ChunkSignals(
             inhabitedTimeTicks = chunk.inhabitedTime,
