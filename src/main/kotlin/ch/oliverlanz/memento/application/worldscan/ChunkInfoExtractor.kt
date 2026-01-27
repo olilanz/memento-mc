@@ -1,6 +1,6 @@
 package ch.oliverlanz.memento.application.worldscan
 
-import ch.oliverlanz.memento.application.chunk.ChunkLoadRequest
+import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadRequest
 import ch.oliverlanz.memento.domain.memento.ChunkKey
 import ch.oliverlanz.memento.domain.memento.ChunkSignals
 import ch.oliverlanz.memento.domain.memento.WorldMementoSubstrate

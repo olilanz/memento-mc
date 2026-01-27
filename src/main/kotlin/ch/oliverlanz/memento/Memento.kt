@@ -1,7 +1,7 @@
 package ch.oliverlanz.memento
 
 import ch.oliverlanz.memento.application.CommandHandlers
-import ch.oliverlanz.memento.application.chunk.ChunkLoadDriver
+import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadDriver
 import ch.oliverlanz.memento.application.renewal.RenewalChunkLoadProvider
 import ch.oliverlanz.memento.application.renewal.RenewalInitialObserver
 import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge

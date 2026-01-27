@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.application.chunk
+package ch.oliverlanz.memento.infrastructure.chunk
 
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
