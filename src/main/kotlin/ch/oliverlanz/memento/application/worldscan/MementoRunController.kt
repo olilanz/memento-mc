@@ -1,7 +1,7 @@
 package ch.oliverlanz.memento.application.worldscan
 
-import ch.oliverlanz.memento.application.chunk.ChunkLoadProvider
-import ch.oliverlanz.memento.application.chunk.ChunkLoadRequest
+import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadProvider
+import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadRequest
 import ch.oliverlanz.memento.domain.memento.WorldMementoSubstrate
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld

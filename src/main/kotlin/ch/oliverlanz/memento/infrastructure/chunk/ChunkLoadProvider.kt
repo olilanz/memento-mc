@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.application.chunk
+package ch.oliverlanz.memento.infrastructure.chunk
 
 /**
  * Passive provider of chunk-load intent.

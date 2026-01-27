@@ -1,7 +1,7 @@
 package ch.oliverlanz.memento.application.renewal
 
-import ch.oliverlanz.memento.application.chunk.ChunkLoadProvider
-import ch.oliverlanz.memento.application.chunk.ChunkLoadRequest
+import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadProvider
+import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadRequest
 import ch.oliverlanz.memento.domain.renewal.BatchCompleted
 import ch.oliverlanz.memento.domain.renewal.BatchWaitingForRenewal
 import ch.oliverlanz.memento.domain.renewal.GatePassed
