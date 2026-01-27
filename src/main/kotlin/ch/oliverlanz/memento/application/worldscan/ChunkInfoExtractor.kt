@@ -9,6 +9,7 @@ import net.minecraft.server.world.ServerWorld
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.Heightmap
 import net.minecraft.world.chunk.WorldChunk
+import net.minecraft.world.chunk.ChunkStatus
 import org.slf4j.LoggerFactory
 
 class ChunkInfoExtractor {
@@ -48,23 +49,46 @@ class ChunkInfoExtractor {
         val p = plan ?: return null
         val s = substrate ?: return null
 
-        // If we already offered a chunk and are waiting for it to be observed, do not advance.
-        val inFlight = pending
-        if (inFlight != null) {
-            return ChunkLoadRequest(
-                label = label,
-                dimension = inFlight.worldKey,
-                pos = inFlight.pos,
-            )
+        // Opportunistic path:
+        // If we are waiting for a pending chunk but it is already loaded (external cause),
+        // consume it immediately and continue without going through the driver.
+        val pendNow = pending
+        if (pendNow != null) {
+            val w = server.getWorld(pendNow.worldKey)
+            if (w != null) {
+                val maybeLoaded = w.chunkManager.getChunk(pendNow.pos.x, pendNow.pos.z, ChunkStatus.FULL, false)
+                if (maybeLoaded is WorldChunk) {
+                    onChunkLoaded(w, maybeLoaded)
+                }
+            }
         }
 
-        val candidate = findNextCandidate(server, p, s) ?: return null
-        pending = candidate
-        return ChunkLoadRequest(
-            label = label,
-            dimension = candidate.worldKey,
-            pos = candidate.pos,
-        )
+        // If we already offered a chunk and are still waiting for it to be observed, do not advance.
+        // (If it was already loaded, the opportunistic block above will have consumed it.)
+        val inFlight = pending
+        if (inFlight != null) {
+            return ChunkLoadRequest(label = label, dimension = inFlight.worldKey, pos = inFlight.pos)
+        }
+
+        while (true) {
+            val candidate = findNextCandidate(server, p, s) ?: return null
+
+            // If the next candidate is already loaded, consume it immediately and keep searching.
+            val w = server.getWorld(candidate.worldKey)
+            if (w != null) {
+                val maybeLoaded = w.chunkManager.getChunk(candidate.pos.x, candidate.pos.z, ChunkStatus.FULL, false)
+                if (maybeLoaded is WorldChunk) {
+                    // Opportunistic consume: the chunk is already loaded.
+                    // Set it as pending so we advance the scan cursor deterministically.
+                    pending = candidate
+                    onChunkLoaded(w, maybeLoaded)
+                    continue
+                }
+            }
+
+            pending = candidate
+            return ChunkLoadRequest(label = label, dimension = candidate.worldKey, pos = candidate.pos)
+        }
     }
 
     /**
