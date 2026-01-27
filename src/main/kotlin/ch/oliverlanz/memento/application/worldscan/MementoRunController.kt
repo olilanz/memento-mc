@@ -61,8 +61,8 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
         this.server = srv
 
         if (active) {
-            source.sendFeedback({ net.minecraft.text.Text.literal("Memento: a scan is already running.") }, false)
-            return 1
+            source.sendError(net.minecraft.text.Text.literal("Memento: a scan is already running."))
+            return 0
         }
 
         val scanPlan = WorldScanPlan()
@@ -99,6 +99,7 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
         this.ticksSinceStart = 0
 
         log.info("[RUN] started worlds={} plannedChunks={}", worlds.size, plannedChunks)
+        log.info("[RUN] note driver='passive unless no external chunk loads for grace window'; behavior='consume external loads; drive only when active'")
         source.sendFeedback({ net.minecraft.text.Text.literal("Memento: scan started. Planned chunks: $plannedChunks") }, false)
         return 1
     }
@@ -116,6 +117,11 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
             val path = MementoCsvWriter.write(srv, topology)
             log.info("[RUN] completed plannedChunks={} scannedChunks={} csv={}", plannedChunks, s.size(), path.toAbsolutePath())
             active = false
+            plan = null
+            substrate = null
+            consumer = null
+            plannedChunks = 0
+            ticksSinceStart = 0
             return
         }
 
