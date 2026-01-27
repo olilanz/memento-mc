@@ -1,6 +1,6 @@
 package ch.oliverlanz.memento.application.worldscan
 
-import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadConsumer
+import ch.oliverlanz.memento.infrastructure.chunk.ChunkAvailabilityListener
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadProvider
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadRequest
 import ch.oliverlanz.memento.domain.memento.WorldMementoSubstrate
@@ -21,7 +21,7 @@ import java.util.UUID
  * - Triggered explicitly by an operator.
  * - Executes discovery immediately, then chunk extraction in tick-paced slices.
  */
-class MementoRunController : ChunkLoadProvider, ChunkLoadConsumer {
+class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
 
     override val name: String = "scan"
 

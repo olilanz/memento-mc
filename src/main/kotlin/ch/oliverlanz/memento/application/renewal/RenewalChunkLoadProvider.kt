@@ -1,6 +1,6 @@
 package ch.oliverlanz.memento.application.renewal
 
-import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadConsumer
+import ch.oliverlanz.memento.infrastructure.chunk.ChunkAvailabilityListener
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadProvider
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadRequest
 import ch.oliverlanz.memento.domain.renewal.BatchCompleted
@@ -23,7 +23,7 @@ import java.util.ArrayDeque
  * - It exposes the *current* desired chunk loads via [desiredChunkLoads].
  * - It observes chunk loads (external or proactive) to avoid redundant requests.
  */
-class RenewalChunkLoadProvider : ChunkLoadProvider, ChunkLoadConsumer {
+class RenewalChunkLoadProvider : ChunkLoadProvider, ChunkAvailabilityListener {
 
     override val name: String = "renewal"
 
