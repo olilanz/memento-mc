@@ -34,7 +34,7 @@ class ChunkLoadDriver(
     private var server: MinecraftServer? = null
 
     private val providers = mutableListOf<ChunkLoadProvider>()
-    private val consumers = mutableListOf<ChunkLoadConsumer>()
+    private val consumers = mutableListOf<ChunkAvailabilityListener>()
 
     private var active: ActiveTicket? = null
 
@@ -66,7 +66,7 @@ class ChunkLoadDriver(
     }
 
     /** Register a consumer of observed chunk availability. */
-    fun registerConsumer(consumer: ChunkLoadConsumer) {
+    fun registerConsumer(consumer: ChunkAvailabilityListener) {
         consumers.add(consumer)
     }
 

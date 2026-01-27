@@ -1,7 +1,7 @@
 package ch.oliverlanz.memento
 
 import ch.oliverlanz.memento.application.CommandHandlers
-import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadConsumer
+import ch.oliverlanz.memento.infrastructure.chunk.ChunkAvailabilityListener
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadDriver
 import ch.oliverlanz.memento.application.renewal.RenewalChunkLoadProvider
 import ch.oliverlanz.memento.application.renewal.RenewalInitialObserver
@@ -88,7 +88,7 @@ object Memento : ModInitializer {
                 it.registerProvider(renewalChunkLoadProvider!!)
 
                 // Single fan-out point for chunk availability.
-                it.registerConsumer(object : ChunkLoadConsumer {
+                it.registerConsumer(object : ChunkAvailabilityListener {
                     override fun onChunkLoaded(world: net.minecraft.server.world.ServerWorld, chunk: net.minecraft.world.chunk.WorldChunk) {
                         ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks.onChunkLoaded(world.registryKey, chunk.pos)
                     }
