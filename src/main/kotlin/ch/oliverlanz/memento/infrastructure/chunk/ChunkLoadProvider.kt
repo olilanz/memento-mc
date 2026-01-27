@@ -1,14 +1,27 @@
 package ch.oliverlanz.memento.infrastructure.chunk
 
 /**
- * Passive provider of chunk-load intent.
+ * Declarative source of chunk-load intent.
  *
- * The [ChunkLoadDriver] is the only active component: it calls providers when it
- * needs more work. Providers must not push work into the driver.
+ * Providers are passive:
+ * - They expose the *current* set of desired chunk loads.
+ * - They must not talk to engine mechanics (tickets, Fabric events, etc.).
+ *
+ * The [ChunkLoadDriver] is the only active component:
+ * - It decides when/if to issue tickets (politeness + throttling).
+ * - It chooses which provider to serve first (precedence).
  */
-fun interface ChunkLoadProvider {
+interface ChunkLoadProvider {
+    /** Stable identifier used for logging and diagnosis. */
+    val name: String
+
     /**
-     * @return the next chunk load request to attempt, or null if no work is currently available.
+     * @return a (potentially empty) sequence of desired chunk loads.
+     *
+     * Important:
+     * - The driver may call this frequently; it must be fast.
+     * - Returning a [Sequence] allows lazy evaluation and avoids allocating large collections.
+     * - The driver does not assume that any returned request will ever be fulfilled.
      */
-    fun nextChunkLoad(): ChunkLoadRequest?
+    fun desiredChunkLoads(): Sequence<ChunkLoadRequest>
 }

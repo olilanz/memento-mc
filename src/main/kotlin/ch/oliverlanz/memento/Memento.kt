@@ -1,6 +1,7 @@
 package ch.oliverlanz.memento
 
 import ch.oliverlanz.memento.application.CommandHandlers
+import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadConsumer
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadDriver
 import ch.oliverlanz.memento.application.renewal.RenewalChunkLoadProvider
 import ch.oliverlanz.memento.application.renewal.RenewalInitialObserver
@@ -56,14 +57,12 @@ object Memento : ModInitializer {
 
         // Chunk observations → domain + application
         ServerChunkEvents.CHUNK_LOAD.register { world, chunk ->
-            RenewalTrackerHooks.onChunkLoaded(world.registryKey, chunk.pos)
-            chunkLoadDriver?.onChunkLoaded(world.registryKey, chunk.pos)
-            renewalChunkLoadProvider?.onChunkLoaded(world.registryKey, chunk.pos)
-            runController?.onChunkLoaded(world, chunk)
+            // Single infrastructure entrypoint.
+            chunkLoadDriver?.onEngineChunkLoaded(world, chunk)
         }
 
         ServerChunkEvents.CHUNK_UNLOAD.register { world, chunk ->
-            RenewalTrackerHooks.onChunkUnloaded(world.registryKey, chunk.pos)
+            chunkLoadDriver?.onEngineChunkUnloaded(world, chunk.pos)
         }
 
         ServerLifecycleEvents.SERVER_STARTED.register { server: MinecraftServer ->
@@ -84,7 +83,23 @@ object Memento : ModInitializer {
                 ticketMaxAgeTicks = MementoConstants.CHUNK_LOAD_TICKET_MAX_AGE_TICKS,
             ).also {
                 it.attach(server)
+
+                // Provider precedence: renewal first.
                 it.registerProvider(renewalChunkLoadProvider!!)
+
+                // Single fan-out point for chunk availability.
+                it.registerConsumer(object : ChunkLoadConsumer {
+                    override fun onChunkLoaded(world: net.minecraft.server.world.ServerWorld, chunk: net.minecraft.world.chunk.WorldChunk) {
+                        ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks.onChunkLoaded(world.registryKey, chunk.pos)
+                    }
+
+                    override fun onChunkUnloaded(world: net.minecraft.server.world.ServerWorld, pos: net.minecraft.util.math.ChunkPos) {
+                        ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks.onChunkUnloaded(world.registryKey, pos)
+                    }
+                })
+
+                // Renewal provider consumes loads to dedupe intent.
+                it.registerConsumer(renewalChunkLoadProvider!!)
             }
 
             effectsHost = EffectsHost(server)
@@ -97,6 +112,7 @@ object Memento : ModInitializer {
 
             // World scanner provider (lower priority)
             chunkLoadDriver?.registerProvider(runController!!)
+            chunkLoadDriver?.registerConsumer(runController!!)
 
             // Fan out domain events
             RenewalTracker.subscribe(renewalEventListener)

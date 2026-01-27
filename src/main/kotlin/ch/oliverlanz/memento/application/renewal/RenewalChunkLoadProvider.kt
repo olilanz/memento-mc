@@ -1,5 +1,6 @@
 package ch.oliverlanz.memento.application.renewal
 
+import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadConsumer
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadProvider
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadRequest
 import ch.oliverlanz.memento.domain.renewal.BatchCompleted
@@ -8,18 +9,23 @@ import ch.oliverlanz.memento.domain.renewal.GatePassed
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchState
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import net.minecraft.registry.RegistryKey
+import net.minecraft.server.world.ServerWorld
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
+import net.minecraft.world.chunk.WorldChunk
 import java.util.ArrayDeque
 
 /**
- * Bridges RenewalTracker domain events into paced chunk-load intent.
+ * Bridges RenewalTracker domain events into declarative chunk-load intent.
  *
- * This provider is passive:
+ * This component is passive:
  * - It collects work from renewal domain events.
- * - The driver pulls one chunk at a time via [nextChunkLoad].
+ * - It exposes the *current* desired chunk loads via [desiredChunkLoads].
+ * - It observes chunk loads (external or proactive) to avoid redundant requests.
  */
-class RenewalChunkLoadProvider : ChunkLoadProvider {
+class RenewalChunkLoadProvider : ChunkLoadProvider, ChunkLoadConsumer {
+
+    override val name: String = "renewal"
 
     private data class BatchQueue(
         val dimension: RegistryKey<World>,
@@ -31,32 +37,18 @@ class RenewalChunkLoadProvider : ChunkLoadProvider {
     private val batches: MutableMap<String, BatchQueue> = linkedMapOf()
 
     // Best-effort dedupe across all batches.
+    // Keys represent chunks that are still desired.
     private val pendingKeys: MutableSet<String> = mutableSetOf()
 
-    override fun nextChunkLoad(): ChunkLoadRequest? {
-        while (batchOrder.isNotEmpty()) {
-            val batchName = batchOrder.first()
-            val b = batches[batchName]
-            if (b == null) {
-                batchOrder.removeFirst()
-                continue
-            }
-
-            while (b.remaining.isNotEmpty()) {
-                val pos = b.remaining.removeFirst()
+    override fun desiredChunkLoads(): Sequence<ChunkLoadRequest> = sequence {
+        for (batchName in batchOrder) {
+            val b = batches[batchName] ?: continue
+            for (pos in b.remaining) {
                 val k = key(batchName, b.dimension, pos)
-                if (!pendingKeys.remove(k)) {
-                    // Either already satisfied via observed load, or previously drained.
-                    continue
-                }
-                return ChunkLoadRequest(label = batchName, dimension = b.dimension, pos = pos)
+                if (!pendingKeys.contains(k)) continue
+                yield(ChunkLoadRequest(label = batchName, dimension = b.dimension, pos = pos))
             }
-
-            // Batch exhausted.
-            batches.remove(batchName)
-            batchOrder.removeFirst()
         }
-        return null
     }
 
     fun onRenewalEvent(e: RenewalEvent) {
@@ -64,7 +56,7 @@ class RenewalChunkLoadProvider : ChunkLoadProvider {
             is BatchWaitingForRenewal -> {
                 val q = BatchQueue(
                     dimension = e.dimension,
-                    remaining = ArrayDeque(e.chunks)
+                    remaining = ArrayDeque(e.chunks),
                 )
 
                 // Replace any previous queue for the same batch name.
@@ -96,11 +88,17 @@ class RenewalChunkLoadProvider : ChunkLoadProvider {
     }
 
     /**
-     * Optional but recommended: observe any chunk load to avoid redundant requests.
+     * Observe any chunk load to avoid redundant requests.
+     *
+     * We do not care whether the chunk was expected or unsolicited.
      */
-    fun onChunkLoaded(dimension: RegistryKey<World>, pos: ChunkPos) {
+    override fun onChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
+        val dimension = world.registryKey
+        val pos = chunk.pos
+
         // Remove all matching pending keys regardless of batch.
-        val toRemove = pendingKeys.filter { it.endsWith("|" + dimension.value.toString() + "|" + pos.x + "," + pos.z) }
+        val suffix = "|" + dimension.value.toString() + "|" + pos.x + "," + pos.z
+        val toRemove = pendingKeys.filter { it.endsWith(suffix) }
         for (k in toRemove) pendingKeys.remove(k)
     }
 
@@ -119,6 +117,7 @@ class RenewalChunkLoadProvider : ChunkLoadProvider {
         }
     }
 
-    private fun key(batchName: String, dim: RegistryKey<World>, pos: ChunkPos): String =
-        batchName + "|" + dim.value.toString() + "|" + pos.x + "," + pos.z
+    private fun key(batchName: String, dimension: RegistryKey<World>, pos: ChunkPos): String {
+        return batchName + "|" + dimension.value.toString() + "|" + pos.x + "," + pos.z
+    }
 }

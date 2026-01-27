@@ -1,5 +1,6 @@
 package ch.oliverlanz.memento.application.worldscan
 
+import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadConsumer
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadProvider
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadRequest
 import ch.oliverlanz.memento.domain.memento.WorldMementoSubstrate
@@ -20,7 +21,10 @@ import java.util.UUID
  * - Triggered explicitly by an operator.
  * - Executes discovery immediately, then chunk extraction in tick-paced slices.
  */
-class MementoRunController : ChunkLoadProvider {
+class MementoRunController : ChunkLoadProvider, ChunkLoadConsumer {
+
+    override val name: String = "scan"
+
 
     private val log = LoggerFactory.getLogger("memento")
 
@@ -91,14 +95,16 @@ class MementoRunController : ChunkLoadProvider {
     }
 
     /** Provider hook: the driver asks for the next chunk only when it is polite to do so. */
-    override fun nextChunkLoad(): ChunkLoadRequest? {
-        if (!isRunning) return null
-        val s = server ?: return null
-        return extractor.nextChunkLoad(s, label = "scan")
+    override fun desiredChunkLoads(): Sequence<ChunkLoadRequest> = sequence {
+        if (!isRunning) return@sequence
+        val s = server ?: return@sequence
+        val req = extractor.nextChunkLoad(s, label = "scan") ?: return@sequence
+        yield(req)
     }
 
+
     /** Called for any observed chunk load. Advances extraction only when it matches the pending scan request. */
-    fun onChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
+    override fun onChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
         if (!isRunning) return
         val s = server ?: return
 
