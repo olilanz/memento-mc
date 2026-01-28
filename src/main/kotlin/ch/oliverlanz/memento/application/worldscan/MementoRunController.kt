@@ -99,7 +99,7 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
         this.ticksSinceStart = 0
 
         log.info("[RUN] started worlds={} plannedChunks={}", worlds.size, plannedChunks)
-        log.info("[RUN] note driver='passive unless no external chunk loads for grace window'; behavior='consume external loads; drive only when active'")
+        log.info("[RUN] note driver='yields while external loads are observed'; behavior='consume external loads; drive only when not yielding'")
         source.sendFeedback({ net.minecraft.text.Text.literal("Memento: scan started. Planned chunks: $plannedChunks") }, false)
         return 1
     }
