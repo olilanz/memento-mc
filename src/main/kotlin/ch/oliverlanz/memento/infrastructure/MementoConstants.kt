@@ -30,11 +30,20 @@ object MementoConstants {
     /** Chunk load driver: while ACTIVE, request at most one chunk load every N server ticks. */
     const val CHUNK_LOAD_ACTIVE_INTERVAL_TICKS: Int = REGENERATION_CHUNK_INTERVAL_TICKS
 
-    /** Chunk load driver: after any chunk load is observed, remain PASSIVE for N ticks before becoming ACTIVE again. */
-    const val CHUNK_LOAD_PASSIVE_GRACE_TICKS: Int = 60
+    /**
+     * Chunk load driver: after we observe chunk load activity that we did not explicitly request,
+     * remain yielding for a grace window before issuing new proactive tickets.
+     *
+     * Locked timing (0.9.6): ~5 seconds.
+     */
+    const val CHUNK_LOAD_PASSIVE_GRACE_TICKS: Int = 100
 
-    /** Chunk load driver: safety valve. Release a proactive ticket after N ticks even if no CHUNK_LOAD event is observed. */
-    const val CHUNK_LOAD_TICKET_MAX_AGE_TICKS: Int = 40
+    /**
+     * Chunk load driver: safety valve. Release a proactive ticket after N ticks even if no CHUNK_LOAD event is observed.
+     *
+     * Locked timing (0.9.6): ~10 seconds.
+     */
+    const val CHUNK_LOAD_TICKET_MAX_AGE_TICKS: Int = 200
 
     /**
      * Conceptual "renewal checkpoint" time-of-night.

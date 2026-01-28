@@ -24,15 +24,6 @@ class ChunkMetadataConsumer(
     fun onChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
         val pos: ChunkPos = chunk.pos
 
-        // Safe surface sample (center of chunk). This must not cause chunk loads.
-        val centerX = pos.startX + 8
-        val centerZ = pos.startZ + 8
-        val surfaceY: Int? = try {
-            world.getTopY(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES, centerX, centerZ)
-        } catch (_: Throwable) {
-            null
-        }
-
         val key = ChunkKey(
             world = world.registryKey,
             regionX = Math.floorDiv(pos.x, 32),
@@ -40,6 +31,20 @@ class ChunkMetadataConsumer(
             chunkX = pos.x,
             chunkZ = pos.z,
         )
+
+        // If we already have signals for this chunk, we can treat this as a duplicate load.
+        // We still mark the plan as completed so scanning can make forward progress.
+        if (substrate.contains(key)) {
+            plan.markCompleted(ChunkRef(world.registryKey, pos))
+            return
+        }
+
+        // Safe surface sample (center of chunk), computed from the chunk's own heightmap.
+        // This must not call back into the chunk manager.
+        val surfaceY: Int? = runCatching {
+            val hm = chunk.getHeightmap(Heightmap.Type.MOTION_BLOCKING_NO_LEAVES)
+            hm.get(8, 8)
+        }.getOrNull()
 
         substrate.upsert(
             key = key,
