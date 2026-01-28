@@ -49,9 +49,37 @@ class ChunkLoadDriver(
     private var lastExternalLoadTick: Long? = null
 
     /** Track outstanding proactive load tickets (one per chunk ref). */
-    private data class OutstandingTicket(val issuedAtTick: Long)
+    private data class OutstandingTicket(
+        val issuedAtTick: Long,
+        /**
+         * Set once we observe the engine CHUNK_LOAD signal for this ticket.
+         *
+         * We intentionally keep the ticket in [tickets] until we have:
+         *  1) forwarded availability to listeners, and
+         *  2) removed the ticket from the engine.
+         *
+         * This makes matching robust against duplicate load callbacks within the same tick window.
+         */
+        var loadObservedAtTick: Long? = null,
+    )
 
     private val tickets = mutableMapOf<ChunkRef, OutstandingTicket>()
+
+    /**
+     * If we expire a ticket, but the chunk load completes later anyway, we treat that load as
+     * *driver-caused* (late), not as an external/unsolicited load.
+     */
+    private val recentlyExpiredTickets = mutableMapOf<ChunkRef, Long>()
+
+    /**
+     * Heuristic: the engine often loads a *small neighbourhood* of chunks around a requested chunk
+     * (lighting, heightmap stabilization, etc.).
+     *
+     * We therefore treat immediate neighbours of outstanding (or very recently expired) tickets as
+     * a likely consequence of our proactive load. These loads remain useful signals (we harvest metadata),
+     * but they should not be interpreted as external activity that forces the driver into yielding.
+     */
+    private val proactiveNeighbourhoodRadiusChunks: Int = 1
 
     /**
      * Deferred engine signals.
@@ -83,6 +111,7 @@ class ChunkLoadDriver(
         lastExternalLoadTick = null
 
         tickets.clear()
+        recentlyExpiredTickets.clear()
         pendingLoads.clear()
         pendingTicketReleases.clear()
         pendingUnloads.clear()
@@ -107,6 +136,7 @@ class ChunkLoadDriver(
         server = null
 
         tickets.clear()
+        recentlyExpiredTickets.clear()
         pendingLoads.clear()
         pendingTicketReleases.clear()
         pendingUnloads.clear()
@@ -131,8 +161,10 @@ class ChunkLoadDriver(
         val ref = ChunkRef(world.registryKey, chunk.pos)
 
         // Determine whether this load was caused by an outstanding driver ticket.
-        val matchedTicket = tickets.remove(ref)
+        val matchedTicket = tickets[ref]
         if (matchedTicket != null) {
+            matchedTicket.loadObservedAtTick = tickCounter
+
             // Defer ticket release until *after* we have forwarded availability to listeners in tick().
             pendingTicketReleases.addLast(ref)
             log.info(
@@ -141,14 +173,59 @@ class ChunkLoadDriver(
                 ref.pos,
                 (tickCounter - matchedTicket.issuedAtTick)
             )
+        } else if (recentlyExpiredTickets.containsKey(ref)) {
+            // Late completion of a load that we previously gave up on.
+            // Treat as driver-caused to avoid entering yielding mode.
+            val expiredAt = recentlyExpiredTickets[ref] ?: tickCounter
+            log.warn(
+                "[DRIVER] observed late proactive load after expiry dim={} pos={} lateByTicks={}",
+                ref.dimension.value,
+                ref.pos,
+                tickCounter - expiredAt,
+            )
+        } else if (isLikelyProactiveNeighbourhoodLoad(ref)) {
+            // Neighbourhood loads are expected as a side effect of a proactive request.
+            // We treat them as useful signals but do not enter yielding.
+            log.info(
+                "[DRIVER] observed neighbour load (assumed proactive side effect) dim={} pos={} radius={}",
+                ref.dimension.value,
+                ref.pos,
+                proactiveNeighbourhoodRadiusChunks,
+            )
         } else {
-            // External load: enter yielding mode for a grace window.
+            // External load (best-effort): enter yielding mode for a grace window.
             lastExternalLoadTick = tickCounter
             log.info("[DRIVER] observed external load dim={} pos={}", ref.dimension.value, ref.pos)
         }
 
         // Defer listener notifications (prevents re-entrancy / lock hazards).
         pendingLoads.addLast(ref)
+    }
+
+    private fun isLikelyProactiveNeighbourhoodLoad(loaded: ChunkRef): Boolean {
+        // If we have any outstanding tickets, and the loaded chunk sits in their neighbourhood,
+        // treat it as a consequence of proactive loading.
+        if (tickets.isNotEmpty()) {
+            for (ticketRef in tickets.keys) {
+                if (isNeighbour(loaded, ticketRef, proactiveNeighbourhoodRadiusChunks)) return true
+            }
+        }
+
+        // Also consider very recently expired tickets (late pipeline completions can still cascade).
+        if (recentlyExpiredTickets.isNotEmpty()) {
+            for (ticketRef in recentlyExpiredTickets.keys) {
+                if (isNeighbour(loaded, ticketRef, proactiveNeighbourhoodRadiusChunks)) return true
+            }
+        }
+
+        return false
+    }
+
+    private fun isNeighbour(a: ChunkRef, b: ChunkRef, radius: Int): Boolean {
+        if (a.dimension != b.dimension) return false
+        val dx = kotlin.math.abs(a.pos.x - b.pos.x)
+        val dz = kotlin.math.abs(a.pos.z - b.pos.z)
+        return dx <= radius && dz <= radius
     }
 
     /**
@@ -187,6 +264,8 @@ class ChunkLoadDriver(
 
         // 3) Expire stuck tickets (safety valve).
         expireTickets(s)
+
+        pruneRecentlyExpiredTickets()
 
         // 4) If yielding, suppress proactive ticket issuance.
         if (isYielding) {
@@ -285,6 +364,7 @@ class ChunkLoadDriver(
             val ref = pendingTicketReleases.removeFirst()
             val world = server.getWorld(ref.dimension) ?: continue
             world.chunkManager.removeTicket(ChunkTicketType.UNKNOWN, ref.pos, /* radius */ 1)
+            tickets.remove(ref)
             log.info("[DRIVER] released ticket dim={} pos={}", ref.dimension.value, ref.pos)
         }
     }
@@ -304,6 +384,7 @@ class ChunkLoadDriver(
             val issuedAt = tickets[ref]?.issuedAtTick ?: now
             world.chunkManager.removeTicket(ChunkTicketType.UNKNOWN, ref.pos, /* radius */ 1)
             tickets.remove(ref)
+            recentlyExpiredTickets[ref] = now
             log.warn(
                 "[DRIVER] ticket expired dim={} pos={} ageTicks={} maxAgeTicks={}",
                 ref.dimension.value,
@@ -312,6 +393,15 @@ class ChunkLoadDriver(
                 ticketMaxAgeTicks
             )
         }
+    }
+
+    private fun pruneRecentlyExpiredTickets() {
+        if (recentlyExpiredTickets.isEmpty()) return
+
+        // Keep a short window so late load callbacks don't force yielding.
+        val window = ticketMaxAgeTicks.toLong()
+        val now = tickCounter
+        recentlyExpiredTickets.entries.removeIf { (_, expiredAt) -> (now - expiredAt) > window }
     }
 
     private fun issueNextTicketIfAny(server: MinecraftServer) {

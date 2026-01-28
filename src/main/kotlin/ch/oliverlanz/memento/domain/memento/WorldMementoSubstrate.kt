@@ -7,6 +7,8 @@ class WorldMementoSubstrate {
 
     private val records = ConcurrentHashMap<ChunkKey, ChunkSignals>()
 
+    fun contains(key: ChunkKey): Boolean = records.containsKey(key)
+
     fun upsert(key: ChunkKey, signals: ChunkSignals) {
         records[key] = signals
     }
