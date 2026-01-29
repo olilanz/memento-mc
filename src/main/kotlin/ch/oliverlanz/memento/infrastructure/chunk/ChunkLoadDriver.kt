@@ -81,16 +81,31 @@ class ChunkLoadDriver(
      */
     private val proactiveNeighbourhoodRadiusChunks: Int = 1
 
-    /**
-     * Deferred engine signals.
-     *
-     * We collect chunk-load signals in [onEngineChunkLoaded] and forward them to listeners in [tick],
-     * when we are no longer inside engine locks.
-     */
-    private val pendingLoads: ArrayDeque<ChunkRef> = ArrayDeque()
+    private data class PendingLoad(
+        /** When we first observed the engine load signal for this chunk. */
+        val firstSeenTick: Long,
+        /** Last tick we emitted an INFO/WARN about this pending item (rate limiting). */
+        var lastLogTick: Long = 0,
+    )
 
-    /** Chunk refs for which we must release a proactive ticket after forwarding availability to listeners. */
-    private val pendingTicketReleases: ArrayDeque<ChunkRef> = ArrayDeque()
+    /**
+     * Deferred engine load signals.
+     *
+     * We treat engine callbacks as **signals only**. In [tick], we try to resolve whether the chunk
+     * is actually present and only then forward it to listeners.
+     *
+     * IMPORTANT:
+     * - We may need to retry resolution for a few ticks because the engine can emit load signals
+     *   before the chunk becomes retrievable via the chunk manager.
+     * - For proactive loads, we retry until the associated ticket expires.
+     */
+    private val pendingLoads: LinkedHashMap<ChunkRef, PendingLoad> = LinkedHashMap()
+
+    /**
+     * For external loads (no ticket), we won't retry forever. This bound prevents indefinite growth
+     * if we observe load signals for chunks that never become accessible (rare).
+     */
+    private val externalPendingMaxAgeTicks: Long = 40
 
     /** Deferred unload notifications. */
     private val pendingUnloads: ArrayDeque<Pair<ServerWorld, ChunkPos>> = ArrayDeque()
@@ -113,7 +128,6 @@ class ChunkLoadDriver(
         tickets.clear()
         recentlyExpiredTickets.clear()
         pendingLoads.clear()
-        pendingTicketReleases.clear()
         pendingUnloads.clear()
 
         lastStateLogTick = 0
@@ -138,7 +152,6 @@ class ChunkLoadDriver(
         tickets.clear()
         recentlyExpiredTickets.clear()
         pendingLoads.clear()
-        pendingTicketReleases.clear()
         pendingUnloads.clear()
 
         lastExternalLoadTick = null
@@ -164,9 +177,6 @@ class ChunkLoadDriver(
         val matchedTicket = tickets[ref]
         if (matchedTicket != null) {
             matchedTicket.loadObservedAtTick = tickCounter
-
-            // Defer ticket release until *after* we have forwarded availability to listeners in tick().
-            pendingTicketReleases.addLast(ref)
             log.info(
                 "[DRIVER] observed proactive load dim={} pos={} ticketAgeTicks={}",
                 ref.dimension.value,
@@ -198,8 +208,9 @@ class ChunkLoadDriver(
             log.info("[DRIVER] observed external load dim={} pos={}", ref.dimension.value, ref.pos)
         }
 
-        // Defer listener notifications (prevents re-entrancy / lock hazards).
-        pendingLoads.addLast(ref)
+        // Defer resolution + forwarding (prevents re-entrancy / lock hazards).
+        // Deduplicate: the engine may signal the same chunk multiple times.
+        pendingLoads.putIfAbsent(ref, PendingLoad(firstSeenTick = tickCounter))
     }
 
     private fun isLikelyProactiveNeighbourhoodLoad(loaded: ChunkRef): Boolean {
@@ -241,10 +252,10 @@ class ChunkLoadDriver(
      * Driver heartbeat (called once per server tick).
      *
      * Order of operations:
-     * 1) Forward engine signals (loads/unloads) safely outside engine callbacks.
-     * 2) Release fulfilled tickets (after listeners saw the chunk).
-     * 3) Expire stuck tickets (safety valve).
-     * 4) If not yielding, consider issuing a new proactive ticket based on provider intent.
+     * 1) Resolve + forward pending load signals (loads/unloads) safely outside engine callbacks.
+     *    (If a chunk is not yet retrievable, we keep it pending and retry.)
+     * 2) Expire stuck tickets (safety valve).
+     * 3) If not yielding, consider issuing a new proactive ticket based on provider intent.
      */
     fun tick() {
         val s = server ?: return
@@ -259,15 +270,12 @@ class ChunkLoadDriver(
         forwardPendingLoads(s)
         forwardPendingUnloads()
 
-        // 2) Release tickets for proactive loads (after forwarding to listeners).
-        releasePendingTickets(s)
-
-        // 3) Expire stuck tickets (safety valve).
+        // 2) Expire stuck tickets (safety valve).
         expireTickets(s)
 
         pruneRecentlyExpiredTickets()
 
-        // 4) If yielding, suppress proactive ticket issuance.
+        // 3) If yielding, suppress proactive ticket issuance.
         if (isYielding) {
             logSuppressionIfThereIsIntent(externalAge)
             return
@@ -315,28 +323,73 @@ class ChunkLoadDriver(
         if (pendingLoads.isEmpty()) return
 
         var forwarded = 0
-        while (forwarded < maxForwardedLoadsPerTick && pendingLoads.isNotEmpty()) {
-            val ref = pendingLoads.removeFirst()
+        val toRemove = mutableListOf<ChunkRef>()
+
+        val iter = pendingLoads.entries.iterator()
+        while (iter.hasNext() && forwarded < maxForwardedLoadsPerTick) {
+            val (ref, pending) = iter.next()
             val world = server.getWorld(ref.dimension)
 
             if (world == null) {
-                log.warn("[DRIVER] cannot forward load; world missing dim={} pos={}", ref.dimension.value, ref.pos)
-                // Still release ticket if we were holding one (best-effort).
-                // (releasePendingTickets handles ticket release separately.)
-                forwarded++
+                // If a world is missing, we can't ever resolve this chunk.
+                if ((tickCounter - pending.lastLogTick) >= 100) {
+                    pending.lastLogTick = tickCounter
+                    log.warn("[DRIVER] pending load dropped; world missing dim={} pos={}", ref.dimension.value, ref.pos)
+                }
+                toRemove += ref
                 continue
             }
 
+            // IMPORTANT: presence check only. Never force-load here.
             val chunk = world.chunkManager.getWorldChunk(ref.pos.x, ref.pos.z, /* create = */ false)
             if (chunk == null) {
-                log.warn("[DRIVER] cannot forward load; chunk not present after load signal dim={} pos={}", ref.dimension.value, ref.pos)
-                forwarded++
+                val hasTicket = tickets.containsKey(ref)
+                val age = tickCounter - pending.firstSeenTick
+
+                // Proactive: retry until ticket expiry. External: retry for a bounded short window.
+                val shouldDrop = (!hasTicket && age >= externalPendingMaxAgeTicks)
+                if (shouldDrop) {
+                    if ((tickCounter - pending.lastLogTick) >= 100) {
+                        pending.lastLogTick = tickCounter
+                        log.info(
+                            "[DRIVER] pending external load dropped; chunk never became present dim={} pos={} ageTicks={}",
+                            ref.dimension.value,
+                            ref.pos,
+                            age
+                        )
+                    }
+                    toRemove += ref
+                } else {
+                    // Keep pending; occasionally explain why we are still waiting.
+                    if ((tickCounter - pending.lastLogTick) >= 100) {
+                        pending.lastLogTick = tickCounter
+                        log.info(
+                            "[DRIVER] pending load not yet present; will retry dim={} pos={} ageTicks={} hasTicket={}",
+                            ref.dimension.value,
+                            ref.pos,
+                            age,
+                            hasTicket
+                        )
+                    }
+                }
                 continue
             }
 
+            // Chunk is present: forward to listeners.
             listeners.forEach { it.onChunkLoaded(world, chunk) }
             forwarded++
+            toRemove += ref
+
+            // If this was a proactive load, release the ticket *after* forwarding.
+            if (tickets.containsKey(ref)) {
+                world.chunkManager.removeTicket(ChunkTicketType.UNKNOWN, ref.pos, /* radius */ 1)
+                tickets.remove(ref)
+                log.info("[DRIVER] released ticket after forward dim={} pos={}", ref.dimension.value, ref.pos)
+            }
         }
+
+        // Remove successfully forwarded / dropped entries.
+        toRemove.forEach { pendingLoads.remove(it) }
 
         if ((tickCounter - lastForwardingLogTick) >= 100) {
             lastForwardingLogTick = tickCounter
@@ -355,17 +408,6 @@ class ChunkLoadDriver(
         while (pendingUnloads.isNotEmpty()) {
             val (world, pos) = pendingUnloads.removeFirst()
             listeners.forEach { it.onChunkUnloaded(world, pos) }
-        }
-    }
-
-    private fun releasePendingTickets(server: MinecraftServer) {
-        if (pendingTicketReleases.isEmpty()) return
-        while (pendingTicketReleases.isNotEmpty()) {
-            val ref = pendingTicketReleases.removeFirst()
-            val world = server.getWorld(ref.dimension) ?: continue
-            world.chunkManager.removeTicket(ChunkTicketType.UNKNOWN, ref.pos, /* radius */ 1)
-            tickets.remove(ref)
-            log.info("[DRIVER] released ticket dim={} pos={}", ref.dimension.value, ref.pos)
         }
     }
 
@@ -420,7 +462,7 @@ class ChunkLoadDriver(
         val alreadyLoaded = world.chunkManager.getWorldChunk(next.pos.x, next.pos.z, /* create = */ false)
         if (alreadyLoaded != null) {
             log.info("[DRIVER] chunk already loaded; enqueue artificial availability dim={} pos={}", next.dimension.value, next.pos)
-            pendingLoads.addLast(next)
+            pendingLoads.putIfAbsent(next, PendingLoad(firstSeenTick = tickCounter))
             return
         }
 
