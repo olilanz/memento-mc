@@ -11,27 +11,46 @@ import java.util.concurrent.atomic.AtomicInteger
  * - Metadata extraction progressively refines the map by attaching [ChunkSignals] to keys.
  * - A chunk is considered *scanned* when [ChunkSignals] are present.
  *
- * This replaces the earlier "plan vs substrate" split:
- * - The map is the single source of truth.
+ * This is intentionally the single source of truth:
  * - "needs scanning" == "exists in map AND signals missing".
+ *
+ * Runtime safety:
+ * - The server may generate new chunks after the initial discovery run.
+ * - Load events for such chunks must not crash the system; they are added on demand.
  */
 class WorldMementoMap {
 
-    private val records = ConcurrentHashMap<ChunkKey, ChunkSignals?>()
+    /**
+     * IMPORTANT: ConcurrentHashMap does not allow null values.
+     * We store an explicit record with nullable signals to represent
+     * "known to exist, but not yet scanned".
+     */
+    private data class ChunkRecord(
+        @Volatile var signals: ChunkSignals? = null,
+    )
+
+    private val records = ConcurrentHashMap<ChunkKey, ChunkRecord>()
     private val scannedCount = AtomicInteger(0)
 
     /** Ensures the chunk exists in the map (without signals yet). */
     fun ensureExists(key: ChunkKey) {
-        records.putIfAbsent(key, null)
+        records.putIfAbsent(key, ChunkRecord())
     }
 
     fun contains(key: ChunkKey): Boolean = records.containsKey(key)
 
-    fun hasSignals(key: ChunkKey): Boolean = records[key] != null
+    fun hasSignals(key: ChunkKey): Boolean = records[key]?.signals != null
 
-    /** Attach/replace signals for an existing chunk. If this is the first attach, scan progress advances. */
+    /**
+     * Attach/replace signals for a chunk.
+     *
+     * - If the chunk was not previously known, it will be added.
+     * - If this is the first time signals are attached, scan progress advances.
+     */
     fun upsertSignals(key: ChunkKey, signals: ChunkSignals) {
-        val previous = records.put(key, signals)
+        val record = records.computeIfAbsent(key) { ChunkRecord() }
+        val previous = record.signals
+        record.signals = signals
         if (previous == null) {
             scannedCount.incrementAndGet()
         }
@@ -52,13 +71,15 @@ class WorldMementoMap {
      */
     fun missingSignals(limit: Int): List<ChunkKey> {
         return records.entries.asSequence()
-            .filter { it.value == null }
+            .filter { it.value.signals == null }
             .map { it.key }
-            .sortedWith(compareBy(
-                { it.world.value.toString() },
-                { it.regionX }, { it.regionZ },
-                { it.chunkX }, { it.chunkZ },
-            ))
+            .sortedWith(
+                compareBy(
+                    { it.world.value.toString() },
+                    { it.regionX }, { it.regionZ },
+                    { it.chunkX }, { it.chunkZ },
+                )
+            )
             .take(limit)
             .toList()
     }
@@ -66,12 +87,14 @@ class WorldMementoMap {
     /** Deterministic snapshot of scanned chunks (signals present). */
     fun snapshot(): List<Pair<ChunkKey, ChunkSignals>> {
         return records.entries.asSequence()
-            .mapNotNull { (k, v) -> v?.let { k to it } }
-            .sortedWith(compareBy(
-                { it.first.world.value.toString() },
-                { it.first.regionX }, { it.first.regionZ },
-                { it.first.chunkX }, { it.first.chunkZ },
-            ))
+            .mapNotNull { (k, v) -> v.signals?.let { k to it } }
+            .sortedWith(
+                compareBy(
+                    { it.first.world.value.toString() },
+                    { it.first.regionX }, { it.first.regionZ },
+                    { it.first.chunkX }, { it.first.chunkZ },
+                )
+            )
             .toList()
     }
 }
