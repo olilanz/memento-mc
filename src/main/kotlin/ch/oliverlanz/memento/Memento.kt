@@ -6,6 +6,7 @@ import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadDriver
 import ch.oliverlanz.memento.application.renewal.RenewalChunkLoadProvider
 import ch.oliverlanz.memento.application.renewal.RenewalInitialObserver
 import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge
+import ch.oliverlanz.memento.application.renewal.WitherstoneConsumptionBridge
 import ch.oliverlanz.memento.application.stone.StoneMaturityTimeBridge
 import ch.oliverlanz.memento.application.time.GameTimeTracker
 import ch.oliverlanz.memento.application.visualization.EffectsHost
@@ -44,6 +45,7 @@ object Memento : ModInitializer {
         renewalInitialObserver?.onRenewalEvent(e)
         renewalChunkLoadProvider?.onRenewalEvent(e)
         RenewalRegenerationBridge.onRenewalEvent(e)
+        WitherstoneConsumptionBridge.onRenewalEvent(e)
 
         if (e is RenewalBatchLifecycleTransition) {
             effectsHost?.onRenewalEvent(e)

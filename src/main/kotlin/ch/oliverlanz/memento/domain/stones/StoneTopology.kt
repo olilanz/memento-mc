@@ -374,6 +374,12 @@ object StoneTopology {
 
         stones.remove(stoneName)
 
+        log.info(
+            "[STONE] consumed witherstone='{}' trigger={}",
+            stoneName,
+            StoneLifecycleTrigger.RENEWAL_COMPLETED,
+        )
+
         rebuildInfluenceTree()
         persist()
     }
