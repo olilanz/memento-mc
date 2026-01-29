@@ -1,7 +1,7 @@
 package ch.oliverlanz.memento.application.worldscan
 
-import ch.oliverlanz.memento.domain.memento.ChunkKey
-import ch.oliverlanz.memento.domain.memento.WorldMementoSubstrate
+import ch.oliverlanz.memento.domain.worldmap.ChunkKey
+import ch.oliverlanz.memento.domain.worldmap.WorldMementoMap
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkAvailabilityListener
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadProvider
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkRef
@@ -18,10 +18,10 @@ import org.slf4j.LoggerFactory
  * Responsibilities:
  * - Orchestrates the discovery pipeline on demand (World -> Region -> Chunk slots)
  * - Declares scan intent via [ChunkLoadProvider] (declarative desired chunks)
- * - Consumes loaded chunks via [ChunkAvailabilityListener] and extracts signals into a substrate
+ * - Consumes loaded chunks via [ChunkAvailabilityListener] and extracts signals into the map
  * - Finalizes by superimposing stone influence and writing the CSV
  *
- * Engine mechanics (tickets, throttling, passive/active) are owned by the infrastructure ChunkLoadDriver.
+ * Engine mechanics (tickets, throttling, yielding) are owned by the infrastructure ChunkLoadDriver.
  */
 class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
 
@@ -29,13 +29,14 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
 
     private var server: MinecraftServer? = null
 
-    private var active = false
+    private var active: Boolean = false
 
-    private var plan: WorldScanPlan? = null
-    private var substrate: WorldMementoSubstrate? = null
+    /** The world map for the currently running scan. The map is the single source of truth. */
+    private var map: WorldMementoMap? = null
+
     private var consumer: ChunkMetadataConsumer? = null
 
-    /** Number of chunks planned for the current run (for observability only). */
+    /** Number of chunks discovered (for observability only). */
     private var plannedChunks: Int = 0
 
     private var ticksSinceStart: Int = 0
@@ -47,15 +48,13 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
     fun detach() {
         server = null
         active = false
-        plan = null
-        substrate = null
+        map = null
         consumer = null
         plannedChunks = 0
+        ticksSinceStart = 0
     }
 
-    /**
-     * Entry point used by CommandHandlers.
-     */
+    /** Entry point used by CommandHandlers. */
     fun start(source: ServerCommandSource): Int {
         val srv = source.server
         this.server = srv
@@ -65,10 +64,9 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
             return 0
         }
 
-        val scanPlan = WorldScanPlan()
-        val scanSubstrate = WorldMementoSubstrate()
+        val scanMap = WorldMementoMap()
 
-        // Build the discovery plan (pure IO / planning; no chunk loads).
+        // Build the map from region discovery (pure IO; no chunk loads).
         val worlds = WorldDiscovery().discover(srv)
         val discoveredRegions = RegionDiscovery().discover(srv, worlds)
         val discoveredChunks = ChunkDiscovery().discover(discoveredRegions)
@@ -79,27 +77,35 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
                 region.chunks.forEach { slot ->
                     val chunkX = region.x * 32 + slot.localX
                     val chunkZ = region.z * 32 + slot.localZ
-                    scanPlan.add(ChunkRef(world.world, ChunkPos(chunkX, chunkZ)))
+                    val key = ChunkKey(
+                        world = world.world,
+                        regionX = region.x,
+                        regionZ = region.z,
+                        chunkX = chunkX,
+                        chunkZ = chunkZ,
+                    )
+                    scanMap.ensureExists(key)
                     count++
                 }
             }
         }
 
         if (count == 0) {
-            source.sendFeedback({ net.minecraft.text.Text.literal("Memento: no existing chunks discovered; nothing to scan.") }, false)
+            source.sendFeedback(
+                { net.minecraft.text.Text.literal("Memento: no existing chunks discovered; nothing to scan.") },
+                false
+            )
             log.info("[RUN] start aborted reason=no_chunks")
             return 1
         }
 
-        this.plan = scanPlan
-        this.substrate = scanSubstrate
-        this.consumer = ChunkMetadataConsumer(scanSubstrate, scanPlan)
+        this.map = scanMap
+        this.consumer = ChunkMetadataConsumer(scanMap)
         this.plannedChunks = count
         this.active = true
         this.ticksSinceStart = 0
 
         log.info("[RUN] started worlds={} plannedChunks={}", worlds.size, plannedChunks)
-        log.info("[RUN] note driver='yields while external loads are observed'; behavior='consume external loads; drive only when not yielding'")
         source.sendFeedback({ net.minecraft.text.Text.literal("Memento: scan started. Planned chunks: $plannedChunks") }, false)
         return 1
     }
@@ -108,17 +114,20 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
         if (!active) return
 
         val srv = server ?: return
-        val p = plan ?: return
-        val s = substrate ?: return
+        val m = map ?: return
 
-        if (p.isComplete()) {
+        if (m.isComplete()) {
             // Finalize once: superposition + CSV export.
-            val topology = StoneInfluenceSuperposition.apply(s)
+            val topology = StoneInfluenceSuperposition.apply(m)
             val path = MementoCsvWriter.write(srv, topology)
-            log.info("[RUN] completed plannedChunks={} scannedChunks={} csv={}", plannedChunks, s.size(), path.toAbsolutePath())
+            log.info(
+                "[RUN] completed plannedChunks={} scannedChunks={} csv={}",
+                plannedChunks,
+                m.scannedChunks(),
+                path.toAbsolutePath(),
+            )
             active = false
-            plan = null
-            substrate = null
+            map = null
             consumer = null
             plannedChunks = 0
             ticksSinceStart = 0
@@ -127,18 +136,21 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
 
         ticksSinceStart++
 
-        // Minimal observability (avoid per-tick spam).
-        // We log progress every ~5 seconds (100 ticks).
+        // Observability: log progress every ~5 seconds (100 ticks).
         if ((ticksSinceStart % 100) == 0) {
-            log.info("[RUN] progress scannedChunks={} plannedChunks={}", s.size(), plannedChunks)
+            log.info("[RUN] progress scannedChunks={} plannedChunks={}", m.scannedChunks(), plannedChunks)
         }
     }
 
     override fun desiredChunks(): Sequence<ChunkRef> {
         if (!active) return emptySequence()
-        val p = plan ?: return emptySequence()
-        // Driver will select based on priority; scanner is always lowest priority.
-        return p.desiredChunks().asSequence()
+        val m = map ?: return emptySequence()
+
+        // Feed the driver with a bounded, deterministic slice of chunks that still need metadata.
+        // The driver applies its own throttling and priority rules.
+        return m.missingSignals(limit = 100)
+            .asSequence()
+            .map { key -> ChunkRef(key.world, ChunkPos(key.chunkX, key.chunkZ)) }
     }
 
     override fun onChunkLoaded(world: ServerWorld, chunk: WorldChunk) {

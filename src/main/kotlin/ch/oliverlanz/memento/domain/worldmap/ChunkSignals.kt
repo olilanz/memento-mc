@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.domain.memento
+package ch.oliverlanz.memento.domain.worldmap
 
 import net.minecraft.registry.RegistryKey
 import net.minecraft.util.Identifier

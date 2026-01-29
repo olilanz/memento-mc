@@ -1,24 +1,22 @@
 package ch.oliverlanz.memento.application.worldscan
 
-import ch.oliverlanz.memento.domain.memento.ChunkKey
-import ch.oliverlanz.memento.domain.memento.ChunkSignals
-import ch.oliverlanz.memento.domain.memento.WorldMementoSubstrate
-import ch.oliverlanz.memento.infrastructure.chunk.ChunkRef
+import ch.oliverlanz.memento.domain.worldmap.ChunkKey
+import ch.oliverlanz.memento.domain.worldmap.ChunkSignals
+import ch.oliverlanz.memento.domain.worldmap.WorldMementoMap
 import net.minecraft.server.world.ServerWorld
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.Heightmap
 import net.minecraft.world.chunk.WorldChunk
 
 /**
- * Consumes already-loaded chunks and extracts signals into the domain-owned [WorldMementoSubstrate].
+ * Consumes already-loaded chunks and extracts signals into the domain-owned [WorldMementoMap].
  *
  * 0.9.6 invariants:
  * - Never triggers chunk loads.
  * - Reads only from the provided [WorldChunk] and safe, non-loading world APIs.
  */
 class ChunkMetadataConsumer(
-    private val substrate: WorldMementoSubstrate,
-    private val plan: WorldScanPlan,
+    private val map: WorldMementoMap,
 ) {
 
     fun onChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
@@ -34,8 +32,7 @@ class ChunkMetadataConsumer(
 
         // If we already have signals for this chunk, we can treat this as a duplicate load.
         // We still mark the plan as completed so scanning can make forward progress.
-        if (substrate.contains(key)) {
-            plan.markCompleted(ChunkRef(world.registryKey, pos))
+        if (map.hasSignals(key)) {
             return
         }
 
@@ -46,7 +43,7 @@ class ChunkMetadataConsumer(
             hm.get(8, 8)
         }.getOrNull()
 
-        substrate.upsert(
+        map.upsertSignals(
             key = key,
             signals = ChunkSignals(
                 inhabitedTimeTicks = chunk.inhabitedTime,
@@ -56,8 +53,5 @@ class ChunkMetadataConsumer(
                 isSpawnChunk = false,
             )
         )
-
-        // Mark scan progress. Plan tracks ChunkRef, not ChunkPos.
-        plan.markCompleted(ChunkRef(world.registryKey, pos))
     }
 }

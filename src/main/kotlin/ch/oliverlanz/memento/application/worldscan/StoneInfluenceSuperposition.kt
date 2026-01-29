@@ -1,8 +1,8 @@
 package ch.oliverlanz.memento.application.worldscan
 
-import ch.oliverlanz.memento.domain.memento.ChunkMementoView
-import ch.oliverlanz.memento.domain.memento.WorldMementoSubstrate
-import ch.oliverlanz.memento.domain.memento.WorldMementoTopology
+import ch.oliverlanz.memento.domain.worldmap.ChunkMementoView
+import ch.oliverlanz.memento.domain.worldmap.WorldMementoMap
+import ch.oliverlanz.memento.domain.worldmap.WorldMementoTopology
 import ch.oliverlanz.memento.domain.stones.Lorestone
 import ch.oliverlanz.memento.domain.stones.Stone
 import ch.oliverlanz.memento.domain.stones.StoneTopology
@@ -25,7 +25,7 @@ import kotlin.reflect.KClass
  */
 object StoneInfluenceSuperposition {
 
-    fun apply(substrate: WorldMementoSubstrate): WorldMementoTopology {
+    fun apply(substrate: WorldMementoMap): WorldMementoTopology {
         // Cache per-dimension dominance maps to avoid repeated lookups per row.
         val dominantByChunkByWorld = linkedMapOf<RegistryKey<World>, Map<ChunkPos, KClass<out Stone>>>()
 

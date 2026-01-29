@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.domain.memento
+package ch.oliverlanz.memento.domain.worldmap
 
 import ch.oliverlanz.memento.domain.stones.Stone
 import kotlin.reflect.KClass
