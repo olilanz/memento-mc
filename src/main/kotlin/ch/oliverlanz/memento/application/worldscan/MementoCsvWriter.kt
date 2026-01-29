@@ -1,6 +1,6 @@
 package ch.oliverlanz.memento.application.worldscan
 
-import ch.oliverlanz.memento.domain.memento.WorldMementoTopology
+import ch.oliverlanz.memento.domain.worldmap.WorldMementoTopology
 import ch.oliverlanz.memento.infrastructure.MementoConstants
 import net.minecraft.server.MinecraftServer
 import net.minecraft.util.WorldSavePath
