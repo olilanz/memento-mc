@@ -20,7 +20,6 @@ import ch.oliverlanz.memento.domain.stones.StoneTopologyHooks
 import ch.oliverlanz.memento.infrastructure.MementoConstants
 import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
 import net.fabricmc.api.ModInitializer
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents
 import net.minecraft.server.MinecraftServer
@@ -57,15 +56,10 @@ object Memento : ModInitializer {
 
         Commands.register()
 
-        // Chunk observations → domain + application
-        ServerChunkEvents.CHUNK_LOAD.register { world, chunk ->
-            // Single infrastructure entrypoint.
-            chunkLoadDriver?.onEngineChunkLoaded(world, chunk)
-        }
-
-        ServerChunkEvents.CHUNK_UNLOAD.register { world, chunk ->
-            chunkLoadDriver?.onEngineChunkUnloaded(world, chunk.pos)
-        }
+        // The ChunkLoadDriver owns the engine event subscriptions.
+        // (We still call the installation from here, but the driver is the only class
+        // that knows about / handles ServerChunkEvents.)
+        ChunkLoadDriver.installEngineHooks()
 
         ServerLifecycleEvents.SERVER_STARTED.register { server: MinecraftServer ->
 
