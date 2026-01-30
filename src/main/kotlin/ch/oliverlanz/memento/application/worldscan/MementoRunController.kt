@@ -138,7 +138,7 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
 
         // Observability: log progress every ~5 seconds (100 ticks).
         if ((ticksSinceStart % 100) == 0) {
-            log.info("[RUN] progress scannedChunks={} plannedChunks={}", m.scannedChunks(), plannedChunks)
+            log.info("[RUN] progress scannedChunks={} plannedChunks={} missing={}", m.scannedChunks(), plannedChunks, m.missingCount())
         }
     }
 
@@ -148,7 +148,13 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
 
         // Feed the driver with a bounded, deterministic slice of chunks that still need metadata.
         // The driver applies its own throttling and priority rules.
-        return m.missingSignals(limit = 100)
+        val missing = m.missingSignals(limit = 100)
+        if (missing.isEmpty() && !m.isComplete()) {
+            // If this happens, something is inconsistent (e.g. scannedCount drift).
+            log.warn("[RUN] provider returned empty but scan not complete: scanned={} total={} missing={} ", m.scannedChunks(), m.totalChunks(), m.missingCount())
+        }
+
+        return missing
             .asSequence()
             .map { key -> ChunkRef(key.world, ChunkPos(key.chunkX, key.chunkZ)) }
     }

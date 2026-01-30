@@ -7,6 +7,7 @@ import net.minecraft.server.world.ServerWorld
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.Heightmap
 import net.minecraft.world.chunk.WorldChunk
+import org.slf4j.LoggerFactory
 
 /**
  * Consumes already-loaded chunks and extracts signals into the domain-owned [WorldMementoMap].
@@ -18,6 +19,8 @@ import net.minecraft.world.chunk.WorldChunk
 class ChunkMetadataConsumer(
     private val map: WorldMementoMap,
 ) {
+
+    private val log = LoggerFactory.getLogger("memento")
 
     fun onChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
         val pos: ChunkPos = chunk.pos
@@ -33,6 +36,12 @@ class ChunkMetadataConsumer(
         // If we already have signals for this chunk, we can treat this as a duplicate load.
         // We still mark the plan as completed so scanning can make forward progress.
         if (map.hasSignals(key)) {
+            log.debug(
+                "[SCAN] duplicate load dim={} chunk=({}, {}) (signals already present)",
+                world.registryKey.value.toString(),
+                pos.x,
+                pos.z,
+            )
             return
         }
 
@@ -43,7 +52,10 @@ class ChunkMetadataConsumer(
             hm.get(8, 8)
         }.getOrNull()
 
-        map.upsertSignals(
+        val beforeMissing = map.missingCount()
+        val beforeScanned = map.scannedChunks()
+
+        val firstAttach = map.upsertSignals(
             key = key,
             signals = ChunkSignals(
                 inhabitedTimeTicks = chunk.inhabitedTime,
@@ -52,6 +64,23 @@ class ChunkMetadataConsumer(
                 biomeId = null,
                 isSpawnChunk = false,
             )
+        )
+
+        val afterMissing = map.missingCount()
+        val afterScanned = map.scannedChunks()
+
+        // Telemetry: tie map mutation to convergence.
+        // This is intentionally INFO for now.
+        log.info(
+            "[SCAN] signals {} dim={} chunk=({}, {}) missing {}->{} scanned {}->{}",
+            if (firstAttach) "ATTACHED" else "UPDATED",
+            world.registryKey.value.toString(),
+            pos.x,
+            pos.z,
+            beforeMissing,
+            afterMissing,
+            beforeScanned,
+            afterScanned,
         )
     }
 }
