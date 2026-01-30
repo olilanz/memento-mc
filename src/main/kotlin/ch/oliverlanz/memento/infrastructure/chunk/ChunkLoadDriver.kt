@@ -18,16 +18,17 @@ import java.util.ArrayDeque
  * High-level behavior:
  * - Providers declare *intent* (desired chunks) via [ChunkLoadProvider.desiredChunks].
  * - The driver decides *when* to request loads by issuing and releasing chunk tickets.
- * - Politeness: when we observe chunk loads that were not caused by our tickets, we **yield** for a grace period.
+ * - Politeness: the driver "re-nices" proactive scanning by adapting its pacing based on observed
+ *   ticket latency (time from ticket issue → chunk available for forwarding).
  *
  * Important invariant:
  * - Never call into chunk loading APIs (e.g. getChunk / getTopY) inside engine chunk callbacks.
  *   We only enqueue and handle work on subsequent ticks.
  */
 class ChunkLoadDriver(
-    /** In driving mode, attempt at most one proactive load every N ticks. */
+    /** Minimum delay (ticks) between proactive ticket issues (politeness floor). */
     val activeLoadIntervalTicks: Int,
-    /** After observing an external load, yield for this many ticks. */
+    /** Maximum delay (ticks) between proactive ticket issues (politeness ceiling). */
     val passiveGraceTicks: Int,
     /** Safety valve for tickets that never result in a load callback. */
     val ticketMaxAgeTicks: Int
@@ -40,13 +41,19 @@ class ChunkLoadDriver(
 
     private var tickCounter: Long = 0
 
-    /**
-     * The most recent tick when we observed an *external* chunk load, i.e. a load that did not correspond
-     * to any outstanding driver-issued ticket.
-     *
-     * Null means: "no external load observed yet since attach" → not yielding by default.
-     */
-    private var lastExternalLoadTick: Long? = null
+    // ---------------------------------------------------------------------
+    // Adaptive pacing ("re-nice")
+    // ---------------------------------------------------------------------
+
+    /** EWMA of proactive ticket latency (ticks). Updated when a ticketed chunk becomes available. */
+    private var latencyEwmaTicks: Double = activeLoadIntervalTicks.toDouble()
+
+    /** Next tick at which we are allowed to issue a proactive ticket. */
+    private var nextProactiveIssueTick: Long = 0
+
+    /** EWMA smoothing: ewma = 0.7 * ewma + 0.3 * sample */
+    private val ewmaWeightOld: Double = 0.7
+    private val ewmaWeightNew: Double = 0.3
 
     /** Track outstanding proactive load tickets (one per chunk ref). */
     private data class OutstandingTicket(
@@ -112,7 +119,6 @@ class ChunkLoadDriver(
 
     // Observability / rate limiting
     private var lastStateLogTick: Long = 0
-    private var lastSuppressionLogTick: Long = 0
     private var lastForwardingLogTick: Long = 0
 
     /** Avoid spending unbounded time forwarding external load bursts in a single tick. */
@@ -123,7 +129,8 @@ class ChunkLoadDriver(
 
         // Reset runtime state (safe on server start).
         tickCounter = 0
-        lastExternalLoadTick = null
+        latencyEwmaTicks = activeLoadIntervalTicks.toDouble()
+        nextProactiveIssueTick = 0
 
         tickets.clear()
         recentlyExpiredTickets.clear()
@@ -131,7 +138,6 @@ class ChunkLoadDriver(
         pendingUnloads.clear()
 
         lastStateLogTick = 0
-        lastSuppressionLogTick = 0
         lastForwardingLogTick = 0
     }
 
@@ -154,7 +160,10 @@ class ChunkLoadDriver(
         pendingLoads.clear()
         pendingUnloads.clear()
 
-        lastExternalLoadTick = null
+        // Reset adaptive pacing state.
+        tickCounter = 0
+        latencyEwmaTicks = activeLoadIntervalTicks.toDouble()
+        nextProactiveIssueTick = 0
     }
 
     fun registerProvider(provider: ChunkLoadProvider) {
@@ -203,8 +212,8 @@ class ChunkLoadDriver(
                 proactiveNeighbourhoodRadiusChunks,
             )
         } else {
-            // External load (best-effort): enter yielding mode for a grace window.
-            lastExternalLoadTick = tickCounter
+            // External load. We do *not* treat this as a suppression signal.
+            // Politeness is handled by adaptive pacing based on observed ticket latency.
             log.info("[DRIVER] observed external load dim={} pos={}", ref.dimension.value, ref.pos)
         }
 
@@ -261,10 +270,7 @@ class ChunkLoadDriver(
         val s = server ?: return
         tickCounter++
 
-        val externalAge: Long? = lastExternalLoadTick?.let { tickCounter - it }
-        val isYielding: Boolean = externalAge?.let { it <= passiveGraceTicks } ?: false
-
-        logState(isYielding, externalAge)
+        logState()
 
         // 1) Forward engine signals to listeners (outside engine callbacks).
         forwardPendingLoads(s)
@@ -275,46 +281,29 @@ class ChunkLoadDriver(
 
         pruneRecentlyExpiredTickets()
 
-        // 3) If yielding, suppress proactive ticket issuance.
-        if (isYielding) {
-            logSuppressionIfThereIsIntent(externalAge)
-            return
-        }
 
-        // Driving mode: request at most one proactive load per interval, and keep ticket count low.
-        if ((tickCounter % activeLoadIntervalTicks.toLong()) != 0L) return
+        // 3) Proactive ticket issuance (polite, adaptive pacing).
+        //    - never more than one outstanding ticket at a time
+        //    - respect nextProactiveIssueTick (computed from EWMA latency)
         if (tickets.isNotEmpty()) return
+        if (tickCounter < nextProactiveIssueTick) return
 
         issueNextTicketIfAny(s)
     }
 
-    private fun logState(isYielding: Boolean, externalAge: Long?) {
+    private fun logState() {
         // State log (rate limited).
         if ((tickCounter - lastStateLogTick) < 100) return
         lastStateLogTick = tickCounter
 
         log.info(
-            "[DRIVER] yielding={} tick={} externalAge={} graceTicks={} outstandingTickets={} pendingLoads={}",
-            isYielding,
+            "[DRIVER] tick={} outstandingTickets={} pendingLoads={} nextIssueInTicks={} latencyEwmaTicks={} minDelayTicks={} maxDelayTicks={}",
             tickCounter,
-            externalEnsurePrintable(externalAge),
-            passiveGraceTicks,
             tickets.size,
-            pendingLoads.size
-        )
-    }
-
-    private fun logSuppressionIfThereIsIntent(externalAge: Long?) {
-        // If providers want work but we are yielding, explain it (rate limited).
-        if ((tickCounter - lastSuppressionLogTick) < 100) return
-
-        val hasIntent = providers.asSequence().flatMap { it.desiredChunks() }.iterator().hasNext()
-        if (!hasIntent) return
-
-        lastSuppressionLogTick = tickCounter
-        log.info(
-            "[DRIVER] suppressing proactive loads reason=YIELDING externalAge={} graceTicks={}",
-            externalEnsurePrintable(externalAge),
+            pendingLoads.size,
+            kotlin.math.max(0, nextProactiveIssueTick - tickCounter),
+            String.format("%.1f", latencyEwmaTicks),
+            activeLoadIntervalTicks,
             passiveGraceTicks
         )
     }
@@ -382,9 +371,25 @@ class ChunkLoadDriver(
 
             // If this was a proactive load, release the ticket *after* forwarding.
             if (tickets.containsKey(ref)) {
+                val issuedAt = tickets[ref]?.issuedAtTick ?: tickCounter
+                val observedLatencyTicks = tickCounter - issuedAt
+
+                // Update adaptive pacing based on observed latency.
+                updateLatencyEwma(observedLatencyTicks)
+                val nextDelayTicks = computeNextDelayTicks()
+                nextProactiveIssueTick = tickCounter + nextDelayTicks
+
                 world.chunkManager.removeTicket(ChunkTicketType.UNKNOWN, ref.pos, /* radius */ 1)
                 tickets.remove(ref)
-                log.info("[DRIVER] released ticket after forward dim={} pos={}", ref.dimension.value, ref.pos)
+
+                log.info(
+                    "[DRIVER] released ticket after forward dim={} pos={} latencyTicks={} ewmaTicks={} nextDelayTicks={}",
+                    ref.dimension.value,
+                    ref.pos,
+                    observedLatencyTicks,
+                    String.format("%.1f", latencyEwmaTicks),
+                    nextDelayTicks
+                )
             }
         }
 
@@ -427,6 +432,13 @@ class ChunkLoadDriver(
             world.chunkManager.removeTicket(ChunkTicketType.UNKNOWN, ref.pos, /* radius */ 1)
             tickets.remove(ref)
             recentlyExpiredTickets[ref] = now
+
+            // Expiry indicates a very high latency sample. We treat it as a signal to slow down
+            // proactive scanning for a while (politeness). This is safe because providers will
+            // continue to declare intent until the chunk is actually scanned.
+            updateLatencyEwma(ticketMaxAgeTicks.toLong())
+            nextProactiveIssueTick = tickCounter + computeNextDelayTicks()
+
             log.warn(
                 "[DRIVER] ticket expired dim={} pos={} ageTicks={} maxAgeTicks={}",
                 ref.dimension.value,
@@ -444,6 +456,23 @@ class ChunkLoadDriver(
         val window = ticketMaxAgeTicks.toLong()
         val now = tickCounter
         recentlyExpiredTickets.entries.removeIf { (_, expiredAt) -> (now - expiredAt) > window }
+    }
+
+    // ---------------------------------------------------------------------
+    // Adaptive pacing helpers
+    // ---------------------------------------------------------------------
+
+    private fun updateLatencyEwma(sampleTicks: Long) {
+        // Clamp the sample to avoid numeric blow-ups if something goes deeply wrong.
+        val clampedSample = sampleTicks.coerceAtLeast(1).coerceAtMost(ticketMaxAgeTicks.toLong())
+        latencyEwmaTicks = (ewmaWeightOld * latencyEwmaTicks) + (ewmaWeightNew * clampedSample.toDouble())
+    }
+
+    private fun computeNextDelayTicks(): Long {
+        val minDelay = activeLoadIntervalTicks.coerceAtLeast(1)
+        val maxDelay = passiveGraceTicks.coerceAtLeast(minDelay)
+        val proposed = kotlin.math.round(latencyEwmaTicks).toLong().coerceAtLeast(1)
+        return proposed.coerceIn(minDelay.toLong(), maxDelay.toLong())
     }
 
     private fun issueNextTicketIfAny(server: MinecraftServer) {
@@ -473,6 +502,4 @@ class ChunkLoadDriver(
         log.info("[DRIVER] ticket issued dim={} pos={}", next.dimension.value, next.pos)
     }
 
-    private fun externalEnsurePrintable(externalAge: Long?): Any =
-        externalAge ?: "none"
 }
