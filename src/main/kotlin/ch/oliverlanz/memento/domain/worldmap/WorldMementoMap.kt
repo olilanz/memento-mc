@@ -47,13 +47,15 @@ class WorldMementoMap {
      * - If the chunk was not previously known, it will be added.
      * - If this is the first time signals are attached, scan progress advances.
      */
-    fun upsertSignals(key: ChunkKey, signals: ChunkSignals) {
+    fun upsertSignals(key: ChunkKey, signals: ChunkSignals): Boolean {
         val record = records.computeIfAbsent(key) { ChunkRecord() }
         val previous = record.signals
         record.signals = signals
-        if (previous == null) {
+        val firstAttach = (previous == null)
+        if (firstAttach) {
             scannedCount.incrementAndGet()
         }
+        return firstAttach
     }
 
     /** Total number of existing chunks in the map. */
@@ -61,6 +63,9 @@ class WorldMementoMap {
 
     /** Number of chunks with signals attached (i.e. scanned). */
     fun scannedChunks(): Int = scannedCount.get()
+
+    /** Number of chunks still missing signals (best-effort, monotonic under normal use). */
+    fun missingCount(): Int = (records.size - scannedCount.get()).coerceAtLeast(0)
 
     fun isComplete(): Boolean = records.isNotEmpty() && scannedCount.get() >= records.size
 
