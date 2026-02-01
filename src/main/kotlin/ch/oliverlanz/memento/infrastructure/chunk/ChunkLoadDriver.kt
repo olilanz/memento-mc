@@ -21,7 +21,7 @@ import kotlin.math.round
  *
  * Key properties:
  * - Single-flight proactive loading (one ticket at a time)
- * - Renewal-first via provider registration order
+ * - Renewal-first via explicit source selection (renewal -> scan)
  * - Reactive correctness (signal != availability)
  * - No ticket expiry
  * - Polite, adaptive pressure via EWMA only
@@ -47,7 +47,8 @@ class ChunkLoadDriver {
 
     private val log = LoggerFactory.getLogger("memento")
 
-    private val providers = mutableListOf<ChunkLoadProvider>()
+    private var renewalProvider: ChunkLoadProvider? = null
+    private var scanProvider: ChunkLoadProvider? = null
     private val listeners = mutableListOf<ChunkAvailabilityListener>()
     private var server: MinecraftServer? = null
 
@@ -120,8 +121,22 @@ class ChunkLoadDriver {
         pendingUnloads.clear()
     }
 
-    fun registerProvider(provider: ChunkLoadProvider) {
-        providers += provider
+    /**
+     * Register the renewal request source.
+     *
+     * Renewal must be able to operate independently of scanning.
+     */
+    fun registerRenewalProvider(provider: ChunkLoadProvider) {
+        renewalProvider = provider
+    }
+
+    /**
+     * Register the scanner request source.
+     *
+     * Scanning must be able to operate independently of renewal.
+     */
+    fun registerScanProvider(provider: ChunkLoadProvider) {
+        scanProvider = provider
     }
 
     fun registerConsumer(listener: ChunkAvailabilityListener) {
@@ -264,10 +279,10 @@ class ChunkLoadDriver {
      * ------------------------------------------------------------------ */
 
     private fun issueNextProactiveTicketIfAny(server: MinecraftServer) {
-        val next = providers.asSequence()
-            .flatMap { it.desiredChunks() }
-            .firstOrNull()
-            ?: return
+        val next =
+            renewalProvider?.desiredChunks()?.firstOrNull()
+                ?: scanProvider?.desiredChunks()?.firstOrNull()
+                ?: return
 
         val world = server.getWorld(next.dimension) ?: return
 
