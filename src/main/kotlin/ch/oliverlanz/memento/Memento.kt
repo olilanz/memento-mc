@@ -1,9 +1,12 @@
 package ch.oliverlanz.memento
 
 import ch.oliverlanz.memento.application.CommandHandlers
-import ch.oliverlanz.memento.application.renewal.ChunkLoadScheduler
+import ch.oliverlanz.memento.infrastructure.chunk.ChunkAvailabilityListener
+import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadDriver
+import ch.oliverlanz.memento.application.renewal.RenewalChunkLoadProvider
 import ch.oliverlanz.memento.application.renewal.RenewalInitialObserver
 import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge
+import ch.oliverlanz.memento.application.renewal.WitherstoneConsumptionBridge
 import ch.oliverlanz.memento.application.stone.StoneMaturityTimeBridge
 import ch.oliverlanz.memento.application.time.GameTimeTracker
 import ch.oliverlanz.memento.application.visualization.EffectsHost
@@ -14,10 +17,9 @@ import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerLogging
 import ch.oliverlanz.memento.domain.stones.StoneTopologyHooks
-import ch.oliverlanz.memento.infrastructure.MementoConstants
+import ch.oliverlanz.memento.MementoConstants
 import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
 import net.fabricmc.api.ModInitializer
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents
 import net.minecraft.server.MinecraftServer
@@ -32,19 +34,18 @@ object Memento : ModInitializer {
 
     private var runController: MementoRunController? = null
 
-    // Renewal wiring (application/infrastructure)
+    // Renewal wiring (application / infrastructure)
     private var renewalInitialObserver: RenewalInitialObserver? = null
-    private var chunkLoadScheduler: ChunkLoadScheduler? = null
+    private var renewalChunkLoadProvider: RenewalChunkLoadProvider? = null
+    private var chunkLoadDriver: ChunkLoadDriver? = null
 
-    private var renewalTickCounter: Int = 0
-
-    // Single listener to fan out RenewalTracker domain events to application/infrastructure components.
+    // Single listener to fan out RenewalTracker domain events
     private val renewalEventListener: (RenewalEvent) -> Unit = { e ->
         renewalInitialObserver?.onRenewalEvent(e)
-        chunkLoadScheduler?.onRenewalEvent(e)
+        renewalChunkLoadProvider?.onRenewalEvent(e)
         RenewalRegenerationBridge.onRenewalEvent(e)
+        WitherstoneConsumptionBridge.onRenewalEvent(e)
 
-        // EffectsHost only cares about batch lifecycle transitions.
         if (e is RenewalBatchLifecycleTransition) {
             effectsHost?.onRenewalEvent(e)
         }
@@ -53,32 +54,46 @@ object Memento : ModInitializer {
     override fun onInitialize() {
         log.info("Initializing Memento")
 
-        // Register /memento command tree.
         Commands.register()
 
-        // Chunk observations -> RenewalTracker
-        // (Domain remains observational; it only reacts to these hooks.)
-        ServerChunkEvents.CHUNK_LOAD.register { world, chunk ->
-            RenewalTrackerHooks.onChunkLoaded(world.registryKey, chunk.pos)
-        }
-        ServerChunkEvents.CHUNK_UNLOAD.register { world, chunk ->
-            RenewalTrackerHooks.onChunkUnloaded(world.registryKey, chunk.pos)
-        }
+        // The ChunkLoadDriver owns the engine event subscriptions.
+        // (We still call the installation from here, but the driver is the only class
+        // that knows about / handles ServerChunkEvents.)
+        ChunkLoadDriver.installEngineHooks()
 
-        // Attach server-scoped components.
         ServerLifecycleEvents.SERVER_STARTED.register { server: MinecraftServer ->
+
             // ------------------------------------------------------------
             // Wiring order matters.
-            // All observers must be attached BEFORE any domain activity can emit events.
-            // Startup must not be a separate semantic code path.
             // ------------------------------------------------------------
 
-            // Renewal: logging + observational seeding + paced execution.
             RenewalTrackerLogging.attachOnce()
             renewalInitialObserver = RenewalInitialObserver().also { it.attach(server) }
-            chunkLoadScheduler = ChunkLoadScheduler(chunksPerTick = 1).also { it.attach(server) }
 
-            // Visualization host must be attached before any domain activity can emit events.
+            // Renewal provider (highest priority)
+            renewalChunkLoadProvider = RenewalChunkLoadProvider()
+
+            chunkLoadDriver = ChunkLoadDriver().also {
+                it.attach(server)
+
+                // Provider precedence: renewal first.
+                it.registerProvider(renewalChunkLoadProvider!!)
+
+                // Single fan-out point for chunk availability.
+                it.registerConsumer(object : ChunkAvailabilityListener {
+                    override fun onChunkLoaded(world: net.minecraft.server.world.ServerWorld, chunk: net.minecraft.world.chunk.WorldChunk) {
+                        ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks.onChunkLoaded(world.registryKey, chunk.pos)
+                    }
+
+                    override fun onChunkUnloaded(world: net.minecraft.server.world.ServerWorld, pos: net.minecraft.util.math.ChunkPos) {
+                        ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks.onChunkUnloaded(world.registryKey, pos)
+                    }
+                })
+
+                // Renewal provider consumes loads to dedupe intent.
+                it.registerConsumer(renewalChunkLoadProvider!!)
+            }
+
             effectsHost = EffectsHost(server)
             CommandHandlers.attachVisualizationEngine(effectsHost!!)
 
@@ -87,32 +102,28 @@ object Memento : ModInitializer {
                 CommandHandlers.attachRunController(it)
             }
 
-            // Fan out tracker events.
+            // World scanner provider (lower priority)
+            chunkLoadDriver?.registerProvider(runController!!)
+            chunkLoadDriver?.registerConsumer(runController!!)
+
+            // Fan out domain events
             RenewalTracker.subscribe(renewalEventListener)
 
-            // Application wiring that reacts to normal domain events.
             WitherstoneRenewalBridge.attach()
-
-            // Domain startup (loading stones must behave like normal creation).
             StoneTopologyHooks.onServerStarted(server)
-
-            // Drive stone maturity from semantic day events.
             StoneMaturityTimeBridge.attach()
-
             gameTimeTracker.attach(server)
-
-            renewalTickCounter = 0
         }
 
-        // Detach cleanly.
         ServerLifecycleEvents.SERVER_STOPPING.register {
-            gameTimeTracker.detach()
 
-            // Renewal detach first (avoid consuming stones while topology is stopping).
+            gameTimeTracker.detach()
             RenewalTracker.unsubscribe(renewalEventListener)
 
-            chunkLoadScheduler?.detach()
-            chunkLoadScheduler = null
+            chunkLoadDriver?.detach()
+            chunkLoadDriver = null
+
+            renewalChunkLoadProvider = null
 
             renewalInitialObserver?.detach()
             renewalInitialObserver = null
@@ -126,25 +137,18 @@ object Memento : ModInitializer {
 
             CommandHandlers.detachVisualizationEngine()
             CommandHandlers.detachRunController()
+
             runController?.detach()
             runController = null
+
             effectsHost = null
         }
 
-        // Transport tick only (NO direct domain logic here).
-        // (Application/infrastructure may still need a paced tick.)
+        // Transport tick only
         ServerTickEvents.END_SERVER_TICK.register {
             gameTimeTracker.tick()
-
             runController?.tick()
-
-            val scheduler = chunkLoadScheduler
-            if (scheduler != null) {
-                renewalTickCounter++
-                if (renewalTickCounter % MementoConstants.REGENERATION_CHUNK_INTERVAL_TICKS == 0) {
-                    scheduler.tick()
-                }
-            }
+            chunkLoadDriver?.tick()
         }
     }
 }

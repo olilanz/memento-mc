@@ -1,7 +1,7 @@
 package ch.oliverlanz.memento.application.stone
 
 import ch.oliverlanz.memento.domain.stones.StoneTopologyHooks
-import ch.oliverlanz.memento.infrastructure.MementoConstants
+import ch.oliverlanz.memento.MementoConstants
 import net.minecraft.server.MinecraftServer
 
 /**

@@ -6,7 +6,7 @@ import ch.oliverlanz.memento.domain.events.StoneLifecycleTransition
 import ch.oliverlanz.memento.domain.events.StoneLifecycleTrigger
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrigger
-import ch.oliverlanz.memento.infrastructure.MementoConstants
+import ch.oliverlanz.memento.MementoConstants
 import ch.oliverlanz.memento.infrastructure.StoneTopologyPersistence
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
@@ -373,6 +373,12 @@ object StoneTopology {
         )
 
         stones.remove(stoneName)
+
+        log.info(
+            "[STONE] consumed witherstone='{}' trigger={}",
+            stoneName,
+            StoneLifecycleTrigger.RENEWAL_COMPLETED,
+        )
 
         rebuildInfluenceTree()
         persist()
