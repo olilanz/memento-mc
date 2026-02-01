@@ -1,11 +1,11 @@
 package ch.oliverlanz.memento.infrastructure.chunk
 
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ChunkTicketType
 import net.minecraft.server.world.ServerWorld
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.chunk.WorldChunk
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents
 import org.slf4j.LoggerFactory
 import java.util.ArrayDeque
 
@@ -20,7 +20,7 @@ import java.util.ArrayDeque
  * - Providers declare *intent* (desired chunks) via [ChunkLoadProvider.desiredChunks].
  * - The driver decides *when* to request loads by issuing and releasing chunk tickets.
  * - Politeness: the driver "re-nices" proactive scanning by adapting its pacing based on observed
- *   ticket latency (time from ticket issue → chunk available for forwarding).
+ *   proactive ticket latency (time from ticket issue → chunk available for forwarding).
  *
  * Important invariant:
  * - Never call into chunk loading APIs (e.g. getChunk / getTopY) inside engine chunk callbacks.
@@ -31,19 +31,15 @@ class ChunkLoadDriver(
     val activeLoadIntervalTicks: Int,
     /** Maximum delay (ticks) between proactive ticket issues (politeness ceiling). */
     val passiveGraceTicks: Int,
-    /** Safety valve for tickets that never result in a load callback. */
-    val ticketMaxAgeTicks: Int,
     /**
      * If we receive an engine "chunk loaded" signal but cannot yet obtain a [WorldChunk],
-     * we "re-arm" by issuing a short-lived ticket after this delay.
+     * we may "re-arm" by issuing a short-lived ticket after this delay.
      */
     val rearmDelayTicks: Int = 10,
     /** Base backoff (ticks) between re-arm attempts for the same pending load. */
     val rearmBackoffTicks: Int = 20,
-    /** Maximum number of re-arm attempts for a pending load before giving up. */
+    /** Maximum number of re-arm attempts for a pending load before we stop trying to help. */
     val rearmMaxAttempts: Int = 3,
-    /** Absolute maximum age (ticks) we keep a pending load signal around. */
-    val pendingMaxAgeTicks: Int = 200
 ) {
     companion object {
         // Fabric events are global and cannot be unregistered. We keep a single active instance pointer.
@@ -82,7 +78,7 @@ class ChunkLoadDriver(
     // Adaptive pacing ("re-nice")
     // ---------------------------------------------------------------------
 
-    /** EWMA of proactive ticket latency (ticks). Updated when a ticketed chunk becomes available. */
+    /** EWMA of proactive ticket latency (ticks). Updated when a proactively ticketed chunk becomes available. */
     private var latencyEwmaTicks: Double = activeLoadIntervalTicks.toDouble()
 
     /** Next tick at which we are allowed to issue a proactive ticket. */
@@ -92,9 +88,20 @@ class ChunkLoadDriver(
     private val ewmaWeightOld: Double = 0.7
     private val ewmaWeightNew: Double = 0.3
 
-    /** Track the single outstanding proactive load ticket (one per chunk ref). */
-    private data class OutstandingTicket(val issuedAtTick: Long)
+    private enum class TicketKind {
+        /** Proactive ticket issued to satisfy provider intent (renewal or scanning). */
+        PROACTIVE,
+        /** Ticket issued only to help materialize a chunk after an observed engine load signal. */
+        REARM,
+    }
 
+    /** Track the single outstanding ticket (one per chunk ref). */
+    private data class OutstandingTicket(
+        val issuedAtTick: Long,
+        val kind: TicketKind,
+    )
+
+    /** Single-flight across all providers: at most one ticket is held at any time. */
     private val tickets = mutableMapOf<ChunkRef, OutstandingTicket>()
 
     private data class PendingLoad(
@@ -104,7 +111,7 @@ class ChunkLoadDriver(
         var nextRearmTick: Long,
         /** How many re-arm attempts we've made so far for this pending load. */
         var rearmAttempts: Int = 0,
-        /** Last tick we emitted an INFO/WARN about this pending item (rate limiting). */
+        /** Last tick we emitted a diagnostic log about this pending item (rate limiting). */
         var lastLogTick: Long = 0,
     )
 
@@ -113,15 +120,8 @@ class ChunkLoadDriver(
      *
      * We treat engine callbacks as **signals only**. In [tick], we try to resolve whether the chunk
      * is actually present and only then forward it to listeners.
-     *
-     * IMPORTANT:
-     * - We may need to retry resolution for a few ticks because the engine can emit load signals
-     *   before the chunk becomes retrievable via the chunk manager.
-     * - For proactive loads, we retry until the associated ticket expires.
      */
     private val pendingLoads: LinkedHashMap<ChunkRef, PendingLoad> = LinkedHashMap()
-
-    // Pending load age is bounded via [pendingMaxAgeTicks] (constructor parameter).
 
     /** Deferred unload notifications. */
     private val pendingUnloads: ArrayDeque<Pair<ServerWorld, ChunkPos>> = ArrayDeque()
@@ -199,7 +199,7 @@ class ChunkLoadDriver(
 
         // We no longer distinguish between "external" and "internal" loads.
         // All observed loads are simply opportunities to forward availability and harvest metadata.
-        log.info("[DRIVER] observed load signal dim={} pos={}", ref.dimension.value, ref.pos)
+        log.debug("[DRIVER] observed load signal dim={} pos={}", ref.dimension.value, ref.pos)
 
         // Defer resolution + forwarding (prevents re-entrancy / lock hazards).
         // Deduplicate: the engine may signal the same chunk multiple times.
@@ -211,8 +211,6 @@ class ChunkLoadDriver(
             ),
         )
     }
-
-    // Neighbourhood heuristics removed: we no longer infer intent from proximity.
 
     /**
      * Sole engine entrypoint for chunk unload events.
@@ -229,8 +227,7 @@ class ChunkLoadDriver(
      * Order of operations:
      * 1) Resolve + forward pending load signals (loads/unloads) safely outside engine callbacks.
      *    (If a chunk is not yet retrievable, we keep it pending and retry.)
-     * 2) Expire stuck tickets (safety valve).
-     * 3) Consider issuing a new proactive ticket based on provider intent.
+     * 2) Consider issuing a new proactive ticket based on provider intent.
      */
     fun tick() {
         val s = server ?: return
@@ -242,12 +239,8 @@ class ChunkLoadDriver(
         forwardPendingLoads(s)
         forwardPendingUnloads()
 
-        // 2) Expire stuck tickets (safety valve).
-        expireTickets(s)
-
-
-        // 3) Proactive ticket issuance (polite, adaptive pacing).
-        //    - never more than one outstanding ticket at a time
+        // 2) Proactive ticket issuance (polite, adaptive pacing).
+        //    - single-flight across all providers
         //    - respect nextProactiveIssueTick (computed from EWMA latency)
         if (tickets.isNotEmpty()) return
         if (tickCounter < nextProactiveIssueTick) return
@@ -260,7 +253,7 @@ class ChunkLoadDriver(
         if ((tickCounter - lastStateLogTick) < 100) return
         lastStateLogTick = tickCounter
 
-        log.info(
+        log.debug(
             "[DRIVER] tick={} outstandingTickets={} pendingLoads={} nextIssueInTicks={} latencyEwmaTicks={} minDelayTicks={} maxDelayTicks={}",
             tickCounter,
             tickets.size,
@@ -299,18 +292,18 @@ class ChunkLoadDriver(
                 val hasTicket = tickets.containsKey(ref)
                 val age = tickCounter - pending.firstSeenTick
 
-                // "Re-arm" external load signals that race ahead of chunk presence.
+                // "Re-arm" load signals that race ahead of chunk presence.
                 // If a chunk should be loaded, issuing a short-lived ticket helps the engine
                 // actually materialize it so we can forward the load event deterministically.
                 if (!hasTicket && tickCounter >= pending.nextRearmTick && pending.rearmAttempts < rearmMaxAttempts) {
                     world.chunkManager.addTicket(ChunkTicketType.UNKNOWN, ref.pos, 1)
-                    tickets.putIfAbsent(ref, OutstandingTicket(issuedAtTick = tickCounter))
+                    tickets.putIfAbsent(ref, OutstandingTicket(issuedAtTick = tickCounter, kind = TicketKind.REARM))
 
                     pending.rearmAttempts++
                     val backoffFactor = 1L shl (pending.rearmAttempts - 1)
                     pending.nextRearmTick = tickCounter + (rearmBackoffTicks * backoffFactor).toInt().coerceAtLeast(1)
 
-                    log.info(
+                    log.debug(
                         "[DRIVER] re-armed pending load via ticket dim={} pos={} ageTicks={} attempt={}/{} nextRearmTick={}",
                         ref.dimension.value,
                         ref.pos,
@@ -321,38 +314,21 @@ class ChunkLoadDriver(
                     )
                 }
 
-                // Do not retain pending entries forever; keep a single, easy-to-diagnose safety valve.
-                val shouldDrop = (age >= pendingMaxAgeTicks)
-                if (shouldDrop) {
-                    if ((tickCounter - pending.lastLogTick) >= 100) {
-                        pending.lastLogTick = tickCounter
-                        log.info(
-                            "[DRIVER] pending load dropped; chunk never became present dim={} pos={} ageTicks={} hasTicket={} rearmAttempts={}/{}",
-                            ref.dimension.value,
-                            ref.pos,
-                            age,
-                            tickets.containsKey(ref),
-                            pending.rearmAttempts,
-                            rearmMaxAttempts
-                        )
-                    }
-                    toRemove += ref
-                } else {
-                    // Keep pending; occasionally explain why we are still waiting.
-                    if ((tickCounter - pending.lastLogTick) >= 100) {
-                        pending.lastLogTick = tickCounter
-                        log.info(
-                            "[DRIVER] pending load not yet present; will retry dim={} pos={} ageTicks={} hasTicket={} rearmAttempts={}/{} nextRearmTick={}",
-                            ref.dimension.value,
-                            ref.pos,
-                            age,
-                            tickets.containsKey(ref),
-                            pending.rearmAttempts,
-                            rearmMaxAttempts,
-                            pending.nextRearmTick
-                        )
-                    }
+                // Keep pending indefinitely (no time-based expiry). Periodically explain why we are waiting.
+                if ((tickCounter - pending.lastLogTick) >= 100) {
+                    pending.lastLogTick = tickCounter
+                    log.debug(
+                        "[DRIVER] pending load not yet present; will retry dim={} pos={} ageTicks={} hasTicket={} rearmAttempts={}/{} nextRearmTick={}",
+                        ref.dimension.value,
+                        ref.pos,
+                        age,
+                        tickets.containsKey(ref),
+                        pending.rearmAttempts,
+                        rearmMaxAttempts,
+                        pending.nextRearmTick
+                    )
                 }
+
                 continue
             }
 
@@ -361,27 +337,35 @@ class ChunkLoadDriver(
             forwarded++
             toRemove += ref
 
-            // If this was a proactive load, release the ticket *after* forwarding.
-            if (tickets.containsKey(ref)) {
-                val issuedAt = tickets[ref]?.issuedAtTick ?: tickCounter
-                val observedLatencyTicks = tickCounter - issuedAt
-
-                // Update adaptive pacing based on observed latency.
-                updateLatencyEwma(observedLatencyTicks)
-                val nextDelayTicks = computeNextDelayTicks()
-                nextProactiveIssueTick = tickCounter + nextDelayTicks
-
+            // If this chunk has an outstanding ticket, release it *after* forwarding.
+            val ticket = tickets[ref]
+            if (ticket != null) {
                 world.chunkManager.removeTicket(ChunkTicketType.UNKNOWN, ref.pos, /* radius */ 1)
                 tickets.remove(ref)
 
-                log.info(
-                    "[DRIVER] released ticket after forward dim={} pos={} latencyTicks={} ewmaTicks={} nextDelayTicks={}",
-                    ref.dimension.value,
-                    ref.pos,
-                    observedLatencyTicks,
-                    String.format("%.1f", latencyEwmaTicks),
-                    nextDelayTicks
-                )
+                if (ticket.kind == TicketKind.PROACTIVE) {
+                    val observedLatencyTicks = tickCounter - ticket.issuedAtTick
+
+                    // Update adaptive pacing based on observed latency.
+                    updateLatencyEwma(observedLatencyTicks)
+                    val nextDelayTicks = computeNextDelayTicks()
+                    nextProactiveIssueTick = tickCounter + nextDelayTicks
+
+                    log.debug(
+                        "[DRIVER] released proactive ticket after forward dim={} pos={} latencyTicks={} ewmaTicks={} nextDelayTicks={}",
+                        ref.dimension.value,
+                        ref.pos,
+                        observedLatencyTicks,
+                        String.format("%.1f", latencyEwmaTicks),
+                        nextDelayTicks
+                    )
+                } else {
+                    log.debug(
+                        "[DRIVER] released rearm ticket after forward dim={} pos={}",
+                        ref.dimension.value,
+                        ref.pos,
+                    )
+                }
             }
         }
 
@@ -391,7 +375,7 @@ class ChunkLoadDriver(
         if ((tickCounter - lastForwardingLogTick) >= 100) {
             lastForwardingLogTick = tickCounter
             if (pendingLoads.isNotEmpty()) {
-                log.info(
+                log.debug(
                     "[DRIVER] forwardedLoads={} remainingPendingLoads={}",
                     forwarded,
                     pendingLoads.size
@@ -408,47 +392,15 @@ class ChunkLoadDriver(
         }
     }
 
-    private fun expireTickets(server: MinecraftServer) {
-        if (tickets.isEmpty()) return
-
-        val now = tickCounter
-        val expired = tickets.entries
-            .filter { (_, t) -> (now - t.issuedAtTick) >= ticketMaxAgeTicks }
-            .map { it.key }
-
-        if (expired.isEmpty()) return
-
-        for (ref in expired) {
-            val world = server.getWorld(ref.dimension) ?: continue
-            val issuedAt = tickets[ref]?.issuedAtTick ?: now
-            world.chunkManager.removeTicket(ChunkTicketType.UNKNOWN, ref.pos, /* radius */ 1)
-            tickets.remove(ref)
-
-            // Expiry indicates a very high latency sample. Treat it as backpressure.
-            // Providers will continue to declare intent until the chunk is eventually scanned.
-            updateLatencyEwma(ticketMaxAgeTicks.toLong())
-            val nextDelayTicks = computeNextDelayTicks()
-            nextProactiveIssueTick = tickCounter + nextDelayTicks
-
-            log.warn(
-                "[DRIVER] ticket expired; requeue via providers dim={} pos={} ageTicks={} maxAgeTicks={} ewmaTicks={} nextDelayTicks={}",
-                ref.dimension.value,
-                ref.pos,
-                now - issuedAt,
-                ticketMaxAgeTicks,
-                String.format("%.1f", latencyEwmaTicks),
-                nextDelayTicks,
-            )
-        }
-    }
-
     // ---------------------------------------------------------------------
     // Adaptive pacing helpers
     // ---------------------------------------------------------------------
 
     private fun updateLatencyEwma(sampleTicks: Long) {
-        // Clamp the sample to avoid numeric blow-ups if something goes deeply wrong.
-        val clampedSample = sampleTicks.coerceAtLeast(1).coerceAtMost(ticketMaxAgeTicks.toLong())
+        // Clamp to avoid numeric blow-ups if something goes deeply wrong.
+        // We bound to a multiple of the configured maximum delay to keep EWMA stable.
+        val clampMax = (passiveGraceTicks.coerceAtLeast(activeLoadIntervalTicks).toLong() * 10L).coerceAtLeast(1L)
+        val clampedSample = sampleTicks.coerceAtLeast(1L).coerceAtMost(clampMax)
         latencyEwmaTicks = (ewmaWeightOld * latencyEwmaTicks) + (ewmaWeightNew * clampedSample.toDouble())
     }
 
@@ -466,15 +418,15 @@ class ChunkLoadDriver(
             .firstOrNull()
             ?: return
 
-        // If we already have a ticket for this chunk, do nothing (should not happen because we keep tickets low).
+        // Single-flight: if we already have a ticket for this chunk, do nothing (should not happen).
         if (tickets.containsKey(next)) return
 
         val world = server.getWorld(next.dimension) ?: return
 
-        // If already loaded, emit an "artificial" load signal by enqueueing it (do NOT count as external).
+        // If already loaded, enqueue an "artificial" load signal (no ticket, no pacing impact).
         val alreadyLoaded = world.chunkManager.getWorldChunk(next.pos.x, next.pos.z, /* create = */ false)
         if (alreadyLoaded != null) {
-            log.info("[DRIVER] chunk already loaded; enqueue artificial availability dim={} pos={}", next.dimension.value, next.pos)
+            log.debug("[DRIVER] chunk already loaded; enqueue artificial availability dim={} pos={}", next.dimension.value, next.pos)
             pendingLoads.putIfAbsent(
                 next,
                 PendingLoad(
@@ -487,9 +439,9 @@ class ChunkLoadDriver(
 
         // Issue ticket. We will release it after we observe the load signal and forward availability.
         world.chunkManager.addTicket(ChunkTicketType.UNKNOWN, next.pos, /* radius */ 1)
-        tickets[next] = OutstandingTicket(issuedAtTick = tickCounter)
+        tickets[next] = OutstandingTicket(issuedAtTick = tickCounter, kind = TicketKind.PROACTIVE)
 
-        log.info("[DRIVER] ticket issued dim={} pos={}", next.dimension.value, next.pos)
+        log.debug("[DRIVER] proactive ticket issued dim={} pos={}", next.dimension.value, next.pos)
     }
 
 }

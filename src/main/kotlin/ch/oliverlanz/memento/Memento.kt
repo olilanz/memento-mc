@@ -76,7 +76,6 @@ object Memento : ModInitializer {
             chunkLoadDriver = ChunkLoadDriver(
                 activeLoadIntervalTicks = MementoConstants.CHUNK_LOAD_ACTIVE_INTERVAL_TICKS,
                 passiveGraceTicks = MementoConstants.CHUNK_LOAD_PASSIVE_GRACE_TICKS,
-                ticketMaxAgeTicks = MementoConstants.CHUNK_LOAD_TICKET_MAX_AGE_TICKS,
             ).also {
                 it.attach(server)
 
