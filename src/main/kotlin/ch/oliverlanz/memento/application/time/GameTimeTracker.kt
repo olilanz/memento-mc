@@ -2,7 +2,7 @@ package ch.oliverlanz.memento.application.time
 
 import ch.oliverlanz.memento.domain.events.GameDayAdvanced
 import ch.oliverlanz.memento.domain.events.GameTimeDomainEvents
-import ch.oliverlanz.memento.infrastructure.MementoConstants
+import ch.oliverlanz.memento.MementoConstants
 import net.minecraft.server.MinecraftServer
 import org.slf4j.LoggerFactory
 import kotlin.math.max

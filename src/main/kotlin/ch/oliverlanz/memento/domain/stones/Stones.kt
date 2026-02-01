@@ -1,6 +1,6 @@
 package ch.oliverlanz.memento.domain.stones
 
-import ch.oliverlanz.memento.infrastructure.MementoConstants
+import ch.oliverlanz.memento.MementoConstants
 import net.minecraft.registry.RegistryKey
 import net.minecraft.util.math.BlockPos
 import net.minecraft.world.World

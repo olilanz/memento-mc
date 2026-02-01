@@ -1,5 +1,7 @@
 package ch.oliverlanz.memento.infrastructure
 
+import ch.oliverlanz.memento.MementoConstants
+
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.network.ServerPlayerEntity
 import net.minecraft.text.Text
