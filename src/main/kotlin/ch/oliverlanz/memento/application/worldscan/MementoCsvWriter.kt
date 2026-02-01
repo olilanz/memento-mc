@@ -42,7 +42,7 @@ object MementoCsvWriter {
         }
 
         Files.write(path, sb.toString().toByteArray(StandardCharsets.UTF_8))
-        log.info("[RUN] wrote csv path={} rows={}", path, topology.entries.size)
+        log.debug("[RUN] wrote csv path={} rows={}", path, topology.entries.size)
         return path
     }
 }

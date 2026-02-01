@@ -26,7 +26,7 @@ class RegionDiscovery {
         val discovered = worlds.map { worldKey ->
             val regionDir = resolveRegionDirectory(root, worldKey)
             val regions = discoverRegions(regionDir)
-            log.info("[RUN] discovered world={} regions={}", worldKey.value, regions.size)
+            log.debug("[RUN] discovered world={} regions={}", worldKey.value, regions.size)
             DiscoveredWorld(world = worldKey, regions = regions)
         }
 
@@ -48,7 +48,7 @@ class RegionDiscovery {
 
     private fun discoverRegions(regionDir: Path): List<RegionRef> {
         if (!Files.isDirectory(regionDir)) {
-            log.info("[RUN] region folder missing; skipping dir={}", regionDir.toAbsolutePath())
+            log.debug("[RUN] region folder missing; skipping dir={}", regionDir.toAbsolutePath())
             return emptyList()
         }
 

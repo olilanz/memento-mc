@@ -38,7 +38,7 @@ class ChunkDiscovery {
             }
 
             // INFO level: summary only (no per-file spam)
-            log.info(
+            log.debug(
                 "[RUN] region file scan completed world={} regionFilesFound={} regionFilesUsed={} regionFilesSkippedEmpty={} regionsWithChunks={} regionsWithNoChunks={} chunksDiscovered={}",
                 stats.world,
                 stats.regionFilesFound,

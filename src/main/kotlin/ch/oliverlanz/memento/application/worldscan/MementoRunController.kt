@@ -95,7 +95,7 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
                 { net.minecraft.text.Text.literal("Memento: no existing chunks discovered; nothing to scan.") },
                 false
             )
-            log.info("[RUN] start aborted reason=no_chunks")
+            log.debug("[RUN] start aborted reason=no_chunks")
             return 1
         }
 
@@ -105,7 +105,7 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
         this.active = true
         this.ticksSinceStart = 0
 
-        log.info("[RUN] started worlds={} plannedChunks={}", worlds.size, plannedChunks)
+        log.debug("[RUN] started worlds={} plannedChunks={}", worlds.size, plannedChunks)
         source.sendFeedback({ net.minecraft.text.Text.literal("Memento: scan started. Planned chunks: $plannedChunks") }, false)
         return 1
     }
@@ -120,7 +120,7 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
             // Finalize once: superposition + CSV export.
             val topology = StoneInfluenceSuperposition.apply(m)
             val path = MementoCsvWriter.write(srv, topology)
-            log.info(
+            log.debug(
                 "[RUN] completed plannedChunks={} scannedChunks={} csv={}",
                 plannedChunks,
                 m.scannedChunks(),
@@ -138,7 +138,7 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
 
         // Observability: log progress every ~5 seconds (100 ticks).
         if ((ticksSinceStart % 100) == 0) {
-            log.info("[RUN] progress scannedChunks={} plannedChunks={} missing={}", m.scannedChunks(), plannedChunks, m.missingCount())
+            log.debug("[RUN] progress scannedChunks={} plannedChunks={} missing={}", m.scannedChunks(), plannedChunks, m.missingCount())
         }
     }
 
