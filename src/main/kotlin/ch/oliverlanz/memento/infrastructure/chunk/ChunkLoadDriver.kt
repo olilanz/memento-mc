@@ -182,7 +182,15 @@ class ChunkLoadDriver {
         val toRemove = mutableListOf<ChunkRef>()
         var forwarded = 0
 
-        for ((ref, pending) in pendingLoads) {
+        // IMPORTANT: Engine chunk-load callbacks may be invoked while we're inside the
+        // driver tick (e.g. as side effects of listener logic). Those callbacks mutate
+        // [pendingLoads]. Iterating the map directly would therefore be vulnerable to
+        // ConcurrentModificationException, even on a single thread.
+        //
+        // We iterate over a stable snapshot to ensure mutations are applied safely.
+        val snapshot = pendingLoads.entries.toList()
+
+        for ((ref, pending) in snapshot) {
             if (forwarded >= MementoConstants.CHUNK_LOAD_MAX_FORWARDED_PER_TICK) break
 
             val world = server.getWorld(ref.dimension)
