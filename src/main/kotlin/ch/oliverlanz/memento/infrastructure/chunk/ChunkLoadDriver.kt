@@ -32,7 +32,18 @@ class ChunkLoadDriver(
     /** Maximum delay (ticks) between proactive ticket issues (politeness ceiling). */
     val passiveGraceTicks: Int,
     /** Safety valve for tickets that never result in a load callback. */
-    val ticketMaxAgeTicks: Int
+    val ticketMaxAgeTicks: Int,
+    /**
+     * If we receive an engine "chunk loaded" signal but cannot yet obtain a [WorldChunk],
+     * we "re-arm" by issuing a short-lived ticket after this delay.
+     */
+    val rearmDelayTicks: Int = 10,
+    /** Base backoff (ticks) between re-arm attempts for the same pending load. */
+    val rearmBackoffTicks: Int = 20,
+    /** Maximum number of re-arm attempts for a pending load before giving up. */
+    val rearmMaxAttempts: Int = 3,
+    /** Absolute maximum age (ticks) we keep a pending load signal around. */
+    val pendingMaxAgeTicks: Int = 200
 ) {
     companion object {
         // Fabric events are global and cannot be unregistered. We keep a single active instance pointer.
@@ -89,6 +100,10 @@ class ChunkLoadDriver(
     private data class PendingLoad(
         /** When we first observed the engine load signal for this chunk. */
         val firstSeenTick: Long,
+        /** Next tick at which we should attempt to "re-arm" by issuing a short-lived ticket. */
+        var nextRearmTick: Long,
+        /** How many re-arm attempts we've made so far for this pending load. */
+        var rearmAttempts: Int = 0,
         /** Last tick we emitted an INFO/WARN about this pending item (rate limiting). */
         var lastLogTick: Long = 0,
     )
@@ -106,11 +121,7 @@ class ChunkLoadDriver(
      */
     private val pendingLoads: LinkedHashMap<ChunkRef, PendingLoad> = LinkedHashMap()
 
-    /**
-     * For *unticketed* load signals, we won't retry forever. This bound prevents indefinite growth
-     * if we observe load signals for chunks that never become accessible (rare).
-     */
-    private val unticketedPendingMaxAgeTicks: Long = 40
+    // Pending load age is bounded via [pendingMaxAgeTicks] (constructor parameter).
 
     /** Deferred unload notifications. */
     private val pendingUnloads: ArrayDeque<Pair<ServerWorld, ChunkPos>> = ArrayDeque()
@@ -192,7 +203,13 @@ class ChunkLoadDriver(
 
         // Defer resolution + forwarding (prevents re-entrancy / lock hazards).
         // Deduplicate: the engine may signal the same chunk multiple times.
-        pendingLoads.putIfAbsent(ref, PendingLoad(firstSeenTick = tickCounter))
+        pendingLoads.putIfAbsent(
+            ref,
+            PendingLoad(
+                firstSeenTick = tickCounter,
+                nextRearmTick = tickCounter + rearmDelayTicks,
+            ),
+        )
     }
 
     // Neighbourhood heuristics removed: we no longer infer intent from proximity.
@@ -282,16 +299,41 @@ class ChunkLoadDriver(
                 val hasTicket = tickets.containsKey(ref)
                 val age = tickCounter - pending.firstSeenTick
 
-                // Proactive: retry until ticket expiry. External: retry for a bounded short window.
-                val shouldDrop = (!hasTicket && age >= unticketedPendingMaxAgeTicks)
+                // "Re-arm" external load signals that race ahead of chunk presence.
+                // If a chunk should be loaded, issuing a short-lived ticket helps the engine
+                // actually materialize it so we can forward the load event deterministically.
+                if (!hasTicket && tickCounter >= pending.nextRearmTick && pending.rearmAttempts < rearmMaxAttempts) {
+                    world.chunkManager.addTicket(ChunkTicketType.UNKNOWN, ref.pos, 1)
+                    tickets.putIfAbsent(ref, OutstandingTicket(issuedAtTick = tickCounter))
+
+                    pending.rearmAttempts++
+                    val backoffFactor = 1L shl (pending.rearmAttempts - 1)
+                    pending.nextRearmTick = tickCounter + (rearmBackoffTicks * backoffFactor).toInt().coerceAtLeast(1)
+
+                    log.info(
+                        "[DRIVER] re-armed pending load via ticket dim={} pos={} ageTicks={} attempt={}/{} nextRearmTick={}",
+                        ref.dimension.value,
+                        ref.pos,
+                        age,
+                        pending.rearmAttempts,
+                        rearmMaxAttempts,
+                        pending.nextRearmTick
+                    )
+                }
+
+                // Do not retain pending entries forever; keep a single, easy-to-diagnose safety valve.
+                val shouldDrop = (age >= pendingMaxAgeTicks)
                 if (shouldDrop) {
                     if ((tickCounter - pending.lastLogTick) >= 100) {
                         pending.lastLogTick = tickCounter
                         log.info(
-                            "[DRIVER] pending unticketed load dropped; chunk never became present dim={} pos={} ageTicks={}",
+                            "[DRIVER] pending load dropped; chunk never became present dim={} pos={} ageTicks={} hasTicket={} rearmAttempts={}/{}",
                             ref.dimension.value,
                             ref.pos,
-                            age
+                            age,
+                            tickets.containsKey(ref),
+                            pending.rearmAttempts,
+                            rearmMaxAttempts
                         )
                     }
                     toRemove += ref
@@ -300,11 +342,14 @@ class ChunkLoadDriver(
                     if ((tickCounter - pending.lastLogTick) >= 100) {
                         pending.lastLogTick = tickCounter
                         log.info(
-                            "[DRIVER] pending load not yet present; will retry dim={} pos={} ageTicks={} hasTicket={}",
+                            "[DRIVER] pending load not yet present; will retry dim={} pos={} ageTicks={} hasTicket={} rearmAttempts={}/{} nextRearmTick={}",
                             ref.dimension.value,
                             ref.pos,
                             age,
-                            hasTicket
+                            tickets.containsKey(ref),
+                            pending.rearmAttempts,
+                            rearmMaxAttempts,
+                            pending.nextRearmTick
                         )
                     }
                 }
@@ -430,7 +475,13 @@ class ChunkLoadDriver(
         val alreadyLoaded = world.chunkManager.getWorldChunk(next.pos.x, next.pos.z, /* create = */ false)
         if (alreadyLoaded != null) {
             log.info("[DRIVER] chunk already loaded; enqueue artificial availability dim={} pos={}", next.dimension.value, next.pos)
-            pendingLoads.putIfAbsent(next, PendingLoad(firstSeenTick = tickCounter))
+            pendingLoads.putIfAbsent(
+                next,
+                PendingLoad(
+                    firstSeenTick = tickCounter,
+                    nextRearmTick = tickCounter + rearmDelayTicks,
+                ),
+            )
             return
         }
 

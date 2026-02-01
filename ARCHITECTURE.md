@@ -22,29 +22,29 @@ flowchart TB
 
   subgraph Memento["Memento Mod"]
     Commands["Command Handlers"]
-    Domain["Domain (StoneTopology, Renewal Model, Events)"]
+    Driver["Chunk Load Driver"]
+    Domain["Domain (Stones, Renewal, WorldMap)"]
     Effects["Effects Engine (server-side particles)"]
-    Scanner["Scanner / Snapshot Pipeline (internal)"]
+    Scanner["World Scanner / Snapshot Pipeline"]
   end
 
-  Commands --> Effects
   Commands --> Scanner
+  Commands --> Effects
 
-  Scanner --> Engine
-  Scanner --> Persist
-  Scanner --> Domain
+  Scanner --> Driver
+  Domain --> Driver
 
-  Domain --> Effects
-
+  Driver --> Engine
   Engine --> World
   World --> Persist
   WorldGen --> World
 
-  Memento --> Engine
-  Memento --> Persist
+  Domain --> Effects
+  Domain --> Persist
 ```
 
-**Lock:** Minecraft owns *world generation* and *chunk lifecycle authority*. Memento guides renewal and produces effects and snapshots; it does not implement its own worldgen.
+**Lock:** Minecraft owns *world generation* and *chunk lifecycle authority*.  
+Memento guides renewal and produces effects and snapshots; it does not implement its own worldgen.
 
 ---
 
@@ -53,33 +53,39 @@ flowchart TB
 ```mermaid
 flowchart TB
   subgraph Application["Application Layer (orchestration + IO)"]
-    Commands["Command Handler(s)"]
-    Scanner["World Scanner / Snapshot Pipeline"]
-    Effects["Effects Engine (visualization)"]
-    IO["IO: logs / CSV"]
+    Commands["Command Handlers"]
+    Scanner["World Scanner"]
+    Effects["Effects Engine"]
+    IO["Logs / CSV"]
+  end
+
+  subgraph Infrastructure["Infrastructure Layer"]
+    Driver["Chunk Load Driver"]
   end
 
   subgraph Domain["Domain Layer (authoritative truth)"]
-    StoneTopology["StoneTopology (influence + dominance)"]
-    RenewalModel["Renewal Model (lifecycle + rules)"]
-    Events["Strongly-typed Domain Events"]
+    WorldMap["WorldMap"]
+    StoneTopology["StoneTopology"]
+    RenewalModel["Renewal Model"]
+    Events["Typed Domain Events"]
   end
 
   subgraph External["External"]
     MC["Minecraft Engine"]
-    FS["World persistence (files)"]
+    FS["World persistence"]
   end
 
   Commands --> Scanner
   Commands --> Effects
 
-  Scanner --> MC
-  Scanner --> FS
-  Scanner --> IO
-  Scanner --> StoneTopology
-  Scanner --> RenewalModel
+  Scanner --> Driver
+  RenewalModel --> Driver
 
-  Effects --> MC
+  Driver --> MC
+
+  Scanner --> WorldMap
+  Scanner --> IO
+
   StoneTopology --> Events
   RenewalModel --> Events
   Events --> Effects
@@ -89,7 +95,8 @@ flowchart TB
   Domain -. no filesystem IO .-> FS
 ```
 
-**Lock:** Domain does not orchestrate, tick, load chunks, write files, or call the engine. Application does orchestration and IO and may query the domain.
+**Lock:**  
+Only the **Chunk Load Driver** interacts directly with the Minecraft engine’s chunk lifecycle events.
 
 ---
 
@@ -101,9 +108,9 @@ Memento supports **two renewal paths**:
    Gradual renewal of rarely visited regions (outskirts). This is the primary objective.
 
 2. **Player / operator-controlled renewal**  
-   Explicit placement of stones to guide renewal or protection. This is a secondary objective used to validate and stabilize mechanics.
+   Explicit placement of stones to guide renewal or protection.
 
-**Lock:** We intentionally stabilize complexity via the stone-driven path first, even though it is not the primary objective.
+**Lock:** Complexity is stabilized through the stone-driven path first.
 
 ---
 
@@ -116,19 +123,74 @@ Memento strictly separates:
 - **Detection** of what *should* be renewed
 - **Execution** of renewal *when the world allows it*
 
-Detection is independent of chunk load state. Renewal execution is deferred until the server naturally unloads and reloads chunks.
+Detection is independent of chunk load state. Execution is deferred.
 
 ### Deferred execution
 
-For renewal, Memento does **not** force chunk unloads or loads. It observes server events and progresses when conditions are met.
+Renewal does **not** force chunk unloads or immediate reloads.  
+Progress depends on naturally observed server events.
 
-This yields:
+**Lock:** Renewal is eventually consistent and non-deterministic by design.
 
-- non-deterministic timing
-- incremental progress
-- eventual consistency (not immediate effect)
+---
 
-**Lock:** This behavior is fundamental; attempts to “make renewal immediate” have unacceptable stability risk.
+## Chunk loading and pacing
+
+### Chunk Load Driver
+
+The Chunk Load Driver is the **sole mediator** between Memento and engine chunk lifecycle signals.
+
+Responsibilities:
+
+- Issue and manage chunk load tickets
+- Observe engine load/unload signals (signal-only)
+- Defer forwarding until chunks are safely accessible
+- Re-arm tickets if access is delayed
+- Apply adaptive pacing based on observed load latency
+- Emit clear, structured logs for observability
+
+**Lock:** No other class may subscribe to engine chunk load or unload events.
+
+### Adaptive pacing
+
+The driver measures the latency between:
+
+- ticket issuance  
+- and chunk accessibility
+
+A smoothed moving average is used to determine when to issue the next ticket.
+
+**Lock:** Pacing is based on observed behavior, not static yield or passive modes.
+
+---
+
+## World inspection and scanning
+
+### WorldMap as plan
+
+The **WorldMap** is the authoritative structure describing all known chunks.
+
+- Built from region discovery
+- Gradually enriched with metadata
+- Serves as both *inspection state* and *renewal input*
+
+There is no separate scan plan or discovery phase.
+
+**Lock:** The map *is* the plan.
+
+### Scanner behavior
+
+The scanner:
+
+- Iterates over the WorldMap
+- Requests chunks whose metadata is missing
+- Extracts metadata when chunks become accessible
+- Explicitly marks chunks as scanned when metadata is stored
+- Terminates when all chunks have metadata and the snapshot is written
+
+Progress is explicit and observable.
+
+**Lock:** There must be a single, obvious point where a chunk becomes “scanned”.
 
 ---
 
@@ -138,175 +200,86 @@ This yields:
 
 Witherstone expresses **intent to renew** an area.
 
-- matures over time
-- derives exactly one renewal operation
-- is consumed once renewal completes
-
-**Lock:** Witherstone initiates renewal; it does not perform renewal.
+- Matures over time
+- Produces exactly one RenewalBatch
+- Is consumed once renewal completes
 
 ### Lorestone
 
 Lorestone expresses **protection**.
 
-- no automated lifecycle
-- does not mature
-- is never consumed automatically
-- protects an area within a defined radius
-
-**Lock:** Witherstone influence is overridden by protection. Lorestone exists to exclude regions from renewal logic.
+- Has no automated lifecycle
+- Is never consumed automatically
+- Overrides renewal influence
 
 ---
 
 ## Lifecycles and intersection
 
-Memento has two distinct lifecycles. They are linked, but independent.
-
-### Witherstone lifecycle
-
-States:
-
-- `PLACED`
-- `MATURING`
-- `MATURED`
-- `CONSUMED`
-
-Triggers for maturity:
-
-- nightly checkpoint (day boundary)
-- administrative time adjustment
-- server startup when persisted state indicates maturity
-
-Once a Witherstone reaches `MATURED`, it produces exactly one RenewalBatch.
-
-### RenewalBatch lifecycle
-
-A RenewalBatch represents a group of chunks derived from a matured Witherstone.
-
-States:
-
-- `DERIVED`
-- `BLOCKED` (some chunks still loaded)
-- `FREE` (all chunks unloaded)
-- `RENEWING`
-- `RENEWED`
-
-Progression depends on observed server events.
-
-### Intersection overview
+Witherstone and RenewalBatch lifecycles are distinct but linked.
 
 ```mermaid
 stateDiagram-v2
   [*] --> PLACED
   PLACED --> MATURING
-  MATURING --> MATURED: day-boundary / admin-time / startup-reconcile
-  MATURED --> CONSUMED: batch reaches RENEWED
+  MATURING --> MATURED
+  MATURED --> CONSUMED
 
-  state "RenewalBatch (derived from a matured Witherstone)" as B {
+  state "RenewalBatch" as B {
     [*] --> DERIVED
-    DERIVED --> BLOCKED: any chunk loaded
-    DERIVED --> FREE: all chunks unloaded
-    BLOCKED --> FREE: unload events observed
-    FREE --> RENEWING: renewal begins on next safe load
-    RENEWING --> RENEWED: renewal complete
+    DERIVED --> BLOCKED
+    BLOCKED --> FREE
+    FREE --> RENEWING
+    RENEWING --> RENEWED
   }
 
-  MATURED --> B.DERIVED: derive batch exactly once
+  MATURED --> B.DERIVED
 ```
 
 **Locks:**
-- One Witherstone produces exactly one RenewalBatch.
-- RenewalBatch progression is event-driven; the server remains authority over chunk load/unload.
+
+- One Witherstone produces exactly one RenewalBatch
+- RenewalBatch progression is event-driven
 
 ---
 
-## Operator control and system settling
+## Domain events as boundary
 
-Renewal depends on chunk unloads. Operators can influence progress (but must not force it through unsafe means):
+The domain emits **typed events** describing facts and transitions.
 
-1. **Leave the area** — sufficient for outskirts.
-2. **Log players out** — reduces active tickets near inhabited regions.
-3. **Restart the server** — clears residual tickets and ensures unload.
+Application and infrastructure react to these events for:
 
-**Lock:** These are escape hatches that preserve the invariants; they are not required for normal operation.
+- visualization
+- scheduling
+- logging
+- snapshot output
 
----
-
-## Stone influence authority
-
-### StoneTopology
-
-StoneTopology is the **single source of truth** for stone influence and dominance.
-
-**Lock:** All influence/dominance data used by scanning, effects, and renewal must come from StoneTopology. No parallel “projector” or duplicate influence logic is permitted.
-
----
-
-## Domain events as the decision/execution boundary
-
-We separate “deciding” from “doing”:
-
-- Domain emits **strongly typed events** describing facts and transitions.
-- Application reacts: visualization, logging, scheduling, snapshot output.
-
-**Lock:** Domain events are a stability mechanism. They prevent domain semantics from leaking into orchestration and effect code.
-
----
-
-## World inspection and snapshotting
-
-World inspection exists for development and validation. It is an operator-triggered, long-running activity that produces an inspectable snapshot (e.g., CSV). It must remain separate from renewal execution.
-
-### Engine-mediated scanning (current approach)
-
-Scanning currently uses the Minecraft engine as interpreter instead of re-implementing region/NBT decoding. This avoids duplicating complex, version-sensitive behavior already implemented by the engine.
-
-**Consequence:** scanning may be resource-intensive and must be **throttled** and **observable**.
-
-### Renewal vs inspection (critical split)
-
-**Invariant:** Renewal must not force chunk loads or unloads.
-
-Inspection may perform controlled engine interactions (including temporary chunk loads) for analysis, but:
-
-- must be paced
-- must be bounded
-- must not perform renewal actions
-- must not change renewal eligibility or lifecycle state
-
-This split must remain explicit to avoid accidental coupling.
+**Lock:** Domain events separate semantic decisions from execution.
 
 ---
 
 ## Architectural invariants
 
-1. **No forced unloads** — Memento must never forcibly unload chunks.
-2. **Deferred renewal** — renewal executes only in response to naturally observed unload/load events.
-3. **One renewal per Witherstone** — each Witherstone produces exactly one RenewalBatch.
-4. **Server authority** — the Minecraft server remains sole authority over chunk lifecycle decisions.
-5. **StoneTopology authority** — no duplicate influence logic.
-6. **Domain purity** — domain does not call engine/filesystem or orchestrate work.
-7. **Inspection ≠ renewal** — snapshotting/analysis must not execute renewal.
+1. Chunk lifecycle authority remains with the server
+2. No forced chunk unloads
+3. Renewal is deferred and event-driven
+4. WorldMap is the plan
+5. Renewal works without inspection
+6. One driver owns engine interaction
+7. Domain remains pure
+8. Observability must explain stalling and progress
 
 ---
 
-## Persistence and continuity
+## ADR index (append-only)
 
-All lifecycles are persisted so that:
-
-- restarts do not reset progress
-- matured Witherstones are reconciled on startup
-- RenewalBatches resume consistently
-
-**Lock:** Persistence mechanism must not leak into domain APIs. Domain defines meaning; application/infrastructure defines storage.
-
----
-
-## Lightweight ADR index (append-only)
-
-- ADR-001: Two renewal paths; stone-driven path used to stabilize mechanics early.
-- ADR-002: Detection vs execution; deferred renewal; eventual consistency.
-- ADR-003: Renewal never forces chunk loads/unloads; server remains authority.
-- ADR-004: StoneTopology is sole authority for influence/dominance; remove projectors.
-- ADR-005: Witherstone and RenewalBatch lifecycles are independent but linked.
-- ADR-006: Typed domain events separate decisions from effects.
-- ADR-007: Engine-mediated scanning chosen initially to avoid re-implementing engine semantics; scanning is throttled and observable.
+- ADR-001: Two renewal paths; stone-driven path stabilizes mechanics
+- ADR-002: Detection vs execution; deferred renewal
+- ADR-003: Server authority over chunk lifecycle
+- ADR-004: StoneTopology is sole influence authority
+- ADR-005: One Witherstone → one RenewalBatch
+- ADR-006: Typed domain events as boundary
+- ADR-007: Engine-mediated scanning
+- ADR-008: Chunk Load Driver encapsulates engine interaction
+- ADR-009: WorldMap replaces scan plans
+- ADR-010: Adaptive pacing replaces yield/passive modes
