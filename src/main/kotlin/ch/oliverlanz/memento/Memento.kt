@@ -63,10 +63,6 @@ object Memento : ModInitializer {
 
         ServerLifecycleEvents.SERVER_STARTED.register { server: MinecraftServer ->
 
-            // ------------------------------------------------------------
-            // Wiring order matters.
-            // ------------------------------------------------------------
-
             RenewalTrackerLogging.attachOnce()
             renewalInitialObserver = RenewalInitialObserver().also { it.attach(server) }
 
@@ -76,8 +72,8 @@ object Memento : ModInitializer {
             chunkLoadDriver = ChunkLoadDriver().also {
                 it.attach(server)
 
-                // Provider precedence: renewal first.
-                it.registerProvider(renewalChunkLoadProvider!!)
+                // Explicit driver precedence: renewal first, scanner fallback.
+                it.registerRenewalProvider(renewalChunkLoadProvider!!)
 
                 // Single fan-out point for chunk availability.
                 it.registerConsumer(object : ChunkAvailabilityListener {
@@ -103,7 +99,7 @@ object Memento : ModInitializer {
             }
 
             // World scanner provider (lower priority)
-            chunkLoadDriver?.registerProvider(runController!!)
+            chunkLoadDriver?.registerScanProvider(runController!!)
             chunkLoadDriver?.registerConsumer(runController!!)
 
             // Fan out domain events
