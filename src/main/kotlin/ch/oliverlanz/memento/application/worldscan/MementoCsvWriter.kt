@@ -1,7 +1,7 @@
 package ch.oliverlanz.memento.application.worldscan
 
 import ch.oliverlanz.memento.domain.worldmap.WorldMementoTopology
-import ch.oliverlanz.memento.infrastructure.MementoConstants
+import ch.oliverlanz.memento.MementoConstants
 import net.minecraft.server.MinecraftServer
 import net.minecraft.util.WorldSavePath
 import org.slf4j.LoggerFactory
@@ -42,7 +42,7 @@ object MementoCsvWriter {
         }
 
         Files.write(path, sb.toString().toByteArray(StandardCharsets.UTF_8))
-        log.debug("[RUN] wrote csv path={} rows={}", path, topology.entries.size)
+        log.info("[RUN] wrote csv path={} rows={}", path, topology.entries.size)
         return path
     }
 }

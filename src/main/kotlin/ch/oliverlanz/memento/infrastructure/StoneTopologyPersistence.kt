@@ -1,5 +1,7 @@
 package ch.oliverlanz.memento.infrastructure
 
+import ch.oliverlanz.memento.MementoConstants
+
 import ch.oliverlanz.memento.domain.stones.*
 import com.google.gson.GsonBuilder
 import com.google.gson.JsonArray
