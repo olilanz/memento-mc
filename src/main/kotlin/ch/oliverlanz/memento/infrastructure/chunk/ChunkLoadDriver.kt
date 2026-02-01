@@ -279,33 +279,63 @@ class ChunkLoadDriver {
      * ------------------------------------------------------------------ */
 
     private fun issueNextProactiveTicketIfAny(server: MinecraftServer) {
+        // Renewal must always win when a batch exists, but we do not interrupt any
+        // in-flight load (single-flight). The decision is made only when issuing the
+        // *next* ticket (i.e. when [tickets] is empty).
+
+        // Important: the first candidate in a provider's sequence may already be loaded.
+        // If we always take firstOrNull(), we can get stuck repeatedly "issuing" the
+        // same already-loaded chunk and never progress to the next one.
+        fun selectNext(provider: ChunkLoadProvider?): ChunkRef? {
+            if (provider == null) return null
+
+            val it = provider.desiredChunks().iterator()
+            var inspected = 0
+
+            while (it.hasNext() && inspected < 256) {
+                inspected++
+                val candidate = it.next()
+
+                if (tickets.containsKey(candidate)) continue
+                if (pendingLoads.containsKey(candidate)) continue
+
+                val world = server.getWorld(candidate.dimension) ?: continue
+                val alreadyLoaded =
+                    world.chunkManager.getWorldChunk(candidate.pos.x, candidate.pos.z, false)
+
+                if (alreadyLoaded != null) {
+                    // Make the already-available chunk observable through the normal
+                    // forwarding pipeline, then keep searching for a chunk that actually
+                    // needs a ticket.
+                    pendingLoads.putIfAbsent(
+                        candidate,
+                        PendingLoad(
+                            firstSeenTick = tickCounter,
+                            nextRearmTick =
+                                tickCounter + MementoConstants.CHUNK_LOAD_REARM_DELAY_TICKS
+                        )
+                    )
+                    continue
+                }
+
+                return candidate
+            }
+
+            return null
+        }
+
         val next =
-            renewalProvider?.desiredChunks()?.firstOrNull()
-                ?: scanProvider?.desiredChunks()?.firstOrNull()
+            selectNext(renewalProvider)
+                ?: selectNext(scanProvider)
                 ?: return
 
         val world = server.getWorld(next.dimension) ?: return
-
-        val alreadyLoaded =
-            world.chunkManager.getWorldChunk(next.pos.x, next.pos.z, false)
-
-        if (alreadyLoaded != null) {
-            pendingLoads.putIfAbsent(
-                next,
-                PendingLoad(
-                    firstSeenTick = tickCounter,
-                    nextRearmTick =
-                        tickCounter + MementoConstants.CHUNK_LOAD_REARM_DELAY_TICKS
-                )
-            )
-            return
-        }
 
         world.chunkManager.addTicket(ChunkTicketType.FORCED, next.pos, MementoConstants.CHUNK_LOAD_TICKET_RADIUS)
         tickets[next] = OutstandingTicket(tickCounter, countsForPacing = true)
 
         log.debug(
-            "[DRIVER] ticket issued dim={} pos={}",
+            "[DRIVER] ticket issued dim={} pos={} ",
             next.dimension.value,
             next.pos
         )
