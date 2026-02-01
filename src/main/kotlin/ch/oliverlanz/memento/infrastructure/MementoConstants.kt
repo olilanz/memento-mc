@@ -39,13 +39,6 @@ object MementoConstants {
     const val CHUNK_LOAD_PASSIVE_GRACE_TICKS: Int = 100
 
     /**
-     * Chunk load driver: safety valve. Release a proactive ticket after N ticks even if no CHUNK_LOAD event is observed.
-     *
-     * Locked timing (0.9.6): ~10 seconds.
-     */
-    const val CHUNK_LOAD_TICKET_MAX_AGE_TICKS: Int = 200
-
-    /**
      * Conceptual "renewal checkpoint" time-of-night.
      *
      * The current implementation ages anchors by Overworld day index
