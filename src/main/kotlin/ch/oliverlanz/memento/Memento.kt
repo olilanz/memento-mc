@@ -147,7 +147,6 @@ object Memento : ModInitializer {
         // Transport tick only
         ServerTickEvents.END_SERVER_TICK.register {
             gameTimeTracker.tick()
-            runController?.tick()
             chunkLoadDriver?.tick()
         }
     }
