@@ -23,6 +23,9 @@ import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents
 import net.minecraft.server.MinecraftServer
+import net.minecraft.server.world.ServerWorld
+import net.minecraft.util.math.ChunkPos
+import net.minecraft.world.chunk.WorldChunk
 import org.slf4j.LoggerFactory
 
 object Memento : ModInitializer {
@@ -57,8 +60,6 @@ object Memento : ModInitializer {
         Commands.register()
 
         // The ChunkLoadDriver owns the engine event subscriptions.
-        // (We still call the installation from here, but the driver is the only class
-        // that knows about / handles ServerChunkEvents.)
         ChunkLoadDriver.installEngineHooks()
 
         ServerLifecycleEvents.SERVER_STARTED.register { server: MinecraftServer ->
@@ -75,19 +76,16 @@ object Memento : ModInitializer {
                 // Explicit driver precedence: renewal first, scanner fallback.
                 it.registerRenewalProvider(renewalChunkLoadProvider!!)
 
-                // Single fan-out point for chunk availability.
+                // Single fan-out point for chunk availability → domain renewal tracker
                 it.registerConsumer(object : ChunkAvailabilityListener {
-                    override fun onChunkLoaded(world: net.minecraft.server.world.ServerWorld, chunk: net.minecraft.world.chunk.WorldChunk) {
-                        ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks.onChunkLoaded(world.registryKey, chunk.pos)
+                    override fun onChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
+                        RenewalTrackerHooks.onChunkLoaded(world.registryKey, chunk.pos)
                     }
 
-                    override fun onChunkUnloaded(world: net.minecraft.server.world.ServerWorld, pos: net.minecraft.util.math.ChunkPos) {
-                        ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks.onChunkUnloaded(world.registryKey, pos)
+                    override fun onChunkUnloaded(world: ServerWorld, pos: ChunkPos) {
+                        RenewalTrackerHooks.onChunkUnloaded(world.registryKey, pos)
                     }
                 })
-
-                // Renewal provider consumes loads to dedupe intent.
-                it.registerConsumer(renewalChunkLoadProvider!!)
             }
 
             effectsHost = EffectsHost(server)
