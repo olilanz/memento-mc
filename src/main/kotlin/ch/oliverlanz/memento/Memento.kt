@@ -17,7 +17,7 @@ import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerLogging
 import ch.oliverlanz.memento.domain.stones.StoneTopologyHooks
-import ch.oliverlanz.memento.infrastructure.MementoConstants
+import ch.oliverlanz.memento.MementoConstants
 import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
@@ -73,10 +73,7 @@ object Memento : ModInitializer {
             // Renewal provider (highest priority)
             renewalChunkLoadProvider = RenewalChunkLoadProvider()
 
-            chunkLoadDriver = ChunkLoadDriver(
-                activeLoadIntervalTicks = MementoConstants.CHUNK_LOAD_ACTIVE_INTERVAL_TICKS,
-                passiveGraceTicks = MementoConstants.CHUNK_LOAD_PASSIVE_GRACE_TICKS,
-            ).also {
+            chunkLoadDriver = ChunkLoadDriver().also {
                 it.attach(server)
 
                 // Provider precedence: renewal first.

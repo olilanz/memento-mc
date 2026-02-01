@@ -24,20 +24,6 @@ object MementoConstants {
     /** Minecraft Overworld day length in ticks. */
     const val OVERWORLD_DAY_TICKS: Long = 24_000L
 
-    /** Regeneration pacing: process one chunk every N server ticks. Mincraft does 20 ticks per second. */
-    const val REGENERATION_CHUNK_INTERVAL_TICKS: Int = 8
-
-    /** Chunk load driver: while ACTIVE, request at most one chunk load every N server ticks. */
-    const val CHUNK_LOAD_ACTIVE_INTERVAL_TICKS: Int = REGENERATION_CHUNK_INTERVAL_TICKS
-
-    /**
-     * Chunk load driver: after we observe chunk load activity that we did not explicitly request,
-     * remain yielding for a grace window before issuing new proactive tickets.
-     *
-     * Locked timing (0.9.6): ~5 seconds.
-     */
-    const val CHUNK_LOAD_PASSIVE_GRACE_TICKS: Int = 100
-
     /**
      * Conceptual "renewal checkpoint" time-of-night.
      *
