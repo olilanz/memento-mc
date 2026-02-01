@@ -72,12 +72,83 @@ class WorldMementoMap {
     /**
      * Deterministic view of chunks that still need metadata extraction.
      *
+     * Scanner semantics (0.9.7):
+     * - Work one region at a time (per-world, per-region deterministic ordering).
+     * - Within the chosen region, prefer anchor chunks on the local (1,1) modulo-3 grid
+     *   (local coords relative to region origin). This reduces cross-region spillover
+     *   from side-effect chunk loads.
+     * - Expose only missing chunks on the modulo-3 grid anchored by the chosen anchor.
+     * - If no missing chunk exists on the preferred (1,1) grid, fall back to anchoring
+     *   on the next missing chunk in the region (same algorithm, different residue).
+     *
      * Note: returns at most [limit] keys to keep provider calls cheap.
      */
     fun missingSignals(limit: Int): List<ChunkKey> {
+        if (limit <= 0) return emptyList()
+
+        // 1) Choose the next region to work on: the smallest (world, regionX, regionZ) that still has missing chunks.
+        data class RegionId(val worldKey: String, val regionX: Int, val regionZ: Int)
+
+        fun regionIsBefore(a: RegionId, b: RegionId): Boolean {
+            val wc = a.worldKey.compareTo(b.worldKey)
+            if (wc != 0) return wc < 0
+            if (a.regionX != b.regionX) return a.regionX < b.regionX
+            return a.regionZ < b.regionZ
+        }
+
+        var chosenRegion: RegionId? = null
+        for ((k, v) in records.entries) {
+            if (v.signals != null) continue
+            val rid = RegionId(k.world.value.toString(), k.regionX, k.regionZ)
+            val current = chosenRegion
+            if (current == null || regionIsBefore(rid, current)) {
+                chosenRegion = rid
+            }
+        }
+
+        val region = chosenRegion ?: return emptyList()
+
+        fun localMod3(global: Int, regionCoord: Int): Int {
+            val local = global - (regionCoord * 32)
+            val m = local % 3
+            return if (m < 0) m + 3 else m
+        }
+
+        // 2) Choose an anchor within the region.
+        // Prefer anchors on the local (1,1) grid; otherwise use the first missing chunk.
+        var preferredAnchor: ChunkKey? = null
+        var fallbackAnchor: ChunkKey? = null
+
+        for ((k, v) in records.entries) {
+            if (v.signals != null) continue
+            if (k.world.value.toString() != region.worldKey) continue
+            if (k.regionX != region.regionX || k.regionZ != region.regionZ) continue
+
+            // deterministic "best": smallest (chunkX, chunkZ)
+            if (fallbackAnchor == null || k.chunkX < fallbackAnchor!!.chunkX || (k.chunkX == fallbackAnchor!!.chunkX && k.chunkZ < fallbackAnchor!!.chunkZ)) {
+                fallbackAnchor = k
+            }
+
+            val lx = localMod3(k.chunkX, k.regionX)
+            val lz = localMod3(k.chunkZ, k.regionZ)
+            if (lx == 1 && lz == 1) {
+                if (preferredAnchor == null || k.chunkX < preferredAnchor!!.chunkX || (k.chunkX == preferredAnchor!!.chunkX && k.chunkZ < preferredAnchor!!.chunkZ)) {
+                    preferredAnchor = k
+                }
+            }
+        }
+
+        val anchor = preferredAnchor ?: fallbackAnchor ?: return emptyList()
+
+        val anchorRx = localMod3(anchor.chunkX, anchor.regionX)
+        val anchorRz = localMod3(anchor.chunkZ, anchor.regionZ)
+
+        // 3) Expose missing chunks in the chosen region that are on the anchor's modulo-3 grid.
         return records.entries.asSequence()
             .filter { it.value.signals == null }
             .map { it.key }
+            .filter { it.world.value.toString() == region.worldKey && it.regionX == region.regionX && it.regionZ == region.regionZ }
+            .filter { localMod3(it.chunkX, it.regionX) == anchorRx && localMod3(it.chunkZ, it.regionZ) == anchorRz }
             .sortedWith(
                 compareBy(
                     { it.world.value.toString() },
