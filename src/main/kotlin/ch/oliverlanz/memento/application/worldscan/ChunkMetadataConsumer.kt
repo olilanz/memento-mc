@@ -71,7 +71,7 @@ class ChunkMetadataConsumer(
 
         // Telemetry: tie map mutation to convergence.
         // This is intentionally INFO for now.
-        log.info(
+        log.debug(
             "[SCAN] signals {} dim={} chunk=({}, {}) missing {}->{} scanned {}->{}",
             if (firstAttach) "ATTACHED" else "UPDATED",
             world.registryKey.value.toString(),
