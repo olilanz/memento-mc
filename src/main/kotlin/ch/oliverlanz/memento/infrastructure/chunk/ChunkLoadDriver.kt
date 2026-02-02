@@ -63,6 +63,12 @@ class ChunkLoadDriver {
 
     private var nextProactiveIssueTick: Long = 0
 
+    // When the driver is idle, probing providers may cost some work (sequence
+    // iteration and world lookups). Proactive discovery does not need to be
+    // instantaneous, so we probe at a low cadence while idle.
+    private val idleProbeIntervalTicks: Long = 5
+    private var nextIdleProbeTick: Long = 0
+
     private data class OutstandingTicket(
         val issuedAtTick: Long,
         val countsForPacing: Boolean,
@@ -97,6 +103,7 @@ class ChunkLoadDriver {
         tickCounter = 0
         latencyEwmaTicks = MementoConstants.CHUNK_LOAD_MIN_DELAY_TICKS.toDouble()
         nextProactiveIssueTick = 0
+        nextIdleProbeTick = 0
 
         tickets.clear()
         pendingLoads.clear()
@@ -128,6 +135,8 @@ class ChunkLoadDriver {
      */
     fun registerRenewalProvider(provider: ChunkLoadProvider) {
         renewalProvider = provider
+        // New intent may become available; allow immediate probing.
+        nextIdleProbeTick = 0
     }
 
     /**
@@ -137,6 +146,8 @@ class ChunkLoadDriver {
      */
     fun registerScanProvider(provider: ChunkLoadProvider) {
         scanProvider = provider
+        // New intent may become available; allow immediate probing.
+        nextIdleProbeTick = 0
     }
 
     fun registerConsumer(listener: ChunkAvailabilityListener) {
@@ -165,7 +176,17 @@ class ChunkLoadDriver {
             return
         }
 
+        // Idle heartbeat: only probe providers at a low cadence while idle.
+        // This avoids doing work on every tick when there is no proactive intent.
+        if (tickCounter < nextIdleProbeTick) {
+            logState()
+            return
+        }
+
         issueNextProactiveTicketIfAny(s)
+        if (tickets.isEmpty()) {
+            nextIdleProbeTick = tickCounter + idleProbeIntervalTicks
+        }
         logState()
     }
 
@@ -261,6 +282,10 @@ class ChunkLoadDriver {
                     nextProactiveIssueTick = tickCounter + computeNextDelayTicks()
                 }
                 world.chunkManager.removeTicket(ChunkTicketType.FORCED, ref.pos, MementoConstants.CHUNK_LOAD_TICKET_RADIUS)
+
+                // Proactive load completed: once pacing allows, probe for the next
+                // piece of intent immediately (no need to wait for the idle probe cadence).
+                nextIdleProbeTick = 0
             }
         }
 
