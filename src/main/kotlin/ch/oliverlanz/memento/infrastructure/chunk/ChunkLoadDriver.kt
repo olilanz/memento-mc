@@ -190,15 +190,7 @@ class ChunkLoadDriver {
                 // Engine signalled a load, but the chunk is not yet usable as a WorldChunk.
                 // Keep waiting; the ticket (if any) remains as our standing interest.
                 val age = tickCounter - pending.firstSeenTick
-                if (age % 200L == 0L) {
-                    MementoLog.debug(MementoConcept.DRIVER,
-                        "waiting for usable chunk dim={} pos={} ageTicks={} hasTicket={}",
-                        ref.dimension.value,
-                        ref.pos,
-                        age,
-                        tickets.containsKey(ref)
-                    )
-                }
+                
                 continue
             }
 
@@ -281,10 +273,11 @@ class ChunkLoadDriver {
         lastStateLogTick = tickCounter
 
         MementoLog.debug(MementoConcept.DRIVER,
-            "tick={} outstandingTickets={} pendingLoads={}",
+            "tick={} outstandingTickets={} pendingLoads={} headPending={}",
             tickCounter,
             tickets.size,
-            pendingLoads.size
+            pendingLoads.size,
+            pendingLoads.entries.firstOrNull()?.key
         )
     }
 }
