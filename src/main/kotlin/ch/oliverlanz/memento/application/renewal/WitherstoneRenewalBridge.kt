@@ -5,7 +5,8 @@ import ch.oliverlanz.memento.domain.events.StoneLifecycleState
 import ch.oliverlanz.memento.domain.events.StoneLifecycleTransition
 import ch.oliverlanz.memento.domain.stones.StoneTopology
 import ch.oliverlanz.memento.domain.stones.WitherstoneView
-import org.slf4j.LoggerFactory
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 
 /**
  * Application-layer wiring for renewal intent derivation.
@@ -19,8 +20,6 @@ import org.slf4j.LoggerFactory
  * - RenewalTracker owns RenewalBatch lifecycle and state transitions.
  */
 object WitherstoneRenewalBridge {
-
-    private val log = LoggerFactory.getLogger("Memento")
     private var attached: Boolean = false
 
     fun attach() {
@@ -45,8 +44,8 @@ object WitherstoneRenewalBridge {
         )
 
         if (applied) {
-            log.info(
-                "[BRIDGE] matured reconciliation applied witherstone='{}' trigger={}",
+            MementoLog.debug(MementoConcept.RENEWAL,
+                "matured reconciliation applied stone='{}' trigger={}",
                 witherstone.name,
                 e.trigger,
             )

@@ -1,13 +1,14 @@
 package ch.oliverlanz.memento.infrastructure.chunk
 
 import ch.oliverlanz.memento.MementoConstants
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ChunkTicketType
 import net.minecraft.server.world.ServerWorld
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.chunk.WorldChunk
-import org.slf4j.LoggerFactory
 import java.util.ArrayDeque
 import java.util.LinkedHashMap
 import kotlin.math.round
@@ -45,8 +46,7 @@ class ChunkLoadDriver {
         }
     }
 
-    private val log = LoggerFactory.getLogger("memento")
-
+    
     private var renewalProvider: ChunkLoadProvider? = null
     private var scanProvider: ChunkLoadProvider? = null
     private val listeners = mutableListOf<ChunkAvailabilityListener>()
@@ -231,8 +231,8 @@ class ChunkLoadDriver {
 
             val world = server.getWorld(ref.dimension)
             if (world == null) {
-                log.warn(
-                    "[DRIVER] pending load dropped; world missing dim={} pos={}",
+                MementoLog.warn(MementoConcept.DRIVER, 
+                    "pending load dropped; world missing dim={} pos={}",
                     ref.dimension.value,
                     ref.pos
                 )
@@ -258,8 +258,8 @@ class ChunkLoadDriver {
                             (1 shl (pending.rearmAttempts - 1))
                     pending.nextRearmTick = tickCounter + backoff
 
-                    log.debug(
-                        "[DRIVER] re-armed pending load dim={} pos={} ageTicks={} attempt={}/{}",
+                    MementoLog.debug(MementoConcept.DRIVER, 
+                        "re-armed pending load dim={} pos={} ageTicks={} attempt={}/{}",
                         ref.dimension.value,
                         ref.pos,
                         age,
@@ -359,8 +359,8 @@ class ChunkLoadDriver {
         world.chunkManager.addTicket(ChunkTicketType.FORCED, next.pos, MementoConstants.CHUNK_LOAD_TICKET_RADIUS)
         tickets[next] = OutstandingTicket(tickCounter, countsForPacing = true)
 
-        log.debug(
-            "[DRIVER] ticket issued dim={} pos={} ",
+        MementoLog.debug(MementoConcept.DRIVER, 
+            "ticket issued dim={} pos={} ",
             next.dimension.value,
             next.pos
         )
@@ -396,8 +396,8 @@ class ChunkLoadDriver {
         if ((tickCounter - lastStateLogTick) < MementoConstants.CHUNK_LOAD_STATE_LOG_EVERY_TICKS) return
         lastStateLogTick = tickCounter
 
-        log.debug(
-            "[DRIVER] tick={} outstandingTickets={} pendingLoads={} nextProactiveIssueTick={} ewmaTicks={}",
+        MementoLog.debug(MementoConcept.DRIVER, 
+            "tick={} outstandingTickets={} pendingLoads={} nextProactiveIssueTick={} ewmaTicks={}",
             tickCounter,
             tickets.size,
             pendingLoads.size,

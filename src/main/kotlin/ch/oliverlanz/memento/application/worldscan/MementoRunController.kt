@@ -11,7 +11,8 @@ import net.minecraft.server.world.ServerWorld
 import net.minecraft.text.Text
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.chunk.WorldChunk
-import org.slf4j.LoggerFactory
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -28,7 +29,6 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
 
-    private val log = LoggerFactory.getLogger("memento")
 
     private var server: MinecraftServer? = null
 
@@ -115,7 +115,7 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
                 { Text.literal("Memento: no existing chunks discovered; nothing to scan.") },
                 false
             )
-            log.debug("[SCAN] proactive=false start aborted reason=no_chunks")
+            MementoLog.debug(MementoConcept.SCANNER, "proactive=false start aborted reason=no_chunks")
             return 1
         }
 
@@ -134,8 +134,9 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
             val topology = StoneInfluenceSuperposition.apply(scanMap)
             val path = MementoCsvWriter.write(srv, topology)
             csvWrittenForCurrentRun = true
-            log.debug(
-                "[SCAN] proactive=false already_complete plannedChunks={} scannedChunks={} csv={}",
+            MementoLog.debug(
+                MementoConcept.SCANNER,
+                "proactive=false already_complete plannedChunks={} scannedChunks={} csv={}",
                 plannedChunks,
                 scanMap.scannedChunks(),
                 path.toAbsolutePath(),
@@ -145,8 +146,9 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
         }
 
         proactive.set(true)
-        log.debug(
-            "[SCAN] proactive=true started worlds={} plannedChunks={} scannedChunks={} missing={}",
+        MementoLog.info(
+            MementoConcept.SCANNER,
+            "scan started worlds={} plannedChunks={} scannedChunks={} missing={}",
             worlds.size,
             plannedChunks,
             scanMap.scannedChunks(),
@@ -232,7 +234,7 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
 
         val srv = server
         if (srv == null) {
-            log.warn("[SCAN] proactive=false completed reason={} but server=null; csv skipped", reason)
+            MementoLog.warn(MementoConcept.SCANNER, "scan completed reason={} but server=null; csv skipped", reason)
             return
         }
 
@@ -240,8 +242,9 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
             val topology = StoneInfluenceSuperposition.apply(m)
             val path = MementoCsvWriter.write(srv, topology)
             csvWrittenForCurrentRun = true
-            log.debug(
-                "[SCAN] proactive=false completed reason={} plannedChunks={} scannedChunks={} missing={} csv={}",
+            MementoLog.info(
+                MementoConcept.SCANNER,
+                "scan completed reason={} plannedChunks={} scannedChunks={} missing={} csv={}",
                 reason,
                 plannedChunks,
                 m.scannedChunks(),
@@ -249,8 +252,9 @@ class MementoRunController : ChunkLoadProvider, ChunkAvailabilityListener {
                 path.toAbsolutePath(),
             )
         } else {
-            log.debug(
-                "[SCAN] proactive=false completed reason={} plannedChunks={} scannedChunks={} missing={} csv=already_written",
+            MementoLog.info(
+                MementoConcept.SCANNER,
+                "scan completed reason={} plannedChunks={} scannedChunks={} missing={} csv=already_written",
                 reason,
                 plannedChunks,
                 m.scannedChunks(),

@@ -26,11 +26,10 @@ import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.chunk.WorldChunk
-import org.slf4j.LoggerFactory
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 
 object Memento : ModInitializer {
-
-    private val log = LoggerFactory.getLogger("Memento")
 
     private var effectsHost: EffectsHost? = null
     private val gameTimeTracker = GameTimeTracker()
@@ -55,7 +54,7 @@ object Memento : ModInitializer {
     }
 
     override fun onInitialize() {
-        log.info("Initializing Memento")
+        MementoLog.info(MementoConcept.WORLD, "initializing")
 
         Commands.register()
 

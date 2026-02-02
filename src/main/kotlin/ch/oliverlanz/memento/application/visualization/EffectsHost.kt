@@ -11,7 +11,8 @@ import ch.oliverlanz.memento.domain.renewal.RenewalBatchState
 import ch.oliverlanz.memento.domain.stones.*
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld
-import org.slf4j.LoggerFactory
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import kotlin.reflect.KClass
 
 /**
@@ -25,8 +26,7 @@ class EffectsHost(
     private val server: MinecraftServer
 ) {
 
-    private val log = LoggerFactory.getLogger(javaClass)
-
+    
     private data class EffectKey(
         val stoneName: String,
         val effectClass: KClass<out EffectBase>

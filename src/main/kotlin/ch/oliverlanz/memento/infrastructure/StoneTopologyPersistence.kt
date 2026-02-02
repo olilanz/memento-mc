@@ -14,6 +14,8 @@ import net.minecraft.util.Identifier
 import net.minecraft.util.WorldSavePath
 import net.minecraft.util.math.BlockPos
 import net.minecraft.world.World
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
@@ -22,7 +24,6 @@ object StoneTopologyPersistence {
 
     private val gson = GsonBuilder().setPrettyPrinting().create()
 
-    private val log = org.slf4j.LoggerFactory.getLogger("memento")
 
     fun load(server: MinecraftServer): List<Stone> {
         val rootPath = server.getSavePath(WorldSavePath.ROOT)
@@ -32,15 +33,15 @@ object StoneTopologyPersistence {
 
         val fileToLoad = when {
             Files.exists(seedFile) -> {
-                log.info("[STONE] loading seed persistence file {}", seedFile)
+                MementoLog.info(MementoConcept.STORAGE, "loading seed persistence file {}", seedFile)
                 seedFile
             }
             Files.exists(primaryFile) -> {
-                log.info("[STONE] loading persistence file {}", primaryFile)
+                MementoLog.info(MementoConcept.STORAGE, "loading persistence file {}", primaryFile)
                 primaryFile
             }
             else -> {
-                log.info("[STONE] no persistence file present at {}", primaryFile)
+                MementoLog.debug(MementoConcept.STORAGE, "no persistence file present at {}", primaryFile)
                 return emptyList()
             }
         }
@@ -94,9 +95,10 @@ object StoneTopologyPersistence {
                 }
             }
 
-            log.info("[STONE] parsed persistence entries count={}", out.size)
+            MementoLog.info(MementoConcept.STORAGE, "loaded stones count={}", out.size)
             out
         } catch (t: Throwable) {
+            MementoLog.warn(MementoConcept.STORAGE, "failed to load stones; starting empty", t)
             MementoDebug.warn(server, "StoneTopology load failed, starting empty: ${t.message}")
             emptyList()
         }

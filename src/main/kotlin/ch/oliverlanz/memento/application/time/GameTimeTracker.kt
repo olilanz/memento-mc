@@ -4,7 +4,8 @@ import ch.oliverlanz.memento.domain.events.GameDayAdvanced
 import ch.oliverlanz.memento.domain.events.GameTimeDomainEvents
 import ch.oliverlanz.memento.MementoConstants
 import net.minecraft.server.MinecraftServer
-import org.slf4j.LoggerFactory
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import kotlin.math.max
 
 /**
@@ -19,8 +20,6 @@ import kotlin.math.max
  * - Time may jump forward multiple days (e.g. /time add). We MUST emit one day event per crossed day.
  */
 class GameTimeTracker {
-
-    private val log = LoggerFactory.getLogger("memento")
 
     private var server: MinecraftServer? = null
 
@@ -40,8 +39,9 @@ class GameTimeTracker {
         lastTimeOfDay = timeOfDay
         lastMementoDayIndex = mementoDayIndex
 
-        log.info(
-            "[TIME] attached worldTicks={} dayTicks={} checkpointTick={} mementoDayIndex={}",
+        MementoLog.debug(
+            MementoConcept.WORLD,
+            "attached worldTicks={} dayTicks={} checkpointTick={} mementoDayIndex={}",
             timeOfDay,
             timeOfDay % MementoConstants.OVERWORLD_DAY_TICKS,
             MementoConstants.RENEWAL_CHECKPOINT_TICK,
@@ -93,8 +93,9 @@ class GameTimeTracker {
 
         val deltaDays = (mementoDayIndex - lastDay).toInt()
         if (deltaDays > 0) {
-            log.info(
-                "[TIME] day advanced previousDay={} currentDay={} deltaDays={} worldTicks={} dayTicks={} checkpointTick={}",
+            MementoLog.debug(
+                MementoConcept.WORLD,
+                "day advanced previousDay={} currentDay={} deltaDays={} worldTicks={} dayTicks={} checkpointTick={}",
                 lastDay,
                 mementoDayIndex,
                 deltaDays,

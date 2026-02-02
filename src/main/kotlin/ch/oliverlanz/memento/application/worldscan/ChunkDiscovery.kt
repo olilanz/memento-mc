@@ -1,6 +1,7 @@
 package ch.oliverlanz.memento.application.worldscan
 
-import org.slf4j.LoggerFactory
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -20,7 +21,6 @@ import java.nio.file.Path
  */
 class ChunkDiscovery {
 
-    private val log = LoggerFactory.getLogger("memento")
 
     fun discover(plan: WorldDiscoveryPlan): WorldDiscoveryPlan {
         val discovered = plan.worlds.map { world ->
@@ -38,8 +38,9 @@ class ChunkDiscovery {
             }
 
             // INFO level: summary only (no per-file spam)
-            log.debug(
-                "[RUN] region file scan completed world={} regionFilesFound={} regionFilesUsed={} regionFilesSkippedEmpty={} regionsWithChunks={} regionsWithNoChunks={} chunksDiscovered={}",
+            MementoLog.debug(
+                MementoConcept.SCANNER,
+                "region file scan completed world={} regionFilesFound={} regionFilesUsed={} regionFilesSkippedEmpty={} regionsWithChunks={} regionsWithNoChunks={} chunksDiscovered={}",
                 stats.world,
                 stats.regionFilesFound,
                 stats.regionFilesUsed,
@@ -95,18 +96,19 @@ class ChunkDiscovery {
             Files.size(regionFile)
         } catch (e: IOException) {
             stats.regionFilesSkippedUnreadable++
-            log.debug("[RUN] region file unreadable; skipping file={} error={}", regionFile, e.message)
+            MementoLog.debug(MementoConcept.SCANNER, "region file unreadable; skipping file={} error={}", regionFile, e.message)
             return null
         } catch (e: SecurityException) {
             stats.regionFilesSkippedUnreadable++
-            log.debug("[RUN] region file access denied; skipping file={} error={}", regionFile, e.message)
+            MementoLog.debug(MementoConcept.SCANNER, "region file access denied; skipping file={} error={}", regionFile, e.message)
             return null
         }
 
         if (size < LOCATION_TABLE_BYTES.toLong()) {
             stats.regionFilesSkippedTooSmall++
-            log.trace(
-                "[RUN] region file too small; skipping file={} sizeBytes={}",
+            MementoLog.trace(
+                MementoConcept.SCANNER,
+                "region file too small; skipping file={} sizeBytes={}",
                 regionFile,
                 size,
             )
@@ -126,8 +128,9 @@ class ChunkDiscovery {
                 }
                 if (readTotal < buf.size) {
                     stats.regionFilesSkippedHeaderShortRead++
-                    log.debug(
-                        "[RUN] region header short read; skipping file={} readBytes={} expectedBytes={}",
+                    MementoLog.debug(
+                        MementoConcept.SCANNER,
+                        "region header short read; skipping file={} readBytes={} expectedBytes={}",
                         regionFile,
                         readTotal,
                         buf.size,
@@ -139,11 +142,11 @@ class ChunkDiscovery {
             }
         } catch (e: IOException) {
             stats.regionFilesSkippedReadFailed++
-            log.debug("[RUN] region file read failed; skipping file={} error={}", regionFile, e.message)
+            MementoLog.debug(MementoConcept.SCANNER, "region file read failed; skipping file={} error={}", regionFile, e.message)
             null
         } catch (e: SecurityException) {
             stats.regionFilesSkippedReadFailed++
-            log.debug("[RUN] region file read denied; skipping file={} error={}", regionFile, e.message)
+            MementoLog.debug(MementoConcept.SCANNER, "region file read denied; skipping file={} error={}", regionFile, e.message)
             null
         }
     }

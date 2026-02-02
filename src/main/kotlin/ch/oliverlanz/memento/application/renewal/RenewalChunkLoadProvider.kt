@@ -6,10 +6,11 @@ import ch.oliverlanz.memento.domain.renewal.BatchWaitingForRenewal
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadProvider
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkRef
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import net.minecraft.registry.RegistryKey
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
-import org.slf4j.LoggerFactory
 
 /**
  * Proactive chunk request source for Renewal.
@@ -23,8 +24,7 @@ import org.slf4j.LoggerFactory
  */
 class RenewalChunkLoadProvider : ChunkLoadProvider {
 
-    private val log = LoggerFactory.getLogger("memento")
-
+    
     private var activeBatchName: String? = null
     private var activeDimension: RegistryKey<World>? = null
     private val batchChunks: MutableSet<ChunkPos> = mutableSetOf()
@@ -58,8 +58,8 @@ class RenewalChunkLoadProvider : ChunkLoadProvider {
         batchChunks.clear()
         batchChunks.addAll(event.chunks)
 
-        log.debug(
-            "[RENEWAL] armed batch={} dim={} chunks={}",
+        MementoLog.debug(MementoConcept.RENEWAL, 
+            "armed batch={} dim={} chunks={}",
             event.batchName,
             event.dimension.value,
             batchChunks.size
@@ -69,8 +69,8 @@ class RenewalChunkLoadProvider : ChunkLoadProvider {
     private fun clearIfActive(batchName: String) {
         if (activeBatchName != batchName) return
 
-        log.debug(
-            "[RENEWAL] cleared batch={} dim={} chunks={}",
+        MementoLog.debug(MementoConcept.RENEWAL, 
+            "cleared batch={} dim={} chunks={}",
             activeBatchName,
             activeDimension?.value,
             batchChunks.size

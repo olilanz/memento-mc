@@ -6,7 +6,8 @@ import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrigger
 import net.minecraft.server.MinecraftServer
 import net.minecraft.world.chunk.ChunkStatus
-import org.slf4j.LoggerFactory
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 
 /**
  * Observes renewal batches and seeds unload-gate evidence for newly created batches.
@@ -19,8 +20,7 @@ import org.slf4j.LoggerFactory
  */
 class RenewalInitialObserver {
 
-    private val log = LoggerFactory.getLogger("memento")
-
+    
     private var server: MinecraftServer? = null
     private var attached = false
 

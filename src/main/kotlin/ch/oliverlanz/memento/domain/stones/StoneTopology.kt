@@ -29,7 +29,7 @@ import net.minecraft.world.World
  */
 object StoneTopology {
 
-    private val log = org.slf4j.LoggerFactory.getLogger("memento")
+    private val log = ch.oliverlanz.memento.infrastructure.observability.MementoLog
 
     private val stones = linkedMapOf<String, Stone>()
 
@@ -54,7 +54,7 @@ object StoneTopology {
 
         val loaded = StoneTopologyPersistence.load(server)
 
-        log.info("[STONE] persistence loaded count={}", loaded.size)
+        log.info(ch.oliverlanz.memento.infrastructure.observability.MementoConcept.STONE, "persistence loaded count={}", loaded.size)
 
         stones.clear()
         for (s in loaded) {
@@ -62,7 +62,7 @@ object StoneTopology {
             if (!stones.containsKey(s.name)) stones[s.name] = s
         }
 
-        log.info("[STONE] register after load count={}", stones.size)
+        log.info(ch.oliverlanz.memento.infrastructure.observability.MementoConcept.STONE, "register after load count={}", stones.size)
 
         // Build derived influence snapshot for the loaded register.
         rebuildInfluenceTree()
@@ -374,8 +374,8 @@ object StoneTopology {
 
         stones.remove(stoneName)
 
-        log.info(
-            "[STONE] consumed witherstone='{}' trigger={}",
+        log.info(ch.oliverlanz.memento.infrastructure.observability.MementoConcept.STONE, 
+            "consumed witherstone='{}' trigger={}",
             stoneName,
             StoneLifecycleTrigger.RENEWAL_COMPLETED,
         )
@@ -439,8 +439,8 @@ object StoneTopology {
             trigger = RenewalTrigger.SYSTEM,
         )
 
-        log.info(
-            "[STONE] renewal intent reconciled witherstone='{}' reason={} chunks={}",
+        log.info(ch.oliverlanz.memento.infrastructure.observability.MementoConcept.STONE, 
+            "renewal intent reconciled witherstone='{}' reason={} chunks={}",
             witherstone.name,
             reason,
             chunks.size,
@@ -459,16 +459,16 @@ object StoneTopology {
             .toList()
 
         if (affected.isEmpty()) {
-            log.debug(
-                "[STONE] lorestone topology change reason={} lorestone='{}' affectedWitherstones=0",
+            log.debug(ch.oliverlanz.memento.infrastructure.observability.MementoConcept.STONE, 
+                "lorestone topology change reason={} lorestone='{}' affectedWitherstones=0",
                 reason,
                 lorestone.name,
             )
             return
         }
 
-        log.info(
-            "[STONE] lorestone topology change reason={} lorestone='{}' affectedWitherstones={}",
+        log.info(ch.oliverlanz.memento.infrastructure.observability.MementoConcept.STONE, 
+            "lorestone topology change reason={} lorestone='{}' affectedWitherstones={}",
             reason,
             lorestone.name,
             affected.size,
