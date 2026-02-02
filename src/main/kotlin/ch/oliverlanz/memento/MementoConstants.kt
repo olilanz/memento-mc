@@ -78,6 +78,15 @@ object MementoConstants {
      */
     const val CHUNK_LOAD_TICKET_RADIUS: Int = 1
 
+
+    /**
+     * Hard cap on outstanding DRIVER tickets.
+     *
+     * Tickets are advisory and live in the scheduler graph. A bounded cap protects
+     * against accidental retention and keeps pressure predictable.
+     */
+    const val CHUNK_LOAD_MAX_OUTSTANDING_TICKETS: Int = 256
+
     /**
      * State log cadence (ticks) for driver DEBUG state lines.
      *
