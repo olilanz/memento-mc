@@ -38,14 +38,14 @@ object WitherstoneRenewalBridge {
         val witherstone = e.stone as? WitherstoneView ?: return
         if (e.to != StoneLifecycleState.MATURED) return
 
-        val applied = StoneTopology.reconcileRenewalIntentForMaturedWitherstone(
+        val applied = StoneTopology.ensureRenewalIntentForMaturedWitherstone(
             stoneName = witherstone.name,
             reason = "transition_${e.trigger}",
         )
 
         if (applied) {
             MementoLog.debug(MementoConcept.RENEWAL,
-                "matured reconciliation applied stone='{}' trigger={}",
+                "renewal intent ensured stone='{}' trigger={}",
                 witherstone.name,
                 e.trigger,
             )

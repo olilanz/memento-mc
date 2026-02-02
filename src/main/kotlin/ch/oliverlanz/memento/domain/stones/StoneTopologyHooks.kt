@@ -19,7 +19,7 @@ object StoneTopologyHooks {
     private var serverRef: MinecraftServer? = null
 
     fun onServerStarted(server: MinecraftServer) {
-        // Subscribe to domain events BEFORE attach(), so we observe startup reconciliation transitions.
+        // Subscribe to domain events BEFORE attach(), so we observe startup lifecycle transitions.
         attachLoggingOnce()
 
         serverRef = server

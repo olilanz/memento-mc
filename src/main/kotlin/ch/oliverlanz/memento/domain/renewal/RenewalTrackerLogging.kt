@@ -70,10 +70,30 @@ object RenewalTrackerLogging {
                 MementoLog.debug(MementoConcept.RENEWAL, "batch='{}' waiting for renewal chunks={}",
                     e.batchName, e.chunks.size)
 
-            is RenewalBatchLifecycleTransition ->
+                        is RenewalBatchLifecycleTransition -> {
                 MementoLog.debug(MementoConcept.RENEWAL,
                     "batch='{}' lifecycle {} -> {} chunks={}",
                     e.batch.name, e.from, e.to, e.batch.chunks.size)
-        }
+
+                // INFO-level domain narrative: explain why renewal might appear stalled.
+                when (e.to) {
+                    RenewalBatchState.WAITING_FOR_UNLOAD ->
+                        MementoLog.info(MementoConcept.RENEWAL,
+                            "stone='{}' waiting for chunks to unload before renewal dim='{}'",
+                            e.batch.name,
+                            e.batch.dimension.value.toString(),
+                        )
+
+                    RenewalBatchState.WAITING_FOR_RENEWAL ->
+                        MementoLog.info(MementoConcept.RENEWAL,
+                            "stone='{}' ready for renewal execution dim='{}' chunks={}",
+                            e.batch.name,
+                            e.batch.dimension.value.toString(),
+                            e.batch.chunks.size,
+                        )
+
+                    else -> Unit
+                }
+            }}
     }
 }
