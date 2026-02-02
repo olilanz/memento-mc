@@ -10,7 +10,8 @@ import ch.oliverlanz.memento.domain.renewal.RenewalTrigger
 import net.minecraft.registry.RegistryKey
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
-import org.slf4j.LoggerFactory
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -26,8 +27,6 @@ import java.util.concurrent.ConcurrentHashMap
  * updated from RenewalTracker events (which are emitted on the server thread).
  */
 object RenewalRegenerationBridge {
-
-    private val log = LoggerFactory.getLogger("memento")
 
     /** dimension-id -> (chunkLong -> true) */
     private val pendingByDimension: ConcurrentHashMap<String, ConcurrentHashMap<Long, Boolean>> = ConcurrentHashMap()
@@ -70,7 +69,7 @@ object RenewalRegenerationBridge {
         val dimMap = pendingByDimension.computeIfAbsent(dim) { ConcurrentHashMap() }
         for (l in chunkLongs) dimMap[l] = true
 
-        log.debug("[BRIDGE] regeneration armed batch='{}' dim='{}' chunks={}", e.batchName, dim, chunkLongs.size)
+        MementoLog.debug(MementoConcept.RENEWAL, "regeneration armed batch='{}' dim='{}' chunks={}", e.batchName, dim, chunkLongs.size)
     }
 
     private fun onChunkObserved(e: ChunkObserved) {

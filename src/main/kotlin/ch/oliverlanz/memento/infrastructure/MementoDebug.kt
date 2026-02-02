@@ -1,11 +1,6 @@
 package ch.oliverlanz.memento.infrastructure
 
-import ch.oliverlanz.memento.MementoConstants
-
 import net.minecraft.server.MinecraftServer
-import net.minecraft.server.network.ServerPlayerEntity
-import net.minecraft.text.Text
-import org.slf4j.LoggerFactory
 
 /**
  * Centralized debug / lifecycle notification channel.
@@ -20,36 +15,18 @@ import org.slf4j.LoggerFactory
  */
 object MementoDebug {
 
-    private val logger = LoggerFactory.getLogger("memento")
-
+    /**
+     * Backwards-compatible wrapper. Prefer [OperatorMessages] for new call sites.
+     */
     fun info(server: MinecraftServer?, message: String) {
-        logger.info(message)
-        notifyOps(server, message)
+        ch.oliverlanz.memento.infrastructure.observability.OperatorMessages.info(server, message)
     }
 
     fun warn(server: MinecraftServer?, message: String) {
-        logger.warn(message)
-        notifyOps(server, "⚠ $message")
+        ch.oliverlanz.memento.infrastructure.observability.OperatorMessages.warn(server, message)
     }
 
     fun error(server: MinecraftServer?, message: String) {
-        logger.error(message)
-        notifyOps(server, "✖ $message")
-    }
-
-    private fun notifyOps(server: MinecraftServer?, message: String) {
-        if (server == null) return
-
-        val text = Text.literal("[Memento] $message")
-        for (player in server.playerManager.playerList) {
-            if (isOp(player)) {
-                // Use chat (not actionbar) so it can be reviewed in the chat history.
-                player.sendMessage(text, false)
-            }
-        }
-    }
-
-    private fun isOp(player: ServerPlayerEntity): Boolean {
-        return player.hasPermissionLevel(MementoConstants.REQUIRED_OP_LEVEL)
+        ch.oliverlanz.memento.infrastructure.observability.OperatorMessages.error(server, message)
     }
 }

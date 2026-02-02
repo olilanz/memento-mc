@@ -3,11 +3,12 @@ package ch.oliverlanz.memento.application.worldscan
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
 import ch.oliverlanz.memento.domain.worldmap.ChunkSignals
 import ch.oliverlanz.memento.domain.worldmap.WorldMementoMap
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import net.minecraft.server.world.ServerWorld
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.Heightmap
 import net.minecraft.world.chunk.WorldChunk
-import org.slf4j.LoggerFactory
 
 /**
  * Consumes already-loaded chunks and extracts signals into the domain-owned [WorldMementoMap].
@@ -19,8 +20,6 @@ import org.slf4j.LoggerFactory
 class ChunkMetadataConsumer(
     private val map: WorldMementoMap,
 ) {
-
-    private val log = LoggerFactory.getLogger("memento")
 
     fun onChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
         val pos: ChunkPos = chunk.pos
@@ -36,8 +35,9 @@ class ChunkMetadataConsumer(
         // If we already have signals for this chunk, we can treat this as a duplicate load.
         // We still mark the plan as completed so scanning can make forward progress.
         if (map.hasSignals(key)) {
-            log.debug(
-                "[SCAN] duplicate load dim={} chunk=({}, {}) (signals already present)",
+            MementoLog.debug(
+                MementoConcept.SCANNER,
+                "duplicate load dim={} chunk=({}, {}) (signals already present)",
                 world.registryKey.value.toString(),
                 pos.x,
                 pos.z,
@@ -71,8 +71,9 @@ class ChunkMetadataConsumer(
 
         // Telemetry: tie map mutation to convergence.
         // This is intentionally INFO for now.
-        log.debug(
-            "[SCAN] signals {} dim={} chunk=({}, {}) missing {}->{} scanned {}->{}",
+        MementoLog.debug(
+            MementoConcept.SCANNER,
+            "signals {} dim={} chunk=({}, {}) missing {}->{} scanned {}->{}",
             if (firstAttach) "ATTACHED" else "UPDATED",
             world.registryKey.value.toString(),
             pos.x,

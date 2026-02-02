@@ -3,7 +3,8 @@ package ch.oliverlanz.memento.application.renewal
 import ch.oliverlanz.memento.domain.renewal.BatchCompleted
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.stones.StoneTopology
-import org.slf4j.LoggerFactory
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 
 /**
  * Application-layer wiring that closes the Witherstone lifecycle.
@@ -15,16 +16,15 @@ import org.slf4j.LoggerFactory
  */
 object WitherstoneConsumptionBridge {
 
-    private val log = LoggerFactory.getLogger("Memento")
-
     fun onRenewalEvent(e: RenewalEvent) {
         if (e !is BatchCompleted) return
 
         // Consumption is idempotent in StoneTopology.
         StoneTopology.consume(e.batchName)
 
-        log.info(
-            "[BRIDGE] renewal completed -> consuming witherstone='{}' trigger={} dimension={}",
+        MementoLog.debug(
+            MementoConcept.RENEWAL,
+            "renewal completion applied: consumed stone='{}' trigger={} dim={}",
             e.batchName,
             e.trigger,
             e.dimension.value.toString()

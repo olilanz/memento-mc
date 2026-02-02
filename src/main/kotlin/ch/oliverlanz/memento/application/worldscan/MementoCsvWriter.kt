@@ -4,15 +4,14 @@ import ch.oliverlanz.memento.domain.worldmap.WorldMementoTopology
 import ch.oliverlanz.memento.MementoConstants
 import net.minecraft.server.MinecraftServer
 import net.minecraft.util.WorldSavePath
-import org.slf4j.LoggerFactory
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 
 /** Application-level projection of a topology into a CSV file for analysis. */
 object MementoCsvWriter {
-
-    private val log = LoggerFactory.getLogger("memento")
 
     fun write(server: MinecraftServer, topology: WorldMementoTopology): Path {
         val root = server.getSavePath(WorldSavePath.ROOT)
@@ -42,7 +41,7 @@ object MementoCsvWriter {
         }
 
         Files.write(path, sb.toString().toByteArray(StandardCharsets.UTF_8))
-        log.info("[RUN] wrote csv path={} rows={}", path, topology.entries.size)
+        MementoLog.info(MementoConcept.SCANNER, "snapshot written csv={} rows={}", path, topology.entries.size)
         return path
     }
 }

@@ -1,6 +1,7 @@
 package ch.oliverlanz.memento.domain.renewal
 
-import org.slf4j.LoggerFactory
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 
 /**
  * Logging adapter for RenewalTracker domain events.
@@ -9,8 +10,6 @@ import org.slf4j.LoggerFactory
  * test-friendly log lines.
  */
 object RenewalTrackerLogging {
-
-    private val log = LoggerFactory.getLogger("memento")
 
     private fun triggerLabel(trigger: RenewalTrigger): String = when (trigger) {
         RenewalTrigger.INITIAL_SNAPSHOT -> "STARTUP"
@@ -34,46 +33,46 @@ object RenewalTrackerLogging {
     private fun logEvent(e: RenewalEvent) {
         when (e) {
             is BatchCreated ->
-                log.debug("[LOADER] batch='{}' created state={} chunks={} trigger={}",
+                MementoLog.debug(MementoConcept.RENEWAL, "batch='{}' created state={} chunks={} trigger={}",
                     e.batchName, e.state.name, e.chunkCount, e.trigger.name)
 
             is BatchUpdated ->
-                log.debug("[LOADER] batch='{}' state {} -> {} chunks={} trigger={}",
+                MementoLog.debug(MementoConcept.RENEWAL, "batch='{}' state {} -> {} chunks={} trigger={}",
                     e.batchName, e.from.name, e.to.name, e.chunkCount, e.trigger.name)
 
             is InitialSnapshotApplied ->
-                log.info("[LOADER] batch='{}' status loadedChunks={} unloadedChunks={} trigger={}",
+                MementoLog.debug(MementoConcept.RENEWAL, "batch='{}' initial snapshot applied loadedChunks={} unloadedChunks={} trigger={}",
                     e.batchName, e.loaded, e.unloaded, triggerLabel(e.trigger))
 
             is BatchRemoved ->
-                log.info("[LOADER] batch='{}' {} trigger={}",
+                MementoLog.debug(MementoConcept.RENEWAL, "batch='{}' {} trigger={}",
                     e.batchName,
                     if (e.trigger == RenewalTrigger.MANUAL) "definition removed" else "definition replaced",
                     triggerLabel(e.trigger))
 
             is ChunkObserved ->
-                log.debug("[LOADER] batch='{}' chunk=({}, {}) observed state={} trigger={}",
+                MementoLog.debug(MementoConcept.RENEWAL, "batch='{}' chunk=({}, {}) observed state={} trigger={}",
                     e.batchName, e.chunk.x, e.chunk.z, e.state.name, e.trigger.name)
 
             is GateAttempted ->
-                log.debug("[LOADER] batch='{}' gate attempted from={} attempted={} trigger={}",
+                MementoLog.debug(MementoConcept.RENEWAL, "batch='{}' gate attempted from={} attempted={} trigger={}",
                     e.batchName, e.from.name, e.attempted.name, e.trigger.name)
 
             is GatePassed ->
-                log.info("[LOADER] batch='{}' gate passed {} -> {} trigger={}",
+                MementoLog.debug(MementoConcept.RENEWAL, "batch='{}' gate passed {} -> {} trigger={}",
                     e.batchName, e.from.name, e.to.name, e.trigger.name)
 
             is BatchCompleted ->
-                log.info("[LOADER] batch='{}' completed dim={} trigger={}",
+                MementoLog.info(MementoConcept.RENEWAL, "renewal completed stone='{}' dim={} trigger={}",
                     e.batchName, e.dimension.value, e.trigger.name)
 
             is BatchWaitingForRenewal ->
-                log.debug("[LOADER] batch='{}' waiting for renewal chunks={}",
+                MementoLog.debug(MementoConcept.RENEWAL, "batch='{}' waiting for renewal chunks={}",
                     e.batchName, e.chunks.size)
 
             is RenewalBatchLifecycleTransition ->
-                log.info(
-                    "Renewal batch for stone '{}' transitioned from {} to {} ({} chunks)",
+                MementoLog.debug(MementoConcept.RENEWAL,
+                    "batch='{}' lifecycle {} -> {} chunks={}",
                     e.batch.name, e.from, e.to, e.batch.chunks.size)
         }
     }
