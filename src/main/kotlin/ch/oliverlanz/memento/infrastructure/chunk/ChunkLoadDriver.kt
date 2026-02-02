@@ -11,21 +11,19 @@ import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.chunk.WorldChunk
 import java.util.ArrayDeque
 import java.util.LinkedHashMap
-import kotlin.math.round
 
 /**
  * Infrastructure-owned chunk load driver.
  *
- * This is the single integration point between Memento and the engine's
- * chunk lifecycle. Engine callbacks are treated as signals only; all
- * coordination happens during [tick].
+ * Current contract: the DRIVER is a *broker*.
  *
- * Key properties:
- * - Single-flight proactive loading (one ticket at a time)
- * - Renewal-first via explicit source selection (renewal -> scan)
- * - Reactive correctness (signal != availability)
- * - No ticket expiry
- * - Polite, adaptive pressure via EWMA only
+ * - RENEWAL and SCANNER express *interest* (desired chunks).
+ * - The DRIVER translates interest into temporary tickets (bounded + prioritized).
+ * - The engine decides *when* chunks load.
+ * - When a chunk becomes available, the DRIVER forwards it to consumers and removes its ticket.
+ *
+ * The DRIVER does not attempt to "force" chunk availability beyond providing tickets.
+ * It avoids spam by enforcing a hard cap on outstanding tickets and by prioritizing renewal.
  */
 class ChunkLoadDriver {
 
@@ -46,51 +44,40 @@ class ChunkLoadDriver {
         }
     }
 
-    
+    private enum class TicketSource { RENEWAL, SCAN }
+
     private var renewalProvider: ChunkLoadProvider? = null
     private var scanProvider: ChunkLoadProvider? = null
     private val listeners = mutableListOf<ChunkAvailabilityListener>()
     private var server: MinecraftServer? = null
 
     private var tickCounter: Long = 0
+    private var lastStateLogTick: Long = 0
 
-    /* ---------------------------------------------------------------------
-     * Adaptive pacing (EWMA-only)
-     * ------------------------------------------------------------------ */
-
-    private var latencyEwmaTicks: Double =
-        MementoConstants.CHUNK_LOAD_MIN_DELAY_TICKS.toDouble()
-
-    private var nextProactiveIssueTick: Long = 0
-
-    // When the driver is idle, probing providers may cost some work (sequence
-    // iteration and world lookups). Proactive discovery does not need to be
-    // instantaneous, so we probe at a low cadence while idle.
-    private val idleProbeIntervalTicks: Long = 5
-    private var nextIdleProbeTick: Long = 0
-
-    private data class OutstandingTicket(
+    private data class TicketMeta(
+        val source: TicketSource,
         val issuedAtTick: Long,
-        val countsForPacing: Boolean,
     )
 
-    private val tickets: MutableMap<ChunkRef, OutstandingTicket> = mutableMapOf()
-
-    /* ---------------------------------------------------------------------
-     * Pending load tracking
-     * ------------------------------------------------------------------ */
+    /**
+     * Outstanding tickets currently registered by the DRIVER.
+     *
+     * Note: tickets are advisory; we keep them alive until the chunk is observed as usable,
+     * then remove them immediately to avoid retention and scheduler state growth.
+     */
+    private val tickets: MutableMap<ChunkRef, TicketMeta> = LinkedHashMap()
 
     private data class PendingLoad(
         val firstSeenTick: Long,
-        var nextRearmTick: Long,
-        var rearmAttempts: Int = 0,
-        var lastLogTick: Long = 0,
     )
 
+    /**
+     * Chunks that have emitted an engine load signal (or were already available),
+     * but have not yet been forwarded to consumers (bounded per tick).
+     */
     private val pendingLoads: LinkedHashMap<ChunkRef, PendingLoad> = LinkedHashMap()
-    private val pendingUnloads: ArrayDeque<Pair<ServerWorld, ChunkPos>> = ArrayDeque()
 
-    private var lastStateLogTick: Long = 0
+    private val pendingUnloads: ArrayDeque<Pair<ServerWorld, ChunkPos>> = ArrayDeque()
 
     /* ---------------------------------------------------------------------
      * Lifecycle
@@ -101,9 +88,7 @@ class ChunkLoadDriver {
         activeInstance = this
 
         tickCounter = 0
-        latencyEwmaTicks = MementoConstants.CHUNK_LOAD_MIN_DELAY_TICKS.toDouble()
-        nextProactiveIssueTick = 0
-        nextIdleProbeTick = 0
+        lastStateLogTick = 0
 
         tickets.clear()
         pendingLoads.clear()
@@ -128,26 +113,12 @@ class ChunkLoadDriver {
         pendingUnloads.clear()
     }
 
-    /**
-     * Register the renewal request source.
-     *
-     * Renewal must be able to operate independently of scanning.
-     */
     fun registerRenewalProvider(provider: ChunkLoadProvider) {
         renewalProvider = provider
-        // New intent may become available; allow immediate probing.
-        nextIdleProbeTick = 0
     }
 
-    /**
-     * Register the scanner request source.
-     *
-     * Scanning must be able to operate independently of renewal.
-     */
     fun registerScanProvider(provider: ChunkLoadProvider) {
         scanProvider = provider
-        // New intent may become available; allow immediate probing.
-        nextIdleProbeTick = 0
     }
 
     fun registerConsumer(listener: ChunkAvailabilityListener) {
@@ -166,27 +137,9 @@ class ChunkLoadDriver {
         forwardPendingLoads(s)
         forwardPendingUnloads()
 
-        if (tickets.isNotEmpty()) {
-            logState()
-            return
-        }
+        // Refill tickets up to cap (renewal first; scan only when renewal has no desired chunks).
+        replenishTickets(s)
 
-        if (tickCounter < nextProactiveIssueTick) {
-            logState()
-            return
-        }
-
-        // Idle heartbeat: only probe providers at a low cadence while idle.
-        // This avoids doing work on every tick when there is no proactive intent.
-        if (tickCounter < nextIdleProbeTick) {
-            logState()
-            return
-        }
-
-        issueNextProactiveTicketIfAny(s)
-        if (tickets.isEmpty()) {
-            nextIdleProbeTick = tickCounter + idleProbeIntervalTicks
-        }
         logState()
     }
 
@@ -197,10 +150,7 @@ class ChunkLoadDriver {
     private fun onEngineChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
         pendingLoads.putIfAbsent(
             ChunkRef(world.registryKey, chunk.pos),
-            PendingLoad(
-                firstSeenTick = tickCounter,
-                nextRearmTick = tickCounter + MementoConstants.CHUNK_LOAD_REARM_DELAY_TICKS
-            )
+            PendingLoad(firstSeenTick = tickCounter),
         )
     }
 
@@ -218,12 +168,7 @@ class ChunkLoadDriver {
         val toRemove = mutableListOf<ChunkRef>()
         var forwarded = 0
 
-        // IMPORTANT: Engine chunk-load callbacks may be invoked while we're inside the
-        // driver tick (e.g. as side effects of listener logic). Those callbacks mutate
-        // [pendingLoads]. Iterating the map directly would therefore be vulnerable to
-        // ConcurrentModificationException, even on a single thread.
-        //
-        // We iterate over a stable snapshot to ensure mutations are applied safely.
+        // Engine callbacks may mutate [pendingLoads] while we are ticking; iterate over a snapshot.
         val snapshot = pendingLoads.entries.toList()
 
         for ((ref, pending) in snapshot) {
@@ -231,7 +176,7 @@ class ChunkLoadDriver {
 
             val world = server.getWorld(ref.dimension)
             if (world == null) {
-                MementoLog.warn(MementoConcept.DRIVER, 
+                MementoLog.warn(MementoConcept.DRIVER,
                     "pending load dropped; world missing dim={} pos={}",
                     ref.dimension.value,
                     ref.pos
@@ -242,29 +187,16 @@ class ChunkLoadDriver {
 
             val chunk = world.chunkManager.getWorldChunk(ref.pos.x, ref.pos.z, false)
             if (chunk == null) {
+                // Engine signalled a load, but the chunk is not yet usable as a WorldChunk.
+                // Keep waiting; the ticket (if any) remains as our standing interest.
                 val age = tickCounter - pending.firstSeenTick
-                val hasTicket = tickets.containsKey(ref)
-
-                if (!hasTicket &&
-                    tickCounter >= pending.nextRearmTick &&
-                    pending.rearmAttempts < MementoConstants.CHUNK_LOAD_REARM_MAX_ATTEMPTS
-                ) {
-                    world.chunkManager.addTicket(ChunkTicketType.FORCED, ref.pos, MementoConstants.CHUNK_LOAD_TICKET_RADIUS)
-                    tickets[ref] = OutstandingTicket(tickCounter, countsForPacing = false)
-
-                    pending.rearmAttempts++
-                    val backoff =
-                        MementoConstants.CHUNK_LOAD_REARM_BACKOFF_TICKS *
-                            (1 shl (pending.rearmAttempts - 1))
-                    pending.nextRearmTick = tickCounter + backoff
-
-                    MementoLog.debug(MementoConcept.DRIVER, 
-                        "re-armed pending load dim={} pos={} ageTicks={} attempt={}/{}",
+                if (age % 200L == 0L) {
+                    MementoLog.debug(MementoConcept.DRIVER,
+                        "waiting for usable chunk dim={} pos={} ageTicks={} hasTicket={}",
                         ref.dimension.value,
                         ref.pos,
                         age,
-                        pending.rearmAttempts,
-                        MementoConstants.CHUNK_LOAD_REARM_MAX_ATTEMPTS
+                        tickets.containsKey(ref)
                     )
                 }
                 continue
@@ -274,18 +206,9 @@ class ChunkLoadDriver {
             forwarded++
             toRemove += ref
 
-            val ticket = tickets.remove(ref)
-            if (ticket != null) {
-                val latency = tickCounter - ticket.issuedAtTick
-                if (ticket.countsForPacing) {
-                    updateLatencyEwma(latency)
-                    nextProactiveIssueTick = tickCounter + computeNextDelayTicks()
-                }
+            // If this chunk was ticketed by the DRIVER, release our interest immediately.
+            if (tickets.remove(ref) != null) {
                 world.chunkManager.removeTicket(ChunkTicketType.FORCED, ref.pos, MementoConstants.CHUNK_LOAD_TICKET_RADIUS)
-
-                // Proactive load completed: once pacing allows, probe for the next
-                // piece of intent immediately (no need to wait for the idle probe cadence).
-                nextIdleProbeTick = 0
             }
         }
 
@@ -300,92 +223,53 @@ class ChunkLoadDriver {
     }
 
     /* ---------------------------------------------------------------------
-     * Proactive issuance
+     * Ticket replenishment
      * ------------------------------------------------------------------ */
 
-    private fun issueNextProactiveTicketIfAny(server: MinecraftServer) {
-        // Renewal must always win when a batch exists, but we do not interrupt any
-        // in-flight load (single-flight). The decision is made only when issuing the
-        // *next* ticket (i.e. when [tickets] is empty).
+    private fun replenishTickets(server: MinecraftServer) {
+        val capacity = MementoConstants.CHUNK_LOAD_MAX_OUTSTANDING_TICKETS - tickets.size
+        if (capacity <= 0) return
 
-        // Important: the first candidate in a provider's sequence may already be loaded.
-        // If we always take firstOrNull(), we can get stuck repeatedly "issuing" the
-        // same already-loaded chunk and never progress to the next one.
-        fun selectNext(provider: ChunkLoadProvider?): ChunkRef? {
-            if (provider == null) return null
+        // Determine whether renewal has any remaining intent.
+        val renewalHasIntent = renewalProvider?.desiredChunks()?.iterator()?.hasNext() == true
 
-            val it = provider.desiredChunks().iterator()
-            var inspected = 0
+        val provider = if (renewalHasIntent) renewalProvider else scanProvider
+        val source = if (renewalHasIntent) TicketSource.RENEWAL else TicketSource.SCAN
 
-            while (it.hasNext() && inspected < 256) {
-                inspected++
-                val candidate = it.next()
+        if (provider == null) return
 
-                if (tickets.containsKey(candidate)) continue
-                if (pendingLoads.containsKey(candidate)) continue
+        var issued = 0
 
-                val world = server.getWorld(candidate.dimension) ?: continue
-                val alreadyLoaded =
-                    world.chunkManager.getWorldChunk(candidate.pos.x, candidate.pos.z, false)
+        val it = provider.desiredChunks().iterator()
+        while (it.hasNext() && issued < capacity) {
+            val ref = it.next()
 
-                if (alreadyLoaded != null) {
-                    // Make the already-available chunk observable through the normal
-                    // forwarding pipeline, then keep searching for a chunk that actually
-                    // needs a ticket.
-                    pendingLoads.putIfAbsent(
-                        candidate,
-                        PendingLoad(
-                            firstSeenTick = tickCounter,
-                            nextRearmTick =
-                                tickCounter + MementoConstants.CHUNK_LOAD_REARM_DELAY_TICKS
-                        )
-                    )
-                    continue
-                }
+            // Avoid re-issuing tickets and avoid duplicating pending work.
+            if (tickets.containsKey(ref)) continue
+            if (pendingLoads.containsKey(ref)) continue
 
-                return candidate
+            val world = server.getWorld(ref.dimension) ?: continue
+
+            // If already available, push it through the same forwarding pipeline (no ticket).
+            val alreadyLoaded = world.chunkManager.getWorldChunk(ref.pos.x, ref.pos.z, false)
+            if (alreadyLoaded != null) {
+                pendingLoads.putIfAbsent(ref, PendingLoad(firstSeenTick = tickCounter))
+                continue
             }
 
-            return null
+            world.chunkManager.addTicket(ChunkTicketType.FORCED, ref.pos, MementoConstants.CHUNK_LOAD_TICKET_RADIUS)
+            tickets[ref] = TicketMeta(source = source, issuedAtTick = tickCounter)
+            issued++
         }
 
-        val next =
-            selectNext(renewalProvider)
-                ?: selectNext(scanProvider)
-                ?: return
-
-        val world = server.getWorld(next.dimension) ?: return
-
-        world.chunkManager.addTicket(ChunkTicketType.FORCED, next.pos, MementoConstants.CHUNK_LOAD_TICKET_RADIUS)
-        tickets[next] = OutstandingTicket(tickCounter, countsForPacing = true)
-
-        MementoLog.debug(MementoConcept.DRIVER, 
-            "ticket issued dim={} pos={} ",
-            next.dimension.value,
-            next.pos
-        )
-    }
-
-    /* ---------------------------------------------------------------------
-     * Adaptive pacing helpers
-     * ------------------------------------------------------------------ */
-
-    private fun updateLatencyEwma(sampleTicks: Long) {
-        val clamped = sampleTicks
-            .coerceAtLeast(MementoConstants.CHUNK_LOAD_MIN_DELAY_TICKS)
-            .coerceAtMost(MementoConstants.CHUNK_LOAD_EWMA_MAX_SAMPLE_TICKS)
-
-        latencyEwmaTicks =
-            MementoConstants.CHUNK_LOAD_EWMA_WEIGHT_OLD * latencyEwmaTicks +
-            MementoConstants.CHUNK_LOAD_EWMA_WEIGHT_NEW * clamped.toDouble()
-    }
-
-    private fun computeNextDelayTicks(): Long {
-        val proposed = round(latencyEwmaTicks).toLong()
-        return proposed.coerceIn(
-            MementoConstants.CHUNK_LOAD_MIN_DELAY_TICKS,
-            MementoConstants.CHUNK_LOAD_MAX_DELAY_TICKS
-        )
+        if (issued > 0) {
+            MementoLog.debug(MementoConcept.DRIVER,
+                "tickets issued source={} count={} outstanding={}",
+                source,
+                issued,
+                tickets.size
+            )
+        }
     }
 
     /* ---------------------------------------------------------------------
@@ -396,13 +280,11 @@ class ChunkLoadDriver {
         if ((tickCounter - lastStateLogTick) < MementoConstants.CHUNK_LOAD_STATE_LOG_EVERY_TICKS) return
         lastStateLogTick = tickCounter
 
-        MementoLog.debug(MementoConcept.DRIVER, 
-            "tick={} outstandingTickets={} pendingLoads={} nextProactiveIssueTick={} ewmaTicks={}",
+        MementoLog.debug(MementoConcept.DRIVER,
+            "tick={} outstandingTickets={} pendingLoads={}",
             tickCounter,
             tickets.size,
-            pendingLoads.size,
-            nextProactiveIssueTick,
-            String.format("%.1f", latencyEwmaTicks)
+            pendingLoads.size
         )
     }
 }
