@@ -71,6 +71,41 @@ class ChunkMetadataConsumer(
 
         // Telemetry: tie map mutation to convergence.
         // This is intentionally INFO for now.
+
+        if (firstAttach) {
+            // Region-level progress: emit once when a region becomes complete.
+            val rx = key.regionX
+            val rz = key.regionZ
+            val worldId = key.world.value.toString()
+
+            val regionTotal = map.snapshot().count {
+                it.first.world.value.toString() == worldId &&
+                it.first.regionX == rx && it.first.regionZ == rz
+            } + map.missingSignals(Int.MAX_VALUE).count {
+                it.world.value.toString() == worldId &&
+                it.regionX == rx && it.regionZ == rz
+            }
+
+            val regionScanned = map.snapshot().count {
+                it.first.world.value.toString() == worldId &&
+                it.first.regionX == rx && it.first.regionZ == rz
+            }
+
+            if (regionTotal > 0 && regionScanned == regionTotal) {
+                MementoLog.debug(
+                    MementoConcept.SCANNER,
+                    "region completed dim={} region=({}, {}) chunks={}/{} totalScanned={}/{}",
+                    worldId,
+                    rx,
+                    rz,
+                    regionScanned,
+                    regionTotal,
+                    afterScanned,
+                    map.totalChunks(),
+                )
+            }
+        }
+
         MementoLog.debug(
             MementoConcept.SCANNER,
             "signals {} dim={} chunk=({}, {}) missing {}->{} scanned {}->{}",
