@@ -1,3 +1,4 @@
+
 package ch.oliverlanz.memento.mixin
 
 import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
@@ -34,6 +35,7 @@ abstract class VersionedChunkStorageMixin {
         val dimensionKey = getStorageKey().dimension() as RegistryKey<World>
 
         if (RenewalRegenerationBridge.shouldRegenerate(dimensionKey, chunkPos)) {
+            RenewalRegenerationBridge.recordRegenTriggered(dimensionKey, chunkPos)
             cir.returnValue = CompletableFuture.completedFuture(Optional.empty())
         }
     }
