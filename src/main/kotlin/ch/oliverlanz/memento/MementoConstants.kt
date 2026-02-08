@@ -94,6 +94,24 @@ object MementoConstants {
      */
     const val CHUNK_LOAD_STATE_LOG_EVERY_TICKS: Long = 100L
 
+    /**
+     * Cadence for "awaiting full load" checks.
+     *
+     * We poll for accessibility on the tick thread to respect engine thread-safety constraints.
+     */
+    const val CHUNK_LOAD_AWAITING_FULL_LOAD_CHECK_EVERY_TICKS: Long = 10L
+
+    /** Maximum number of awaiting-full-load checks performed per check cycle. */
+    const val CHUNK_LOAD_AWAITING_FULL_LOAD_MAX_PER_CYCLE: Int = 100
+
+    /**
+     * Expiry for COMPLETED_PENDING_PRUNE retention (ticks).
+     *
+     * If this expires, it indicates a logic fault (e.g. scanner never dropping demand).
+     * The driver will prune and allow the chunk to re-enter as a new request, with loud observability.
+     */
+    const val CHUNK_LOAD_COMPLETED_PENDING_PRUNE_EXPIRE_TICKS: Long = 2400L
+
     // ---------------------------------------------------------------------
     // Infrastructure / Chunk loading & scanning (driver + scanner tuning)
     // ---------------------------------------------------------------------

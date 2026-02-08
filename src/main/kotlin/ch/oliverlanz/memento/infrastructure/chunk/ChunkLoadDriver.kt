@@ -9,21 +9,21 @@ import net.minecraft.server.world.ChunkTicketType
 import net.minecraft.server.world.ServerWorld
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.chunk.WorldChunk
-import java.util.ArrayDeque
-import java.util.LinkedHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 
 /**
  * Infrastructure-owned chunk load driver.
  *
- * Current contract: the DRIVER is a *broker*.
- *
+ * Broker contract:
  * - RENEWAL and SCANNER express *interest* (desired chunks).
  * - The DRIVER translates interest into temporary tickets (bounded + prioritized).
  * - The engine decides *when* chunks load.
- * - When a chunk becomes available, the DRIVER forwards it to consumers and removes its ticket.
+ * - When a chunk becomes safely accessible on the tick thread, the DRIVER propagates it to consumers.
  *
- * The DRIVER does not attempt to "force" chunk availability beyond providing tickets.
- * It avoids spam by enforcing a hard cap on outstanding tickets and by prioritizing renewal.
+ * Threading:
+ * - Engine callbacks may arrive on non-tick threads.
+ * - The DRIVER never propagates chunk availability on an engine callback thread.
+ * - All propagation and engine access happens on the tick thread.
  */
 class ChunkLoadDriver {
 
@@ -42,42 +42,27 @@ class ChunkLoadDriver {
                 activeInstance?.onEngineChunkUnloaded(world, chunk.pos)
             }
         }
-    }
 
-    private enum class TicketSource { RENEWAL, SCAN }
+        private const val DRIVER_TICKET_NAME: String = "memento_driver"
+    }
 
     private var renewalProvider: ChunkLoadProvider? = null
     private var scanProvider: ChunkLoadProvider? = null
     private val listeners = mutableListOf<ChunkAvailabilityListener>()
     private var server: MinecraftServer? = null
 
-    private var tickCounter: Long = 0
+    @Volatile private var tickCounter: Long = 0
     private var lastStateLogTick: Long = 0
 
-    private data class TicketMeta(
-        val source: TicketSource,
-        val issuedAtTick: Long,
-    )
+    // Register is the sole bookkeeping structure for chunk load lifecycle.
+    private val register = ChunkLoadRegister()
 
-    /**
-     * Outstanding tickets currently registered by the DRIVER.
-     *
-     * Note: tickets are advisory; we keep them alive until the chunk is observed as usable,
-     * then remove them immediately to avoid retention and scheduler state growth.
-     */
-    private val tickets: MutableMap<ChunkRef, TicketMeta> = LinkedHashMap()
+    // Engine unload signals can arrive off-thread; queue them and forward on tick thread.
+    private data class UnloadEvent(val dim: net.minecraft.registry.RegistryKey<net.minecraft.world.World>, val pos: ChunkPos)
+    private val pendingUnloads = ConcurrentLinkedQueue<UnloadEvent>()
 
-    private data class PendingLoad(
-        val firstSeenTick: Long,
-    )
-
-    /**
-     * Chunks that have emitted an engine load signal (or were already available),
-     * but have not yet been forwarded to consumers (bounded per tick).
-     */
-    private val pendingLoads: LinkedHashMap<ChunkRef, PendingLoad> = LinkedHashMap()
-
-    private val pendingUnloads: ArrayDeque<Pair<ServerWorld, ChunkPos>> = ArrayDeque()
+    // Aggregated observability
+    private var completedPendingPruneExpiredCount: Long = 0
 
     /* ---------------------------------------------------------------------
      * Lifecycle
@@ -89,9 +74,9 @@ class ChunkLoadDriver {
 
         tickCounter = 0
         lastStateLogTick = 0
+        completedPendingPruneExpiredCount = 0
 
-        tickets.clear()
-        pendingLoads.clear()
+        register.clear()
         pendingUnloads.clear()
     }
 
@@ -100,16 +85,17 @@ class ChunkLoadDriver {
 
         val s = server
         if (s != null) {
-            tickets.keys.forEach { ref ->
-                s.getWorld(ref.dimension)
-                    ?.chunkManager
-                    ?.removeTicket(ChunkTicketType.FORCED, ref.pos, MementoConstants.CHUNK_LOAD_TICKET_RADIUS)
+            // Remove any remaining tickets we own.
+            val views = register.allEntriesSnapshot()
+            for (v in views) {
+                val ticket = v.ticketName ?: continue
+                val world = s.getWorld(v.chunk.dimension) ?: continue
+                world.chunkManager.removeTicket(ChunkTicketType.FORCED, v.chunk.pos, MementoConstants.CHUNK_LOAD_TICKET_RADIUS)
             }
         }
 
         server = null
-        tickets.clear()
-        pendingLoads.clear()
+        register.clear()
         pendingUnloads.clear()
     }
 
@@ -134,133 +120,193 @@ class ChunkLoadDriver {
 
         val s = server ?: return
 
-        forwardPendingLoads(s)
-        forwardPendingUnloads()
+        // 1) Recompute demand snapshot (renewal first, then scanner).
+        register.beginDemandSnapshot()
+        markDesiredFromProvider(renewalProvider, ChunkLoadRegister.RequestSource.RENEWAL, nowTick = tickCounter)
+        markDesiredFromProvider(scanProvider, ChunkLoadRegister.RequestSource.SCANNER, nowTick = tickCounter)
 
-        // Refill tickets up to cap (renewal first; scan only when renewal has no desired chunks).
-        replenishTickets(s)
+        // 2) Expire and prune (outside-lock engine operations handled here).
+        expireCompletedPendingPrune(s)
+        pruneUndesired(s)
+
+        // 3) Poll for "awaiting full load" chunks (throttled).
+        if (tickCounter % MementoConstants.CHUNK_LOAD_AWAITING_FULL_LOAD_CHECK_EVERY_TICKS == 0L) {
+            checkAwaitingFullLoad(s)
+        }
+
+        // 4) Propagate ready chunks (bounded) on tick thread.
+        propagateReadyChunks(s)
+
+        // 5) Issue tickets up to cap.
+        issueTicketsUpToCap(s)
+
+        // 6) Forward unload events (tick thread).
+        forwardPendingUnloads(s)
 
         logState()
     }
 
     /* ---------------------------------------------------------------------
-     * Engine signals
+     * Engine signals (may be off-thread)
      * ------------------------------------------------------------------ */
 
     private fun onEngineChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
-        pendingLoads.putIfAbsent(
+        // Record the observation into the register. No propagation here.
+        register.recordEngineLoadObserved(
             ChunkRef(world.registryKey, chunk.pos),
-            PendingLoad(firstSeenTick = tickCounter),
+            nowTick = tickCounter,
         )
     }
 
     private fun onEngineChunkUnloaded(world: ServerWorld, pos: ChunkPos) {
-        pendingUnloads.addLast(world to pos)
+        pendingUnloads.add(UnloadEvent(world.registryKey, pos))
     }
 
     /* ---------------------------------------------------------------------
-     * Forwarding
+     * Demand
      * ------------------------------------------------------------------ */
 
-    private fun forwardPendingLoads(server: MinecraftServer) {
-        if (pendingLoads.isEmpty()) return
+    private fun markDesiredFromProvider(provider: ChunkLoadProvider?, source: ChunkLoadRegister.RequestSource, nowTick: Long) {
+        if (provider == null) return
+        // Provider implementations are expected to be bounded.
+        for (ref in provider.desiredChunks()) {
+            register.markDesired(ref, source, nowTick)
+            register.acknowledgeRequest(ref, source, nowTick)
+        }
+    }
 
-        val toRemove = mutableListOf<ChunkRef>()
+    /* ---------------------------------------------------------------------
+     * Pruning / expiry
+     * ------------------------------------------------------------------ */
+
+    private fun pruneUndesired(server: MinecraftServer) {
+        val result = register.pruneUndesired(nowTick = tickCounter)
+
+        for (ref in result.ticketsToRemove) {
+            removeTicket(server, ref)
+        }
+    }
+
+    private fun expireCompletedPendingPrune(server: MinecraftServer) {
+        val result = register.expireCompletedPendingPrune(
+            nowTick = tickCounter,
+            expireAfterTicks = MementoConstants.CHUNK_LOAD_COMPLETED_PENDING_PRUNE_EXPIRE_TICKS,
+        )
+        if (result.expiredEntries.isNotEmpty()) {
+            completedPendingPruneExpiredCount += result.expiredEntries.size.toLong()
+        }
+        for (ref in result.ticketsToRemove) {
+            removeTicket(server, ref)
+        }
+    }
+
+    private fun removeTicket(server: MinecraftServer, ref: ChunkRef) {
+        val world = server.getWorld(ref.dimension) ?: return
+        world.chunkManager.removeTicket(ChunkTicketType.FORCED, ref.pos, MementoConstants.CHUNK_LOAD_TICKET_RADIUS)
+    }
+
+    /* ---------------------------------------------------------------------
+     * Awaiting full load checks (tick thread)
+     * ------------------------------------------------------------------ */
+
+    private fun checkAwaitingFullLoad(server: MinecraftServer) {
+        val batch = register.takeAwaitingFullLoadBatch(MementoConstants.CHUNK_LOAD_AWAITING_FULL_LOAD_MAX_PER_CYCLE)
+        for (ref in batch) {
+            val world = server.getWorld(ref.dimension) ?: continue
+            val chunk = world.chunkManager.getWorldChunk(ref.pos.x, ref.pos.z, false) ?: continue
+            // If accessible, mark as available for propagation.
+            register.onChunkAvailable(ref, nowTick = tickCounter)
+        }
+    }
+
+    /* ---------------------------------------------------------------------
+     * Propagation (tick thread)
+     * ------------------------------------------------------------------ */
+
+    private fun propagateReadyChunks(server: MinecraftServer) {
         var forwarded = 0
 
-        // Engine callbacks may mutate [pendingLoads] while we are ticking; iterate over a snapshot.
-        val snapshot = pendingLoads.entries.toList()
-
-        for ((ref, pending) in snapshot) {
-            if (forwarded >= MementoConstants.CHUNK_LOAD_MAX_FORWARDED_PER_TICK) break
-
-            val world = server.getWorld(ref.dimension)
-            if (world == null) {
-                MementoLog.warn(MementoConcept.DRIVER,
-                    "pending load dropped; world missing dim={} pos={}",
-                    ref.dimension.value,
-                    ref.pos
-                )
-                toRemove += ref
+        while (forwarded < MementoConstants.CHUNK_LOAD_MAX_FORWARDED_PER_TICK) {
+            val ref = register.pollPropagationReady() ?: break
+            val world = server.getWorld(ref.dimension) ?: run {
+                register.remove(ref)
                 continue
             }
 
             val chunk = world.chunkManager.getWorldChunk(ref.pos.x, ref.pos.z, false)
             if (chunk == null) {
-                // Engine signalled a load, but the chunk is not yet usable as a WorldChunk.
-                // Keep waiting; the ticket (if any) remains as our standing interest.
-                val age = tickCounter - pending.firstSeenTick
-                
+                // Should be rare (we only enqueue once accessible). Re-queue via awaiting full load.
+                register.synthesizeLoadObserved(ref, nowTick = tickCounter)
                 continue
             }
 
+            // Transition + propagate outside of register lock.
+            register.beginPropagation(ref, nowTick = tickCounter)
             listeners.forEach { it.onChunkLoaded(world, chunk) }
+            register.completePropagation(ref, nowTick = tickCounter)
             forwarded++
-            toRemove += ref
 
-            // If this chunk was ticketed by the DRIVER, release our interest immediately.
-            if (tickets.remove(ref) != null) {
-                world.chunkManager.removeTicket(ChunkTicketType.FORCED, ref.pos, MementoConstants.CHUNK_LOAD_TICKET_RADIUS)
+            // Immediate reconcile: if not desired in current snapshot, prune now.
+            if (!register.isDesired(ref)) {
+                val ticket = register.ticketName(ref)
+                if (ticket != null) {
+                    world.chunkManager.removeTicket(ChunkTicketType.FORCED, ref.pos, MementoConstants.CHUNK_LOAD_TICKET_RADIUS)
+                }
+                register.remove(ref)
             }
-        }
-
-        toRemove.forEach { pendingLoads.remove(it) }
-    }
-
-    private fun forwardPendingUnloads() {
-        while (pendingUnloads.isNotEmpty()) {
-            val (world, pos) = pendingUnloads.removeFirst()
-            listeners.forEach { it.onChunkUnloaded(world, pos) }
         }
     }
 
     /* ---------------------------------------------------------------------
-     * Ticket replenishment
+     * Ticket issuance (tick thread)
      * ------------------------------------------------------------------ */
 
-    private fun replenishTickets(server: MinecraftServer) {
-        val capacity = MementoConstants.CHUNK_LOAD_MAX_OUTSTANDING_TICKETS - tickets.size
+    private fun issueTicketsUpToCap(server: MinecraftServer) {
+        val ticketCount = register.allEntriesSnapshot().count { it.ticketName != null }
+        val capacity = MementoConstants.CHUNK_LOAD_MAX_OUTSTANDING_TICKETS - ticketCount
         if (capacity <= 0) return
 
-        // Determine whether renewal has any remaining intent.
-        val renewalHasIntent = renewalProvider?.desiredChunks()?.iterator()?.hasNext() == true
-
-        val provider = if (renewalHasIntent) renewalProvider else scanProvider
-        val source = if (renewalHasIntent) TicketSource.RENEWAL else TicketSource.SCAN
-
-        if (provider == null) return
+        // Issue tickets in a single pass; register internally filters to REQUESTED + desired.
+        val candidates = register.takeTicketCandidates(capacity)
+        if (candidates.isEmpty()) return
 
         var issued = 0
-
-        val it = provider.desiredChunks().iterator()
-        while (it.hasNext() && issued < capacity) {
-            val ref = it.next()
-
-            // Avoid re-issuing tickets and avoid duplicating pending work.
-            if (tickets.containsKey(ref)) continue
-            if (pendingLoads.containsKey(ref)) continue
-
+        for (ref in candidates) {
             val world = server.getWorld(ref.dimension) ?: continue
 
-            // If already available, push it through the same forwarding pipeline (no ticket).
+            // If already loaded, synthesize observation and let the normal pipeline handle it.
             val alreadyLoaded = world.chunkManager.getWorldChunk(ref.pos.x, ref.pos.z, false)
             if (alreadyLoaded != null) {
-                pendingLoads.putIfAbsent(ref, PendingLoad(firstSeenTick = tickCounter))
+                register.synthesizeLoadObserved(ref, nowTick = tickCounter)
                 continue
             }
 
+            // Normal ticket path.
+            register.setNotLoadedVerified(ref, nowTick = tickCounter)
             world.chunkManager.addTicket(ChunkTicketType.FORCED, ref.pos, MementoConstants.CHUNK_LOAD_TICKET_RADIUS)
-            tickets[ref] = TicketMeta(source = source, issuedAtTick = tickCounter)
+            register.issueTicket(ref, DRIVER_TICKET_NAME, nowTick = tickCounter)
             issued++
         }
 
         if (issued > 0) {
-            MementoLog.debug(MementoConcept.DRIVER,
-                "tickets issued source={} count={} outstanding={}",
-                source,
+            MementoLog.debug(
+                MementoConcept.DRIVER,
+                "tickets issued count={} outstanding={}",
                 issued,
-                tickets.size
+                register.allEntriesSnapshot().count { it.ticketName != null }
             )
+        }
+    }
+
+    /* ---------------------------------------------------------------------
+     * Unloads (tick thread)
+     * ------------------------------------------------------------------ */
+
+    private fun forwardPendingUnloads(server: MinecraftServer) {
+        while (true) {
+            val ev = pendingUnloads.poll() ?: break
+            val world = server.getWorld(ev.dim) ?: continue
+            listeners.forEach { it.onChunkUnloaded(world, ev.pos) }
         }
     }
 
@@ -272,12 +318,23 @@ class ChunkLoadDriver {
         if ((tickCounter - lastStateLogTick) < MementoConstants.CHUNK_LOAD_STATE_LOG_EVERY_TICKS) return
         lastStateLogTick = tickCounter
 
-        MementoLog.debug(MementoConcept.DRIVER,
-            "tick={} outstandingTickets={} pendingLoads={} headPending={}",
+        val s = register.stateSnapshot()
+        MementoLog.debug(
+            MementoConcept.DRIVER,
+            "tick={} total={} desiredAwaiting={} queue={} tickets={} states=requested:{} verified:{} ticketed:{} observed:{} available:{} propagating:{} completedPendingPrune:{} expiredCompletedPendingPrune={}",
             tickCounter,
-            tickets.size,
-            pendingLoads.size,
-            pendingLoads.entries.firstOrNull()?.key
+            s.total,
+            s.awaitingFullLoad,
+            s.propagationQueue,
+            register.allEntriesSnapshot().count { it.ticketName != null },
+            s.requested,
+            s.verifiedNotLoaded,
+            s.ticketIssued,
+            s.engineLoadObserved,
+            s.chunkAvailable,
+            s.propagating,
+            s.completedPendingPrune,
+            completedPendingPruneExpiredCount,
         )
     }
 }

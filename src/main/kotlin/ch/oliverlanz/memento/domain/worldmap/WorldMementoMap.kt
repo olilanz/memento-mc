@@ -125,14 +125,14 @@ class WorldMementoMap {
             if (k.regionX != region.regionX || k.regionZ != region.regionZ) continue
 
             // deterministic "best": smallest (chunkX, chunkZ)
-            if (fallbackAnchor == null || k.chunkX < fallbackAnchor!!.chunkX || (k.chunkX == fallbackAnchor!!.chunkX && k.chunkZ < fallbackAnchor!!.chunkZ)) {
+            if (fallbackAnchor == null || k.chunkX < fallbackAnchor.chunkX || (k.chunkX == fallbackAnchor.chunkX && k.chunkZ < fallbackAnchor.chunkZ)) {
                 fallbackAnchor = k
             }
 
             val lx = localMod3(k.chunkX, k.regionX)
             val lz = localMod3(k.chunkZ, k.regionZ)
             if (lx == 1 && lz == 1) {
-                if (preferredAnchor == null || k.chunkX < preferredAnchor!!.chunkX || (k.chunkX == preferredAnchor!!.chunkX && k.chunkZ < preferredAnchor!!.chunkZ)) {
+                if (preferredAnchor == null || k.chunkX < preferredAnchor.chunkX || (k.chunkX == preferredAnchor.chunkX && k.chunkZ < preferredAnchor.chunkZ)) {
                     preferredAnchor = k
                 }
             }
