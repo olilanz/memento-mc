@@ -16,6 +16,7 @@ import net.minecraft.world.chunk.WorldChunk
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 
+import java.lang.Math
 /**
  * World scanner.
  *
@@ -164,6 +165,30 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         // Always consume metadata into the map (passive/reactive behavior).
         consumer?.onChunkLoaded(world, chunk)
 
+
+        // --- Instrumentation: detect non-converging chunks (active scan)
+        run {
+            val chunkX = chunk.pos.x
+            val chunkZ = chunk.pos.z
+            val key = ChunkKey(
+                world = world.registryKey,
+                regionX = Math.floorDiv(chunkX, 32),
+                regionZ = Math.floorDiv(chunkZ, 32),
+                chunkX = chunkX,
+                chunkZ = chunkZ,
+            )
+            if (!m.hasSignals(key)) {
+                MementoLog.warn(
+                    MementoConcept.SCANNER,
+                    "SCAN-INVARIANT: chunk still missing signals after consumer: key={} record={} missingCount={} scannedChunks={}",
+                    key,
+                    m.debugRecord(key),
+                    m.missingCount(),
+                    m.scannedChunks(),
+                )
+            }
+        }
+        // --- End instrumentation
         // If not active scan, we do not drive demand; we only enrich the map.
         if (!activeScan.get()) return
 
