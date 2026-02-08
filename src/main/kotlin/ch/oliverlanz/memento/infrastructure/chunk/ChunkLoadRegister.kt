@@ -181,7 +181,16 @@ internal class ChunkLoadRegister {
             entry.requestedBy += RequestSource.UNSOLICITED
         }
 
-        entry.recordEngineLoadObserved(nowTick)
+        val result = entry.recordEngineLoadObserved(nowTick)
+
+        // Bridge engine observation -> full-load polling:
+        // Once we have observed ENGINE_LOAD_OBSERVED, we must start polling for a fully-loaded WorldChunk
+        // on the tick thread. Without this, the driver will observe loads but never progress to propagation.
+        if (entry.isEngineLoadObserved()) {
+            awaitingFullLoad.add(chunk)
+        }
+
+        result
     }
 
     /**
