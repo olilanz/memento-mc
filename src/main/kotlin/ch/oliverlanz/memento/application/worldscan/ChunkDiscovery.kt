@@ -7,7 +7,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * Stage 3 of the /memento run pipeline: discover chunk work units inside each region.
+ * Stage 3 of the /memento scan pipeline: discover chunk work units inside each region.
  *
  * Slice (real chunk existence discovery):
  * - Reads the Anvil region header (first 4096 bytes = location table).
@@ -89,7 +89,7 @@ class ChunkDiscovery {
     /**
      * Reads the location table (first 4096 bytes) or returns null if the file can't be used.
      *
-     * Error handling is intentionally "log + skip" to keep /memento run inspectable and robust.
+     * Error handling is intentionally "log + skip" to keep /memento scan inspectable and robust.
      */
     private fun tryReadLocationTable(regionFile: Path, stats: WorldChunkDiscoveryStats): ByteArray? {
         val size = try {

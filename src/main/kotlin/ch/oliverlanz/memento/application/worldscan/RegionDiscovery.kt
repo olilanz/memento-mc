@@ -10,7 +10,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * Stage 2 of the /memento run pipeline: discover on-disk region files for each world.
+ * Stage 2 of the /memento scan pipeline: discover on-disk region files for each world.
  *
  * Design lock (persistence-based discovery):
  * - Regions are discovered by enumerating `region/r.<x>.<z>.mca` under the canonical Minecraft save layout.

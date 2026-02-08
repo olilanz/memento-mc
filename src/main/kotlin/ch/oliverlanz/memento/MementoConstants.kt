@@ -154,10 +154,10 @@ object MementoConstants {
      */
     const val STONE_TOPOLOGY_SEED_FILE: String = "memento_stone_topology_seed.json"
 
-    /** Debug/analysis CSV snapshot produced by /memento run (overwritten each run). */
-    const val MEMENTO_RUN_CSV_FILE: String = "memento_world_snapshot.csv"
+    /** Debug/analysis CSV snapshot produced by /memento scan (overwritten each scan). */
+    const val MEMENTO_SCAN_CSV_FILE: String = "memento_world_snapshot.csv"
 
-    /** Tracer-bullet throttling: maximum chunk slots processed per server tick while /memento run is active. */
-    const val MEMENTO_RUN_CHUNK_SLOTS_PER_TICK: Int = 2
+    /** Tracer-bullet throttling: maximum chunk slots processed per server tick while /memento scan is active. */
+    const val MEMENTO_SCAN_CHUNK_SLOTS_PER_TICK: Int = 2
 
 }

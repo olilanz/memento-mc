@@ -12,7 +12,7 @@ import net.minecraft.util.Formatting
 import net.minecraft.util.hit.HitResult
 import net.minecraft.util.math.BlockPos
 import ch.oliverlanz.memento.application.visualization.EffectsHost
-import ch.oliverlanz.memento.application.worldscan.MementoRunController
+import ch.oliverlanz.memento.application.worldscan.WorldScanner
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 
@@ -30,7 +30,7 @@ object CommandHandlers {
     private var effectsHost: EffectsHost? = null
 
     @Volatile
-    private var runController: MementoRunController? = null
+    private var worldScanner: WorldScanner? = null
 
     fun attachVisualizationEngine(engine: EffectsHost) {
         effectsHost = engine
@@ -40,12 +40,12 @@ object CommandHandlers {
         effectsHost = null
     }
 
-    fun attachRunController(controller: MementoRunController) {
-        runController = controller
+    fun attachWorldScanner(scanner: WorldScanner) {
+        worldScanner = scanner
     }
 
-    fun detachRunController() {
-        runController = null
+    fun detachWorldScanner() {
+        worldScanner = null
     }
 
     enum class StoneKind { WITHERSTONE, LORESTONE }
@@ -126,20 +126,20 @@ object CommandHandlers {
         }
     }
 
-    fun run(source: ServerCommandSource): Int {
-        MementoLog.info(MementoConcept.OPERATOR, "command=run by={}", source.name)
+    fun scan(source: ServerCommandSource): Int {
+        MementoLog.info(MementoConcept.OPERATOR, "command=scan by={}", source.name)
 
-        val controller = runController
-        if (controller == null) {
-            source.sendError(Text.literal("Run controller is not ready yet."))
+        val scanner = worldScanner
+        if (scanner == null) {
+            source.sendError(Text.literal("Scanner is not ready yet."))
             return 0
         }
 
         return try {
-            controller.start(source)
+            scanner.startActiveScan(source)
         } catch (e: Exception) {
-            MementoLog.error(MementoConcept.OPERATOR, "command=run failed", e)
-            source.sendError(Text.literal("Memento: could not start run (see server log)."))
+            MementoLog.error(MementoConcept.OPERATOR, "command=scan failed", e)
+            source.sendError(Text.literal("Memento: could not start scan (see server log)."))
             0
         }
     }
