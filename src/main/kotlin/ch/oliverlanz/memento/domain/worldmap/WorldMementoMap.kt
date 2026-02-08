@@ -41,6 +41,9 @@ class WorldMementoMap {
 
     fun hasSignals(key: ChunkKey): Boolean = records[key]?.signals != null
 
+
+    /** Instrumentation helper: expose record for a key for scanner debug logs. */
+    fun debugRecord(key: ChunkKey): Any? = records[key]
     /**
      * Attach/replace signals for a chunk.
      *
