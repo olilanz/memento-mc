@@ -321,7 +321,7 @@ class ChunkLoadDriver {
         val s = register.stateSnapshot()
         MementoLog.debug(
             MementoConcept.DRIVER,
-            "tick={} total={} desiredAwaiting={} queue={} tickets={} states=requested:{} verified:{} ticketed:{} observed:{} available:{} propagating:{} completedPendingPrune:{} expiredCompletedPendingPrune={}",
+            "tick={} total={} desiredAwaiting={} queue={} tickets={} states=requested:{} verified:{} ticketed:{} observed:{} observedNotAwaiting:{} available:{} propagating:{} completedPendingPrune:{} expiredCompletedPendingPrune={}",
             tickCounter,
             s.total,
             s.awaitingFullLoad,
@@ -331,6 +331,7 @@ class ChunkLoadDriver {
             s.verifiedNotLoaded,
             s.ticketIssued,
             s.engineLoadObserved,
+            s.observedNotAwaiting,
             s.chunkAvailable,
             s.propagating,
             s.completedPendingPrune,

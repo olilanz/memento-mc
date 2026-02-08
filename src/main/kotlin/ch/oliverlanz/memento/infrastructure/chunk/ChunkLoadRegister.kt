@@ -314,16 +314,20 @@ internal class ChunkLoadRegister {
         var verified = 0
         var ticketed = 0
         var observed = 0
+        var observedNotAwaiting = 0
         var available = 0
         var propagating = 0
         var completedPendingPrune = 0
 
-        for (e in entries.values) {
+        for ((chunk, e) in entries) {
             when (e.stateIndexForCounting()) {
                 0 -> requested++
                 1 -> verified++
                 2 -> ticketed++
-                3 -> observed++
+                3 -> {
+                    observed++
+                    if (!awaitingFullLoad.contains(chunk)) observedNotAwaiting++
+                }
                 4 -> available++
                 5 -> propagating++
                 6 -> completedPendingPrune++
@@ -340,6 +344,7 @@ internal class ChunkLoadRegister {
             propagating = propagating,
             completedPendingPrune = completedPendingPrune,
             awaitingFullLoad = awaitingFullLoad.size,
+            observedNotAwaiting = observedNotAwaiting,
             propagationQueue = propagationQueue.size,
         )
     }
@@ -380,6 +385,7 @@ internal class ChunkLoadRegister {
         val propagating: Int,
         val completedPendingPrune: Int,
         val awaitingFullLoad: Int,
+        val observedNotAwaiting: Int,
         val propagationQueue: Int,
     )
 
@@ -479,6 +485,16 @@ internal class ChunkLoadRegister {
                     onEngineLoadObserved(nowTick)
                     EngineObservationResult.ACCEPTED
                 }
+                State.NOT_LOADED_VERIFIED -> {
+                    // Out-of-order but survivable: engine signaled load completion while we were still
+                    // between "verify not loaded" and "issue ticket" on the tick thread.
+                    // We must not lose this observation; otherwise the entry can stall in TICKET_ISSUED
+                    // (no further engine callbacks) and never progress to full-load polling.
+                    state = State.ENGINE_LOAD_OBSERVED
+                    loadObservedTick = nowTick
+                    lastProgressTick = nowTick
+                    EngineObservationResult.OUT_OF_ORDER_ACCEPTED
+                }
                 State.REQUESTED -> {
                     // Unexpected but survivable: we have an engine signal before we finished our local steps.
                     state = State.ENGINE_LOAD_OBSERVED
@@ -489,8 +505,7 @@ internal class ChunkLoadRegister {
                 State.ENGINE_LOAD_OBSERVED,
                 State.CHUNK_AVAILABLE,
                 State.PROPAGATING,
-                State.COMPLETED_PENDING_PRUNE,
-                State.NOT_LOADED_VERIFIED -> {
+                State.COMPLETED_PENDING_PRUNE -> {
                     EngineObservationResult.DUPLICATE_IGNORED
                 }
             }
