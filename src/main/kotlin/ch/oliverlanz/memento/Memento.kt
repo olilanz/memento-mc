@@ -10,8 +10,8 @@ import ch.oliverlanz.memento.application.renewal.WitherstoneConsumptionBridge
 import ch.oliverlanz.memento.application.stone.StoneMaturityTimeBridge
 import ch.oliverlanz.memento.application.time.GameTimeTracker
 import ch.oliverlanz.memento.application.visualization.EffectsHost
-import ch.oliverlanz.memento.application.worldscan.MementoRunController
 import ch.oliverlanz.memento.application.worldscan.WorldScanner
+import ch.oliverlanz.memento.application.worldscan.WorldScanCsvExporter
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchLifecycleTransition
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
@@ -35,7 +35,7 @@ object Memento : ModInitializer {
     private var effectsHost: EffectsHost? = null
     private val gameTimeTracker = GameTimeTracker()
 
-    private var runController: MementoRunController? = null
+    private var worldScanner: WorldScanner? = null
 
     // Renewal wiring (application / infrastructure)
     private var renewalInitialObserver: RenewalInitialObserver? = null
@@ -93,12 +93,11 @@ object Memento : ModInitializer {
 
             val scanner = WorldScanner().also {
                 it.attach(server)
+                it.addListener(WorldScanCsvExporter)
             }
 
-            runController = MementoRunController(scanner).also {
-                it.attach(server)
-                CommandHandlers.attachRunController(it)
-            }
+            worldScanner = scanner
+            CommandHandlers.attachWorldScanner(scanner)
 
             // World scanner provider (lower priority)
             chunkLoadDriver?.registerScanProvider(scanner)
@@ -134,10 +133,10 @@ object Memento : ModInitializer {
             StoneTopologyHooks.onServerStopping()
 
             CommandHandlers.detachVisualizationEngine()
-            CommandHandlers.detachRunController()
+            CommandHandlers.detachWorldScanner()
 
-            runController?.detach()
-            runController = null
+            worldScanner?.detach()
+            worldScanner = null
 
             effectsHost = null
         }

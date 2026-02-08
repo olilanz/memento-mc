@@ -13,6 +13,7 @@ import net.minecraft.server.world.ServerWorld
 import net.minecraft.text.Text
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.chunk.WorldChunk
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -32,11 +33,11 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
     private var server: MinecraftServer? = null
 
     /**
-     * Scanner mode:
-     * - proactive=true  -> propose chunks to the driver
-     * - proactive=false -> passive/reactive only
+     * Scan mode:
+     * - active=true  -> propose chunks to the driver (baseline scan)
+     * - active=false -> passive/reactive only (keep map fresh opportunistically)
      */
-    private val proactive = AtomicBoolean(false)
+    private val activeScan = AtomicBoolean(false)
 
     /** The world map (single source of truth). Kept in memory across proactive runs. */
     private var map: WorldMementoMap? = null
@@ -46,8 +47,10 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
     /** Observability only. */
     private var plannedChunks: Int = 0
 
-    /** True after a proactive run has written a CSV snapshot. */
-    private var csvWrittenForCurrentRun: Boolean = false
+    private val listeners = CopyOnWriteArrayList<WorldScanListener>()
+
+    /** True after the current active scan has emitted ScanCompleted. */
+    private var completionEmittedForCurrentScan: Boolean = false
 
     fun attach(server: MinecraftServer) {
         this.server = server
@@ -55,20 +58,29 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
 
     fun detach() {
         server = null
-        proactive.set(false)
+        activeScan.set(false)
         map = null
         consumer = null
         plannedChunks = 0
-        csvWrittenForCurrentRun = false
+        completionEmittedForCurrentScan = false
+        listeners.clear()
     }
 
-    /** Entry point used by /memento run. */
-    fun start(source: ServerCommandSource): Int {
+    fun addListener(listener: WorldScanListener) {
+        listeners.add(listener)
+    }
+
+    fun removeListener(listener: WorldScanListener) {
+        listeners.remove(listener)
+    }
+
+    /** Entry point used by /memento scan. */
+    fun startActiveScan(source: ServerCommandSource): Int {
         val srv = source.server
         this.server = srv
 
-        if (proactive.get()) {
-            source.sendError(Text.literal("Memento: scanner is already proactive."))
+        if (activeScan.get()) {
+            source.sendError(Text.literal("Memento: scan is already running."))
             return 0
         }
 
@@ -99,7 +111,7 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
 
         if (ensured == 0 && scanMap.totalChunks() == 0) {
             source.sendFeedback({ Text.literal("Memento: no existing chunks discovered; nothing to scan.") }, false)
-            MementoLog.debug(MementoConcept.SCANNER, "proactive=false start aborted reason=no_chunks")
+            MementoLog.debug(MementoConcept.SCANNER, "active=false scan aborted reason=no_chunks")
             return 1
         }
 
@@ -109,25 +121,17 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         }
 
         plannedChunks = scanMap.totalChunks()
-        csvWrittenForCurrentRun = false
+        completionEmittedForCurrentScan = false
 
-        // If already complete, export immediately without going proactive.
+        // If already complete, emit completion immediately without entering active scan mode.
         if (scanMap.isComplete()) {
-            val topology = StoneInfluenceSuperposition.apply(scanMap)
-            val path = MementoCsvWriter.write(srv, topology)
-            csvWrittenForCurrentRun = true
-            MementoLog.debug(
-                MementoConcept.SCANNER,
-                "proactive=false already_complete plannedChunks={} scannedChunks={} csv={}",
-                plannedChunks,
-                scanMap.scannedChunks(),
-                path.toAbsolutePath(),
-            )
-            source.sendFeedback({ Text.literal("Memento: scan already complete. CSV exported.") }, false)
+            emitCompleted(reason = "already_complete", map = scanMap)
+            MementoLog.debug(MementoConcept.SCANNER, "scan already_complete plannedChunks={} scannedChunks={}", plannedChunks, scanMap.scannedChunks())
+            source.sendFeedback({ Text.literal("Memento: scan already complete.") }, false)
             return 1
         }
 
-        proactive.set(true)
+        activeScan.set(true)
         MementoLog.info(
             MementoConcept.SCANNER,
             "scan started worlds={} plannedChunks={} scannedChunks={} missing={}",
@@ -141,12 +145,12 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
     }
 
     override fun desiredChunks(): Sequence<ChunkRef> {
-        if (!proactive.get()) return emptySequence()
+        if (!activeScan.get()) return emptySequence()
         val m = map ?: return emptySequence()
 
         val missing = m.missingSignals(limit = 100)
         if (missing.isEmpty()) {
-            completeIfExhausted(m, reason = "exhausted")
+            emitCompleted(reason = "exhausted", map = m)
             return emptySequence()
         }
 
@@ -160,11 +164,11 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         // Always consume metadata into the map (passive/reactive behavior).
         consumer?.onChunkLoaded(world, chunk)
 
-        // If not proactive, we do not drive demand; we only enrich the map.
-        if (!proactive.get()) return
+        // If not active scan, we do not drive demand; we only enrich the map.
+        if (!activeScan.get()) return
 
         if (m.isComplete()) {
-            completeIfExhausted(m, reason = "complete")
+            emitCompleted(reason = "complete", map = m)
         }
     }
 
@@ -172,39 +176,40 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         // Scanner currently does not need unload signals.
     }
 
-    private fun completeIfExhausted(m: WorldMementoMap, reason: String) {
-        if (!proactive.compareAndSet(true, false)) {
-            return
-        }
+    private fun emitCompleted(reason: String, map: WorldMementoMap) {
+        if (!activeScan.compareAndSet(true, false)) return
+        if (completionEmittedForCurrentScan) return
+        completionEmittedForCurrentScan = true
 
         val srv = server
         if (srv == null) {
-            MementoLog.warn(MementoConcept.SCANNER, "scan completed reason={} but server=null; csv skipped", reason)
+            MementoLog.warn(MementoConcept.SCANNER, "scan completed reason={} but server=null; listeners skipped", reason)
             return
         }
 
-        if (!csvWrittenForCurrentRun) {
-            val topology = StoneInfluenceSuperposition.apply(m)
-            val path = MementoCsvWriter.write(srv, topology)
-            csvWrittenForCurrentRun = true
-            MementoLog.info(
-                MementoConcept.SCANNER,
-                "scan completed reason={} plannedChunks={} scannedChunks={} missing={} csv={}",
-                reason,
-                plannedChunks,
-                m.scannedChunks(),
-                m.missingCount(),
-                path.toAbsolutePath(),
-            )
-        } else {
-            MementoLog.info(
-                MementoConcept.SCANNER,
-                "scan completed reason={} plannedChunks={} scannedChunks={} missing={} csv=already_written",
-                reason,
-                plannedChunks,
-                m.scannedChunks(),
-                m.missingCount(),
-            )
+        val event = WorldScanCompleted(
+            reason = reason,
+            plannedChunks = plannedChunks,
+            scannedChunks = map.scannedChunks(),
+            missingChunks = map.missingCount(),
+            snapshot = map.snapshot(),
+        )
+
+        listeners.forEach { l ->
+            try {
+                l.onWorldScanCompleted(srv, event)
+            } catch (t: Throwable) {
+                MementoLog.error(MementoConcept.SCANNER, "scan completion listener failed", t)
+            }
         }
+
+        MementoLog.info(
+            MementoConcept.SCANNER,
+            "scan completed reason={} plannedChunks={} scannedChunks={} missing={}",
+            reason,
+            event.plannedChunks,
+            event.scannedChunks,
+            event.missingChunks,
+        )
     }
 }

@@ -4,7 +4,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Domain-owned world map for /memento run.
+ * Domain-owned world map for /memento scan.
  *
  * Semantics:
  * - The map is created from region file discovery (chunk existence).

@@ -15,7 +15,7 @@ object MementoCsvWriter {
 
     fun write(server: MinecraftServer, topology: WorldMementoTopology): Path {
         val root = server.getSavePath(WorldSavePath.ROOT)
-        val path = root.resolve(MementoConstants.MEMENTO_RUN_CSV_FILE)
+        val path = root.resolve(MementoConstants.MEMENTO_SCAN_CSV_FILE)
 
         // LOCKED SCHEMA (scanner responsibility only; no derived fields, no optional fields):
         // dimension,chunk_x,chunk_z,inhabited_ticks,dominant_stone,surface_y,biome_id,is_spawn_chunk
