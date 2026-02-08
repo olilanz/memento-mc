@@ -11,6 +11,7 @@ import ch.oliverlanz.memento.application.stone.StoneMaturityTimeBridge
 import ch.oliverlanz.memento.application.time.GameTimeTracker
 import ch.oliverlanz.memento.application.visualization.EffectsHost
 import ch.oliverlanz.memento.application.worldscan.MementoRunController
+import ch.oliverlanz.memento.application.worldscan.WorldScanner
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchLifecycleTransition
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
@@ -90,14 +91,18 @@ object Memento : ModInitializer {
             effectsHost = EffectsHost(server)
             CommandHandlers.attachVisualizationEngine(effectsHost!!)
 
-            runController = MementoRunController().also {
+            val scanner = WorldScanner().also {
+                it.attach(server)
+            }
+
+            runController = MementoRunController(scanner).also {
                 it.attach(server)
                 CommandHandlers.attachRunController(it)
             }
 
             // World scanner provider (lower priority)
-            chunkLoadDriver?.registerScanProvider(runController!!)
-            chunkLoadDriver?.registerConsumer(runController!!)
+            chunkLoadDriver?.registerScanProvider(scanner)
+            chunkLoadDriver?.registerConsumer(scanner)
 
             // Fan out domain events
             RenewalTracker.subscribe(renewalEventListener)
