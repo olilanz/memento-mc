@@ -3,6 +3,12 @@ package ch.oliverlanz.memento.domain.worldmap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
+data class ChunkScanSnapshotEntry(
+    val key: ChunkKey,
+    val signals: ChunkSignals?,
+    val scanTick: Long,
+)
+
 /**
  * Domain-owned world map for /memento scan.
  *
@@ -27,6 +33,7 @@ class WorldMementoMap {
      */
     private data class ChunkRecord(
         @Volatile var signals: ChunkSignals? = null,
+        @Volatile var scanTick: Long? = null,
     )
 
     private val records = ConcurrentHashMap<ChunkKey, ChunkRecord>()
@@ -54,11 +61,18 @@ class WorldMementoMap {
         val record = records.computeIfAbsent(key) { ChunkRecord() }
         val previous = record.signals
         record.signals = signals
-        val firstAttach = (previous == null)
-        if (firstAttach) {
+        return (previous == null)
+    }
+
+    /** Marks a chunk as scanned at the given absolute world tick. */
+    fun markScanned(key: ChunkKey, scanTick: Long): Boolean {
+        val record = records.computeIfAbsent(key) { ChunkRecord() }
+        val first = (record.scanTick == null)
+        record.scanTick = scanTick
+        if (first) {
             scannedCount.incrementAndGet()
         }
-        return firstAttach
+        return first
     }
 
     /** Total number of existing chunks in the map. */
@@ -148,7 +162,7 @@ class WorldMementoMap {
 
         // 3) Expose missing chunks in the chosen region that are on the anchor's modulo-3 grid.
         return records.entries.asSequence()
-            .filter { it.value.signals == null }
+            .filter { it.value.scanTick == null }
             .map { it.key }
             .filter { it.world.value.toString() == region.worldKey && it.regionX == region.regionX && it.regionZ == region.regionZ }
             .filter { localMod3(it.chunkX, it.regionX) == anchorRx && localMod3(it.chunkZ, it.regionZ) == anchorRz }
@@ -164,14 +178,14 @@ class WorldMementoMap {
     }
 
     /** Deterministic snapshot of scanned chunks (signals present). */
-    fun snapshot(): List<Pair<ChunkKey, ChunkSignals>> {
+    fun snapshot(): List<ChunkScanSnapshotEntry> {
         return records.entries.asSequence()
-            .mapNotNull { (k, v) -> v.signals?.let { k to it } }
+            .mapNotNull { (k, v) -> v.scanTick?.let { tick -> ChunkScanSnapshotEntry(k, v.signals, tick) } }
             .sortedWith(
                 compareBy(
-                    { it.first.world.value.toString() },
-                    { it.first.regionX }, { it.first.regionZ },
-                    { it.first.chunkX }, { it.first.chunkZ },
+                    { it.key.world.value.toString() },
+                    { it.key.regionX }, { it.key.regionZ },
+                    { it.key.chunkX }, { it.key.chunkZ },
                 )
             )
             .toList()

@@ -79,16 +79,16 @@ class ChunkMetadataConsumer(
             val worldId = key.world.value.toString()
 
             val regionTotal = map.snapshot().count {
-                it.first.world.value.toString() == worldId &&
-                it.first.regionX == rx && it.first.regionZ == rz
+                it.key.world.value.toString() == worldId &&
+                it.key.regionX == rx && it.key.regionZ == rz
             } + map.missingSignals(Int.MAX_VALUE).count {
                 it.world.value.toString() == worldId &&
                 it.regionX == rx && it.regionZ == rz
             }
 
             val regionScanned = map.snapshot().count {
-                it.first.world.value.toString() == worldId &&
-                it.first.regionX == rx && it.first.regionZ == rz
+                it.key.world.value.toString() == worldId &&
+                it.key.regionX == rx && it.key.regionZ == rz
             }
 
             if (regionTotal > 0 && regionScanned == regionTotal) {

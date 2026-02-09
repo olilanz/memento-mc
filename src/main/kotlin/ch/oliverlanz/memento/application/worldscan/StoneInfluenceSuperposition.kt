@@ -59,10 +59,12 @@ object StoneInfluenceSuperposition {
      * This avoids reading from a live [WorldMementoMap] after completion, as the map may
      * continue to evolve in passive mode while the world grows.
      */
-    fun applySnapshot(snapshot: List<Pair<ChunkKey, ChunkSignals>>): WorldMementoTopology {
+    fun applySnapshot(snapshot: List<ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>): WorldMementoTopology {
         val dominantByChunkByWorld = linkedMapOf<RegistryKey<World>, Map<ChunkPos, KClass<out Stone>>>()
 
-        val entries = snapshot.map { (key, signals) ->
+        val entries = snapshot.map { entry ->
+            val key = entry.key
+            val signals = entry.signals
             val dominantByChunk = dominantByChunkByWorld.getOrPut(key.world) {
                 StoneTopology.getInfluencedChunkSet(key.world)
             }

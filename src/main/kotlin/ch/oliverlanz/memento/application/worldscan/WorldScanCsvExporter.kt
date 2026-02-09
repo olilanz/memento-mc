@@ -11,7 +11,6 @@ import net.minecraft.server.MinecraftServer
 object WorldScanCsvExporter : WorldScanListener {
 
     override fun onWorldScanCompleted(server: MinecraftServer, event: WorldScanCompleted) {
-        val topology = StoneInfluenceSuperposition.applySnapshot(event.snapshot)
-        MementoCsvWriter.write(server, topology)
+        MementoCsvWriter.writeSnapshot(server, event.snapshot)
     }
 }
