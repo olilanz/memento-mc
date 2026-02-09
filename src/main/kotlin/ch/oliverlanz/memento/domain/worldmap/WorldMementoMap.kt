@@ -115,7 +115,7 @@ class WorldMementoMap {
 
         var chosenRegion: RegionId? = null
         for ((k, v) in records.entries) {
-            if (v.signals != null) continue
+            if (v.scanTick != null) continue
             val rid = RegionId(k.world.value.toString(), k.regionX, k.regionZ)
             val current = chosenRegion
             if (current == null || regionIsBefore(rid, current)) {
@@ -137,7 +137,7 @@ class WorldMementoMap {
         var fallbackAnchor: ChunkKey? = null
 
         for ((k, v) in records.entries) {
-            if (v.signals != null) continue
+            if (v.scanTick != null) continue
             if (k.world.value.toString() != region.worldKey) continue
             if (k.regionX != region.regionX || k.regionZ != region.regionZ) continue
 
