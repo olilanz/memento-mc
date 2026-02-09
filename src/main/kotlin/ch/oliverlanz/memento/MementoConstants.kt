@@ -105,6 +105,12 @@ object MementoConstants {
     const val CHUNK_LOAD_AWAITING_FULL_LOAD_MAX_PER_CYCLE: Int = 100
 
     /**
+     * Maximum time (ticks) a chunk may remain in ENGINE_LOAD_OBSERVED / awaiting-full-load.
+     * After this, the entry is reset or evicted to prevent permanent stalls.
+     */
+    const val CHUNK_LOAD_AWAITING_FULL_LOAD_TIMEOUT_TICKS: Long = 200L
+
+    /**
      * Expiry for COMPLETED_PENDING_PRUNE retention (ticks).
      *
      * If this expires, it indicates a logic fault (e.g. scanner never dropping demand).

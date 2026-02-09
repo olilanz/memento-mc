@@ -162,6 +162,44 @@ internal class ChunkLoadRegister {
         )
     }
 
+/**
+ * Prevent permanent stalls in ENGINE_LOAD_OBSERVED / awaiting-full-load.
+ *
+ * Policy:
+ * - If the entry is undesired and was only seen via UNSOLICITED observation, evict it.
+ * - Otherwise reset to REQUESTED so normal ticketing can re-drive it if still desired.
+ */
+fun expireAwaitingFullLoad(nowTick: Long, expireAfterTicks: Long): ExpireResult = lock.withLock {
+    val expired = ArrayList<ChunkRef>()
+    val ticketsToRemove = ArrayList<ChunkRef>()
+
+    val it = awaitingFullLoad.iterator()
+    while (it.hasNext()) {
+        val chunk = it.next()
+        val entry = entries[chunk] ?: continue
+        val observedAt = entry.loadObservedTick ?: continue
+        if ((nowTick - observedAt) <= expireAfterTicks) continue
+
+        expired.add(chunk)
+        it.remove()
+
+        if (entry.ticketName != null) {
+            ticketsToRemove.add(chunk)
+        }
+
+        // Evict purely unsolicited / undesired observations.
+        if (entry.desiredBy.isEmpty() && entry.requestedBy.contains(RequestSource.UNSOLICITED)) {
+            entries.remove(chunk)
+            continue
+        }
+
+        entry.resetFromAwaiting(nowTick)
+    }
+
+    ExpireResult(expiredEntries = expired, ticketsToRemove = ticketsToRemove)
+}
+
+
     /* =====================================================================
      * Engine observations
      * ===================================================================== */
@@ -281,6 +319,15 @@ internal class ChunkLoadRegister {
     fun issueTicket(chunk: ChunkRef, ticketName: String, nowTick: Long) = lock.withLock {
         entries[chunk]?.issueTicket(ticketName, nowTick)
     }
+
+/**
+ * Attaches a ticket to a chunk already in ENGINE_LOAD_OBSERVED.
+ * Used to adopt unsolicited engine loads and increase probability of reaching FULLY_LOADED.
+ */
+fun attachObservedTicket(chunk: ChunkRef, ticketName: String, nowTick: Long) = lock.withLock {
+    entries[chunk]?.attachTicketWhileObserved(ticketName, nowTick)
+}
+
 
     fun ticketName(chunk: ChunkRef): String? = lock.withLock { entries[chunk]?.ticketName }
 
@@ -456,6 +503,23 @@ internal class ChunkLoadRegister {
             loadObservedTick = nowTick
             lastProgressTick = nowTick
         }
+
+fun attachTicketWhileObserved(ticketName: String, nowTick: Long) {
+    if (state != State.ENGINE_LOAD_OBSERVED) return
+    if (this.ticketName != null) return
+    this.ticketName = ticketName
+    lastProgressTick = nowTick
+}
+
+fun resetFromAwaiting(nowTick: Long) {
+    // Keep desiredBy/requestedBy; this is hygiene reset only.
+    ticketName = null
+    loadObservedTick = null
+    completedTick = null
+    state = State.REQUESTED
+    lastProgressTick = nowTick
+}
+
 
         fun onChunkAvailable(nowTick: Long) {
             ensure(State.ENGINE_LOAD_OBSERVED)
