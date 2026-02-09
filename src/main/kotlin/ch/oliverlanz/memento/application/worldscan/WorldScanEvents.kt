@@ -1,7 +1,6 @@
 package ch.oliverlanz.memento.application.worldscan
 
-import ch.oliverlanz.memento.domain.worldmap.ChunkKey
-import ch.oliverlanz.memento.domain.worldmap.ChunkSignals
+import ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry
 import net.minecraft.server.MinecraftServer
 
 /**
@@ -23,6 +22,6 @@ data class WorldScanCompleted(
     val plannedChunks: Int,
     val scannedChunks: Int,
     val missingChunks: Int,
-    /** Snapshot of scanned chunks at completion time (signals present). */
-    val snapshot: List<Pair<ChunkKey, ChunkSignals>>,
+    /** Snapshot of scanned chunks at completion time (scan snapshot (signals may be null)). */
+    val snapshot: List<ChunkScanSnapshotEntry>,
 )
