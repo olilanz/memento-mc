@@ -165,9 +165,11 @@ internal class ChunkLoadRegister {
 /**
  * Prevent permanent stalls in ENGINE_LOAD_OBSERVED / awaiting-full-load.
  *
- * Policy:
- * - If the entry is undesired and was only seen via UNSOLICITED observation, evict it.
- * - Otherwise reset to REQUESTED so normal ticketing can re-drive it if still desired.
+ * Semantics:
+ * - Bounded effort only: the driver may attach tickets to increase the probability of reaching
+ *   a stable FULLY_LOADED state, but this is never guaranteed.
+ * - On expiry we *always* release pressure and drop the entry from the register, allowing
+ *   the chunk to re-enter as a fresh request if (and only if) demand still exists.
  */
 fun expireAwaitingFullLoad(nowTick: Long, expireAfterTicks: Long): ExpireResult = lock.withLock {
     val expired = ArrayList<ChunkRef>()
@@ -182,24 +184,18 @@ fun expireAwaitingFullLoad(nowTick: Long, expireAfterTicks: Long): ExpireResult 
 
         expired.add(chunk)
         it.remove()
+        propagationQueue.remove(chunk)
 
         if (entry.ticketName != null) {
             ticketsToRemove.add(chunk)
         }
 
-        // Evict purely unsolicited / undesired observations.
-        if (entry.desiredBy.isEmpty() && entry.requestedBy.contains(RequestSource.UNSOLICITED)) {
-            entries.remove(chunk)
-            continue
-        }
-
-        entry.resetFromAwaiting(nowTick)
+        // Drop the entry entirely. Demand (if still present) will re-create it on a later tick.
+        entries.remove(chunk)
     }
 
-    ExpireResult(expiredEntries = expired, ticketsToRemove = ticketsToRemove)
+    ExpireResult(expiredEntries = expired, ticketsToRemove = ticketsToRemove.distinct())
 }
-
-
     /* =====================================================================
      * Engine observations
      * ===================================================================== */
@@ -210,12 +206,13 @@ fun expireAwaitingFullLoad(nowTick: Long, expireAfterTicks: Long): ExpireResult 
      * We must be tolerant here: engine signals can race with our internal bookkeeping.
      * The goal is to never crash the server from an unexpected ordering.
      */
-    fun recordEngineLoadObserved(chunk: ChunkRef, nowTick: Long): EngineObservationResult = lock.withLock {
+    fun recordEngineLoadObserved(chunk: ChunkRef, nowTick: Long): EngineLoadObservation = lock.withLock {
         val existed = entries.containsKey(chunk)
         val entry = entries.getOrPut(chunk) { Entry(chunk, firstSeenTick = nowTick) }
 
         // If this is a purely unsolicited observation (no demand known yet), tag it for observability.
-        if (!existed && entry.desiredBy.isEmpty()) {
+        val unsolicited = (!existed && entry.desiredBy.isEmpty())
+        if (unsolicited) {
             entry.requestedBy += RequestSource.UNSOLICITED
         }
 
@@ -228,7 +225,7 @@ fun expireAwaitingFullLoad(nowTick: Long, expireAfterTicks: Long): ExpireResult 
             awaitingFullLoad.add(chunk)
         }
 
-        result
+        EngineLoadObservation(result = result, isUnsolicited = unsolicited)
     }
 
     /**
@@ -351,6 +348,46 @@ fun attachObservedTicket(chunk: ChunkRef, ticketName: String, nowTick: Long) = l
         result
     }
 
+    /** Returns the desired-by sources for a chunk in the current demand snapshot. */
+    fun desiredSources(chunk: ChunkRef): Set<RequestSource> = lock.withLock {
+        entries[chunk]?.desiredBy?.toSet() ?: emptySet()
+    }
+
+    /**
+     * Takes up to [max] ticket candidates, prioritizing renewal desire over scanner desire.
+     *
+     * The driver remains the sole policy owner for pressure balancing; providers only express desire.
+     */
+    fun takeTicketCandidatesPrioritized(max: Int): List<ChunkRef> = lock.withLock {
+        if (max <= 0) return@withLock emptyList()
+
+        val renewalFirst = ArrayList<ChunkRef>(minOf(max, entries.size))
+        val scannerNext = ArrayList<ChunkRef>(minOf(max, entries.size))
+
+        for ((chunk, entry) in entries) {
+            if (!entry.isRequested()) continue
+            if (entry.desiredBy.isEmpty()) continue
+            if (entry.ticketName != null) continue
+
+            if (entry.desiredBy.contains(RequestSource.RENEWAL)) {
+                renewalFirst.add(chunk)
+            } else if (entry.desiredBy.contains(RequestSource.SCANNER)) {
+                scannerNext.add(chunk)
+            }
+        }
+
+        val result = ArrayList<ChunkRef>(minOf(max, renewalFirst.size + scannerNext.size))
+        for (c in renewalFirst) {
+            if (result.size >= max) break
+            result.add(c)
+        }
+        for (c in scannerNext) {
+            if (result.size >= max) break
+            result.add(c)
+        }
+        result
+    }
+
     /** Returns true if the chunk is desired by any provider in the current demand snapshot. */
     fun isDesired(chunk: ChunkRef): Boolean = lock.withLock {
         entries[chunk]?.desiredBy?.isNotEmpty() == true
@@ -405,6 +442,11 @@ fun attachObservedTicket(chunk: ChunkRef, ticketName: String, nowTick: Long) = l
         DUPLICATE_IGNORED,
         OUT_OF_ORDER_ACCEPTED,
     }
+
+    internal data class EngineLoadObservation(
+        val result: EngineObservationResult,
+        val isUnsolicited: Boolean,
+    )
 
     internal enum class RequestSource {
         RENEWAL,

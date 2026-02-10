@@ -15,10 +15,11 @@ data class ChunkScanSnapshotEntry(
  * Semantics:
  * - The map is created from region file discovery (chunk existence).
  * - Metadata extraction progressively refines the map by attaching [ChunkSignals] to keys.
- * - A chunk is considered *scanned* when [ChunkSignals] are present.
+ * - A chunk is considered *scanned* when [scanTick] is present.
+ *   Signals may legitimately be missing (best-effort scanning under engine pressure).
  *
- * This is intentionally the single source of truth:
- * - "needs scanning" == "exists in map AND signals missing".
+ * Single source of truth (scanner invariant):
+ * - missing == scanTick == null
  *
  * Runtime safety:
  * - The server may generate new chunks after the initial discovery run.
