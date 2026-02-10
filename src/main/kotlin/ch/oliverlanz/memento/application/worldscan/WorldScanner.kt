@@ -59,7 +59,7 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
     private val desiredKeys = LinkedHashSet<ChunkKey>()
 
     /** Refill cadence guard (absolute world tick). */
-    private var lastRefillTick: Long = Long.MIN_VALUE
+    private var lastRefillTick: Long = 0L
 
     private val listeners = CopyOnWriteArrayList<WorldScanListener>()
 
@@ -77,7 +77,7 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         consumer = null
         plannedChunks = 0
         desiredKeys.clear()
-        lastRefillTick = Long.MIN_VALUE
+        lastRefillTick = 0L
         completionEmittedForCurrentScan = false
         listeners.clear()
     }
@@ -143,9 +143,10 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         plannedChunks = scanMap.totalChunks()
         completionEmittedForCurrentScan = false
         desiredKeys.clear()
-        lastRefillTick = Long.MIN_VALUE
-        desiredKeys.clear()
-        lastRefillTick = Long.MIN_VALUE
+        // Force an immediate first refill (cadence guard) on the next desiredChunks() call.
+        val tickNow = srv.overworld.time
+        lastRefillTick =
+                tickNow - MementoConstants.MEMENTO_SCAN_DESIRE_REFILL_EVERY_TICKS
 
         // If already complete, emit completion immediately without entering active scan mode.
         if (scanMap.isComplete()) {
@@ -184,8 +185,20 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         reconcileAndRefillDemand(tickNow, m)
 
         if (desiredKeys.isEmpty()) {
-            emitCompleted(reason = "exhausted", map = m)
-            return emptySequence()
+            // Defensive: under the locked invariants, exhaustion may only happen when the map is complete.
+            // If we still have missing entries, force a refill once (cadence-safe) before giving up.
+            if (!m.isComplete() && m.missingCount() > 0) {
+                lastRefillTick =
+                        tickNow - MementoConstants.MEMENTO_SCAN_DESIRE_REFILL_EVERY_TICKS
+                reconcileAndRefillDemand(tickNow, m)
+            }
+            if (desiredKeys.isEmpty()) {
+                emitCompleted(
+                        reason = if (m.isComplete()) "exhausted" else "exhausted_but_missing",
+                        map = m
+                )
+                return emptySequence()
+            }
         }
 
         return desiredKeys.asSequence().map { key ->
