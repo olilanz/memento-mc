@@ -108,7 +108,13 @@ object MementoConstants {
      * Maximum time (ticks) a chunk may remain in ENGINE_LOAD_OBSERVED / awaiting-full-load.
      * After this, the entry is reset or evicted to prevent permanent stalls.
      */
-    const val CHUNK_LOAD_AWAITING_FULL_LOAD_TIMEOUT_TICKS: Long = 200L
+    const val CHUNK_LOAD_AWAITING_FULL_LOAD_TIMEOUT_TICKS: Long = 600L
+
+    /**
+     * Window (ticks) where a purely unsolicited engine chunk load is considered "active pressure".
+     * While pressure is active, the driver may reduce scanner-origin ticketing to remain polite.
+     */
+    const val CHUNK_LOAD_UNSOLICITED_PRESSURE_WINDOW_TICKS: Long = 100L
 
     /**
      * Expiry for COMPLETED_PENDING_PRUNE retention (ticks).

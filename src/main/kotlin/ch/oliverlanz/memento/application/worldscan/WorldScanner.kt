@@ -187,6 +187,28 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         // Scanner currently does not need unload signals.
     }
 
+    override fun onChunkLoadExpired(world: ServerWorld, pos: ChunkPos) {
+        val m = map ?: return
+
+        val chunkX = pos.x
+        val chunkZ = pos.z
+        val key = ChunkKey(
+            world = world.registryKey,
+            regionX = Math.floorDiv(chunkX, 32),
+            regionZ = Math.floorDiv(chunkZ, 32),
+            chunkX = chunkX,
+            chunkZ = chunkZ,
+        )
+
+        // Best-effort coverage: record scan tick even when no chunk was accessible for propagation.
+        m.markScanned(key, world.time)
+
+        if (!activeScan.get()) return
+        if (m.isComplete()) {
+            emitCompleted(reason = "complete", map = m)
+        }
+    }
+
     private fun emitCompleted(reason: String, map: WorldMementoMap) {
         if (!activeScan.compareAndSet(true, false)) return
         if (completionEmittedForCurrentScan) return

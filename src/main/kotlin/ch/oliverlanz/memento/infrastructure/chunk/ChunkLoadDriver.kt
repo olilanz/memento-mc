@@ -14,15 +14,28 @@ import java.util.concurrent.ConcurrentLinkedQueue
 /**
  * Infrastructure-owned chunk load driver.
  *
- * Broker contract:
- * - RENEWAL and SCANNER express *interest* (desired chunks).
- * - The DRIVER translates interest into temporary tickets (bounded + prioritized).
- * - The engine decides *when* chunks load.
- * - When a chunk becomes safely accessible on the tick thread, the DRIVER propagates it to consumers.
+ * Responsibility boundaries:
+ * - Providers (RENEWAL, SCANNER) express *desire* only (which chunks would be useful).
+ * - The DRIVER is the sole owner of engine subscriptions and ticket pressure.
+ * - The engine decides *when* chunks load and whether they ever reach a stable FULLY_LOADED state.
+ *
+ * Pressure balancing:
+ * - The DRIVER arbitrates pressure across three origins:
+ *   1) renewal desire
+ *   2) scanner desire
+ *   3) unsolicited engine loads (external pressure)
+ * - Renewal is always prioritized over scanning.
+ * - Under active unsolicited pressure (unsolicited engine chunk loads), the driver backs off entirely and
+ *   does not issue new tickets. Already-issued tickets remain in place.
+ *
+ * Outcomes:
+ * - When a chunk becomes safely accessible on the tick thread, the DRIVER propagates it.
+ * - If bounded effort expires before accessibility, the DRIVER emits an expiry outcome
+ *   (no chunk attached) and releases all pressure for that attempt.
  *
  * Threading:
  * - Engine callbacks may arrive on non-tick threads.
- * - The DRIVER never propagates chunk availability on an engine callback thread.
+ * - The DRIVER never propagates outcomes on an engine callback thread.
  * - All propagation and engine access happens on the tick thread.
  */
 class ChunkLoadDriver {
@@ -53,6 +66,9 @@ class ChunkLoadDriver {
 
     @Volatile private var tickCounter: Long = 0
     private var lastStateLogTick: Long = 0
+
+    /** Last tick where a purely unsolicited engine chunk load was observed. */
+    @Volatile private var lastUnsolicitedLoadObservedTick: Long = -1
 
     // Register is the sole bookkeeping structure for chunk load lifecycle.
     private val register = ChunkLoadRegister()
@@ -162,7 +178,10 @@ class ChunkLoadDriver {
 private fun onEngineChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
     val ref = ChunkRef(world.registryKey, chunk.pos)
     // Record the observation into the register. No propagation here.
-    register.recordEngineLoadObserved(ref, nowTick = tickCounter)
+    val obs = register.recordEngineLoadObserved(ref, nowTick = tickCounter)
+    if (obs.isUnsolicited) {
+        lastUnsolicitedLoadObservedTick = tickCounter
+    }
 
     // Adoption: if this chunk is not currently ticketed, attach a ticket on the tick thread.
     if (!register.hasTicket(ref)) {
@@ -228,6 +247,14 @@ private fun expireAwaitingFullLoad(server: MinecraftServer) {
     }
     for (ref in result.ticketsToRemove) {
         removeTicket(server, ref)
+    }
+
+    // Propagate best-effort expiry outcomes (no chunk attached).
+    // This allows consumers (notably the scanner) to make forward progress even when
+    // the engine never reaches a stable FULLY_LOADED state for this load attempt.
+    for (ref in result.expiredEntries) {
+        val world = server.getWorld(ref.dimension) ?: continue
+        listeners.forEach { it.onChunkLoadExpired(world, ref.pos) }
     }
 }
 
@@ -320,8 +347,21 @@ private fun adoptObservedLoads(server: MinecraftServer) {
         val capacity = MementoConstants.CHUNK_LOAD_MAX_OUTSTANDING_TICKETS - ticketCount
         if (capacity <= 0) return
 
-        // Issue tickets in a single pass; register internally filters to REQUESTED + desired.
-        val candidates = register.takeTicketCandidates(capacity)
+        val ambientPressureActive = (
+            lastUnsolicitedLoadObservedTick >= 0 &&
+                (tickCounter - lastUnsolicitedLoadObservedTick) <= MementoConstants.CHUNK_LOAD_UNSOLICITED_PRESSURE_WINDOW_TICKS
+        )
+
+        // Full back-off under ambient pressure:
+        // unsolicited engine chunk loads indicate external demand (players, other systems, etc.).
+        // In that situation, the driver must not compete by issuing new tickets. External pressure is as
+        // good as driver-induced pressure for scan convergence.
+        if (ambientPressureActive) return
+
+        // Issue tickets in a single pass.
+        // Policy:
+        // - Renewal desire is prioritized over scanner desire.
+        val candidates = register.takeTicketCandidatesPrioritized(capacity)
         if (candidates.isEmpty()) return
 
         var issued = 0
