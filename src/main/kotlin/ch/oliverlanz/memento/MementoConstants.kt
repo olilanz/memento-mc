@@ -111,8 +111,15 @@ object MementoConstants {
     const val CHUNK_LOAD_AWAITING_FULL_LOAD_TIMEOUT_TICKS: Long = 600L
 
     /**
+     * Maximum time (ticks) a chunk may remain in TICKET_ISSUED without ever being observed by the engine.
+     *
+     * This is the symmetric bounded-wait for the "ticketed but no callback" case.
+     */
+    const val CHUNK_LOAD_TICKET_ISSUED_TIMEOUT_TICKS: Long = 600L
+
+    /**
      * Window (ticks) where a purely unsolicited engine chunk load is considered "active pressure".
-     * While pressure is active, the driver may reduce scanner-origin ticketing to remain polite.
+     * While pressure is active, the driver backs off entirely and does not issue new tickets.
      */
     const val CHUNK_LOAD_UNSOLICITED_PRESSURE_WINDOW_TICKS: Long = 100L
 

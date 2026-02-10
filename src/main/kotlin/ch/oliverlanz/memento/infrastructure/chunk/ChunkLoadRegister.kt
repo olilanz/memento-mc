@@ -196,6 +196,36 @@ fun expireAwaitingFullLoad(nowTick: Long, expireAfterTicks: Long): ExpireResult 
 
     ExpireResult(expiredEntries = expired, ticketsToRemove = ticketsToRemove.distinct())
 }
+
+/**
+ * Prevent permanent stalls in TICKET_ISSUED (ticketed but never observed by the engine).
+ *
+ * Semantics:
+ * - Bounded effort only: the driver may attach tickets to request a load, but the engine may defer
+ *   or never materialize the corresponding CHUNK_LOAD callback.
+ * - On expiry we *always* release pressure and drop the entry from the register, allowing
+ *   the chunk to re-enter as a fresh request if (and only if) demand still exists.
+ */
+fun expireTicketIssuedWithoutObservation(nowTick: Long, expireAfterTicks: Long): ExpireResult = lock.withLock {
+    val expired = ArrayList<ChunkRef>()
+    val ticketsToRemove = ArrayList<ChunkRef>()
+
+    val it = entries.iterator()
+    while (it.hasNext()) {
+        val (chunk, entry) = it.next()
+        if (!entry.isTicketIssued()) continue
+        val issuedAt = entry.lastProgressTick
+        if ((nowTick - issuedAt) <= expireAfterTicks) continue
+
+        expired.add(chunk)
+        if (entry.ticketName != null) {
+            ticketsToRemove.add(chunk)
+        }
+        it.remove()
+    }
+
+    ExpireResult(expiredEntries = expired, ticketsToRemove = ticketsToRemove.distinct())
+}
     /* =====================================================================
      * Engine observations
      * ===================================================================== */
