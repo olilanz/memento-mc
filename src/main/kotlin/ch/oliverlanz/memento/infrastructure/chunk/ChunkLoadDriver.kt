@@ -70,6 +70,9 @@ class ChunkLoadDriver {
     /** Last tick where a purely unsolicited engine chunk load was observed. */
     @Volatile private var lastUnsolicitedLoadObservedTick: Long = -1
 
+    /** Cached state to emit a single log line when back-off engages or releases. */
+    private var wasAmbientPressureActive: Boolean = false
+
     // Register is the sole bookkeeping structure for chunk load lifecycle.
     private val register = ChunkLoadRegister()
 
@@ -147,6 +150,7 @@ class ChunkLoadDriver {
 
         // 2) Expire and prune (outside-lock engine operations handled here).
         expireCompletedPendingPrune(s)
+        expireTicketIssuedWithoutObservation(s)
         expireAwaitingFullLoad(s)
         pruneUndesired(s)
 
@@ -229,6 +233,32 @@ private fun onEngineChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
         }
         for (ref in result.ticketsToRemove) {
             removeTicket(server, ref)
+        }
+    }
+
+    private fun expireTicketIssuedWithoutObservation(server: MinecraftServer) {
+        val result = register.expireTicketIssuedWithoutObservation(
+            nowTick = tickCounter,
+            expireAfterTicks = MementoConstants.CHUNK_LOAD_TICKET_ISSUED_TIMEOUT_TICKS,
+        )
+
+        if (result.expiredEntries.isNotEmpty()) {
+            MementoLog.debug(
+                MementoConcept.DRIVER,
+                "ticket-issued expired count={}",
+                result.expiredEntries.size,
+            )
+        }
+
+        for (ref in result.ticketsToRemove) {
+            removeTicket(server, ref)
+        }
+
+        // Propagate best-effort expiry outcomes (no chunk attached).
+        // Consumers (notably the scanner) can mark scanTick and move forward.
+        for (ref in result.expiredEntries) {
+            val world = server.getWorld(ref.dimension) ?: continue
+            listeners.forEach { it.onChunkLoadExpired(world, ref.pos) }
         }
     }
 
@@ -351,6 +381,24 @@ private fun adoptObservedLoads(server: MinecraftServer) {
             lastUnsolicitedLoadObservedTick >= 0 &&
                 (tickCounter - lastUnsolicitedLoadObservedTick) <= MementoConstants.CHUNK_LOAD_UNSOLICITED_PRESSURE_WINDOW_TICKS
         )
+
+        if (ambientPressureActive != wasAmbientPressureActive) {
+            wasAmbientPressureActive = ambientPressureActive
+            if (ambientPressureActive) {
+                MementoLog.info(
+                    MementoConcept.DRIVER,
+                    "back-off engaged (unsolicited pressure) lastUnsolicitedTick={} windowTicks={}",
+                    lastUnsolicitedLoadObservedTick,
+                    MementoConstants.CHUNK_LOAD_UNSOLICITED_PRESSURE_WINDOW_TICKS,
+                )
+            } else {
+                MementoLog.info(
+                    MementoConcept.DRIVER,
+                    "back-off released (unsolicited pressure quiet) quietForTicks={}",
+                    (tickCounter - lastUnsolicitedLoadObservedTick),
+                )
+            }
+        }
 
         // Full back-off under ambient pressure:
         // unsolicited engine chunk loads indicate external demand (players, other systems, etc.).
