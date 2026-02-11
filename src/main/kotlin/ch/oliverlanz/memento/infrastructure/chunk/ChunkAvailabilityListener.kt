@@ -22,8 +22,12 @@ interface ChunkAvailabilityListener {
      * - attempt a later enrichment pass, or
      * - ignore the outcome.
      */
-    fun onChunkLoadExpired(world: ServerWorld, pos: ChunkPos) { /* default no-op */ }
+    fun onChunkLoadExpired(world: ServerWorld, pos: ChunkPos) {
+        /* default no-op */
+    }
 
     /** Optional hook (used by renewal tracker domain hooks). */
-    fun onChunkUnloaded(world: ServerWorld, pos: ChunkPos) { /* default no-op */ }
+    fun onChunkUnloaded(world: ServerWorld, pos: ChunkPos) {
+        /* default no-op */
+    }
 }

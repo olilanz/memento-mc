@@ -195,9 +195,11 @@ class ChunkLoadDriver {
         val ref = ChunkRef(world.registryKey, chunk.pos)
         // Record the observation into the register. No propagation here.
         val obs = register.recordEngineLoadObserved(ref, nowTick = tickCounter)
-        // Treat neighbor-induced loads as solicited if driver influenced this area
-        val driverInfluenced = isDriverInfluenced(ref)
-        if (obs.isUnsolicited && !driverInfluenced) {
+        // Pressure attribution:
+        // The engine may load neighboring chunks as a side effect of driver demand (scanner or
+        // renewal). Such spillover must not be counted as external pressure.
+        val spilloverFromSolicitedDemand = isAdjacentToSolicitedEntry(ref)
+        if (obs.isUnsolicited && !spilloverFromSolicitedDemand) {
             lastUnsolicitedLoadObservedTick = tickCounter
         }
 
@@ -540,18 +542,32 @@ class ChunkLoadDriver {
         )
     }
 
-    private fun isDriverInfluenced(ref: ChunkRef): Boolean {
-        if (register.hasTicket(ref)) return true
+    /**
+     * Returns true if this engine load is plausibly spillover from *solicited* driver demand.
+     *
+     * The driver expresses demand (scanner/renewal) for individual chunks. The engine may load
+     * neighboring chunks as a side effect of fulfilling that demand.
+     *
+     * These spillover loads are still causally induced by driver demand and must not be counted as
+     * external/unsolicited pressure (back-off signal).
+     *
+     * IMPORTANT:
+     * - We must not base this on "ticket present": tickets can be attached/released while the
+     *   engine is still delivering neighbor loads.
+     * - We must not base this on "entry exists": the register can also contain entries adopted
+     *   from unsolicited engine loads.
+     */
+    private fun isAdjacentToSolicitedEntry(ref: ChunkRef): Boolean {
+        if (register.hasSolicitedEntry(ref)) return true
         val cx = ref.pos.x
         val cz = ref.pos.z
         for (dx in -1..1) {
             for (dz in -1..1) {
                 if (dx == 0 && dz == 0) continue
                 val n = ChunkRef(ref.dimension, ChunkPos(cx + dx, cz + dz))
-                if (register.hasTicket(n)) return true
+                if (register.hasSolicitedEntry(n)) return true
             }
         }
         return false
     }
-
 }
