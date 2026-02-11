@@ -416,8 +416,14 @@ class ChunkLoadDriver {
      * ------------------------------------------------------------------ */
 
     private fun issueTicketsUpToCap(server: MinecraftServer) {
+        // Capacity is reserved for *solicited* driver work (scanner/renewal). Unsolicited engine
+        // observations must not consume the driver's ticket budget, otherwise external noise can
+        // stall scanning.
+        val activeSolicited = register.countActiveSolicitedEntries()
         val ticketCount = register.allEntriesSnapshot().count { it.ticketName != null }
-        val capacity = MementoConstants.CHUNK_LOAD_MAX_OUTSTANDING_TICKETS - ticketCount
+        val capacityByEntries = MementoConstants.CHUNK_LOAD_MAX_OUTSTANDING_TICKETS - activeSolicited
+        val capacityByTickets = MementoConstants.CHUNK_LOAD_MAX_OUTSTANDING_TICKETS - ticketCount
+        val capacity = minOf(capacityByEntries, capacityByTickets)
         if (capacity <= 0) return
 
         val ambientPressureActive =

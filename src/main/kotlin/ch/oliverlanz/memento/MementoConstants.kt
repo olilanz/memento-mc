@@ -59,7 +59,7 @@ object MementoConstants {
      * Maximum number of chunk load forwards per tick. Protects against long tick stalls under
      * bursty conditions.
      */
-    const val CHUNK_LOAD_MAX_FORWARDED_PER_TICK: Int = 32
+    const val CHUNK_LOAD_MAX_FORWARDED_PER_TICK: Int = 16
 
     /**
      * Radius (in chunks) for the driver's temporary tickets.
@@ -183,7 +183,7 @@ object MementoConstants {
     const val MEMENTO_SCAN_DESIRE_LOW_WATERMARK: Int = 64
 
     /** Target size for scanner demand after refill. */
-    const val MEMENTO_SCAN_DESIRE_HIGH_WATERMARK: Int = 512
+    const val MEMENTO_SCAN_DESIRE_HIGH_WATERMARK: Int = CHUNK_LOAD_MAX_OUTSTANDING_TICKETS
 
     /** Minimum ticks between scanner refills to avoid recomputing missing lists every tick. */
     const val MEMENTO_SCAN_DESIRE_REFILL_EVERY_TICKS: Long = 20L

@@ -370,6 +370,16 @@ internal class ChunkLoadRegister {
     fun containsEntry(chunk: ChunkRef): Boolean = lock.withLock { entries.containsKey(chunk) }
 
     /**
+     * Counts lifecycle entries that originated from *solicited* driver demand (scanner/renewal)
+     * and are still active (i.e., not COMPLETED_PENDING_PRUNE).
+     *
+     * IMPORTANT: Unsolicited observations may also create entries, but those must not consume
+     * driver capacity for issuing new tickets.
+     */
+    fun countActiveSolicitedEntries(): Int =
+            lock.withLock { entries.values.count { it.isSolicited() && !it.isCompletedPendingPrune() } }
+
+    /**
      * True if the driver currently tracks a lifecycle entry for [chunk] that originated from
      * driver demand (scanner or renewal).
      *
