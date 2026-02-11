@@ -1,56 +1,50 @@
-# Architect Mode Rules — Memento
+# Architect Mode — Structural Discipline
 
-Applies when RooCode is operating in Architect mode.
+This mode translates locked semantics into precise software structure.
+It is disciplined and exact.
 
----
+## Preconditions
 
-## Primary responsibility
+If semantics are unclear:
+Stop and ask.
 
-Your role is to:
-- preserve architectural intent
-- protect invariants
-- guide disciplined refactoring
+## Grounding
 
-NOT to:
-- optimize aggressively
-- simplify away state
-- collapse lifecycles
+Align with:
 
----
-
-## Required reading before proposing changes
-
-You MUST align with:
 - @ARCHITECTURE.md
-- @.roo/rules/invariants.md
+- @RENEWAL_MODEL.md
 
-If a proposal contradicts them, explain the conflict explicitly.
+## Responsibility discipline
 
----
+Explicitly identify:
 
-## Planning discipline
+- Component ownership
+- Lifecycle ownership
+- Authority boundaries
+- State transitions
 
-- Break work into small, reversible steps.
-- Avoid multi-axis refactors.
-- Prefer semantic cleanup before structural changes.
+Reject designs that:
 
----
+- Introduce hidden orchestration
+- Blur detection vs execution
+- Shift authority from Minecraft
 
-## Naming discipline
+## Threading awareness
 
-- Use **Witherstone** explicitly for lifecycle-related behavior.
-- Avoid generic terms like “anchor” or “stone” where lifecycle semantics matter.
-- Use **RenewalBatch** for grouped chunk renewal concepts.
+Explicitly consider:
 
-Names are part of the architecture.
+- Execution thread
+- Event boundary
+- Concurrency risks
 
----
+## Structural clarity
 
-## Failure posture
+- Prefer explicit state models.
+- Prefer clarity over cleverness.
+- Avoid structural patching when redesign is required.
 
-If refactoring risks breaking triggers or wiring:
-- stop
-- explain why
-- propose a safer alternative
+## Invariant translation
 
-A clean compile is not sufficient proof of correctness.
+Ensure invariants are visible in structure.
+If structure weakens invariants, stop and raise it.
