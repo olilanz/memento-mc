@@ -194,19 +194,23 @@ class ChunkLoadDriver {
     private fun onEngineChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
         val ref = ChunkRef(world.registryKey, chunk.pos)
         // Record the observation into the register. No propagation here.
+        // We capture whether an entry existed before this callback so we can attribute pressure
+        // only to *new* external disturbances (and not keep refreshing the back-off window due
+        // to engine ripples around already-adopted unsolicited entries).
+        val existedBefore = register.containsEntry(ref)
         val obs = register.recordEngineLoadObserved(ref, nowTick = tickCounter)
         // Pressure attribution:
         // The engine may load neighboring chunks as a side effect of driver demand (scanner or
         // renewal). Such spillover must not be counted as external pressure.
         val spilloverFromSolicitedDemand = isAdjacentToSolicitedEntry(ref)
-        if (obs.isUnsolicited && !spilloverFromSolicitedDemand) {
+        if (obs.isUnsolicited && !spilloverFromSolicitedDemand && !existedBefore) {
             lastUnsolicitedLoadObservedTick = tickCounter
         }
 
-        // Adoption: if this chunk is not currently ticketed, attach a ticket on the tick thread.
-        if (!register.hasTicket(ref)) {
-            pendingAdoptions.add(ref)
-        }
+        // IMPORTANT: do not ticket unsolicited engine loads.
+        // Ticketing externally observed loads can amplify engine spillover and cause uncontrolled
+        // world growth. Unsolicited observations are tracked best-effort and may expire without
+        // ever reaching FULLY_LOADED.
     }
 
     private fun onEngineChunkUnloaded(world: ServerWorld, pos: ChunkPos) {
