@@ -354,8 +354,10 @@ internal class ChunkLoadRegister {
             lock.withLock { entries[chunk]?.issueTicket(ticketName, nowTick) }
 
     /**
-     * Attaches a ticket to a chunk already in ENGINE_LOAD_OBSERVED. Used to adopt unsolicited
-     * engine loads and increase probability of reaching FULLY_LOADED.
+     * Attaches a ticket to a chunk already in ENGINE_LOAD_OBSERVED.
+     *
+     * NOTE: Ticketing unsolicited engine loads can cause uncontrolled world growth (spillover
+     * begets more spillover). The driver should avoid using this for unsolicited observations.
      */
     fun attachObservedTicket(chunk: ChunkRef, ticketName: String, nowTick: Long) =
             lock.withLock { entries[chunk]?.attachTicketWhileObserved(ticketName, nowTick) }
@@ -363,6 +365,9 @@ internal class ChunkLoadRegister {
     fun ticketName(chunk: ChunkRef): String? = lock.withLock { entries[chunk]?.ticketName }
 
     fun hasTicket(chunk: ChunkRef): Boolean = lock.withLock { entries[chunk]?.hasTicket() == true }
+
+    /** True when the register already contains an entry for [chunk] (any origin). */
+    fun containsEntry(chunk: ChunkRef): Boolean = lock.withLock { entries.containsKey(chunk) }
 
     /**
      * True if the driver currently tracks a lifecycle entry for [chunk] that originated from
