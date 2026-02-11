@@ -195,7 +195,9 @@ class ChunkLoadDriver {
         val ref = ChunkRef(world.registryKey, chunk.pos)
         // Record the observation into the register. No propagation here.
         val obs = register.recordEngineLoadObserved(ref, nowTick = tickCounter)
-        if (obs.isUnsolicited) {
+        // Treat neighbor-induced loads as solicited if driver influenced this area
+        val driverInfluenced = isDriverInfluenced(ref)
+        if (obs.isUnsolicited && !driverInfluenced) {
             lastUnsolicitedLoadObservedTick = tickCounter
         }
 
@@ -537,4 +539,19 @@ class ChunkLoadDriver {
                 completedPendingPruneExpiredCount,
         )
     }
+
+    private fun isDriverInfluenced(ref: ChunkRef): Boolean {
+        if (register.hasTicket(ref)) return true
+        val cx = ref.pos.x
+        val cz = ref.pos.z
+        for (dx in -1..1) {
+            for (dz in -1..1) {
+                if (dx == 0 && dz == 0) continue
+                val n = ChunkRef(ref.dimension, ChunkPos(cx + dx, cz + dz))
+                if (register.hasTicket(n)) return true
+            }
+        }
+        return false
+    }
+
 }
