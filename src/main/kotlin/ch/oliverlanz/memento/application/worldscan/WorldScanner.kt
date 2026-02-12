@@ -244,7 +244,9 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         val refillAdded = mutableListOf<ChunkKey>()
         while (desiredKeys.size < target) {
             val needed = target - desiredKeys.size
-            val candidates = map.missingSignals(limit = needed)
+            // Ask for enough ordered missing keys to skip already-demanded entries while still
+            // filling to the high watermark when capacity exists.
+            val candidates = map.missingSignals(limit = desiredKeys.size + needed)
             if (candidates.isEmpty()) break
             var addedAny = false
             for (k in candidates) {
@@ -263,7 +265,7 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
             val tail = refillAdded.last()
             MementoLog.info(
                     MementoConcept.SCANNER,
-                    "Scanner demand refill at low watermark. active={} added={} activeNow={} head={} r=({}, {}) c=({}, {}) tail={} r=({}, {}) c=({}, {}).",
+                    "Scanner demand refill from ordered missing set. active={} added={} activeNow={} head={} r=({}, {}) c=({}, {}) tail={} r=({}, {}) c=({}, {}).",
                     activeBeforeRefill,
                     refillAdded.size,
                     desiredKeys.size,
