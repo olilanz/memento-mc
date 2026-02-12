@@ -271,8 +271,9 @@ class ChunkLoadDriver {
         if (result.expiredEntries.isNotEmpty()) {
             MementoLog.debug(
                     MementoConcept.DRIVER,
-                    "ticket-issued expired count={}",
+                    "expiry batch ticket-issued count={} ticketsRemoved={}",
                     result.expiredEntries.size,
+                    result.ticketsToRemove.size,
             )
         }
 
@@ -299,8 +300,9 @@ class ChunkLoadDriver {
         if (result.expiredEntries.isNotEmpty()) {
             MementoLog.debug(
                     MementoConcept.DRIVER,
-                    "awaiting-full-load expired count={}",
+                    "expiry batch awaiting-full-load count={} ticketsRemoved={}",
                     result.expiredEntries.size,
+                    result.ticketsToRemove.size,
             )
         }
         for (ref in result.ticketsToRemove) {
@@ -434,14 +436,18 @@ class ChunkLoadDriver {
         if (ambientPressureActive != wasAmbientPressureActive) {
             wasAmbientPressureActive = ambientPressureActive
             if (ambientPressureActive) {
-                MementoLog.debug(
+                MementoLog.info(
                         MementoConcept.DRIVER,
-                        "Driver back-off engaged (ambient chunk activity detected).",
+                        "Driver back-off engaged (ambient chunk activity detected). outstandingTickets={} desired={}.",
+                        ticketCount,
+                        register.allEntriesSnapshot().count { it.desiredBy.isNotEmpty() },
                 )
             } else {
-                MementoLog.debug(
+                MementoLog.info(
                         MementoConcept.DRIVER,
-                        "Driver back-off released.",
+                        "Driver back-off released. outstandingTickets={} desired={}",
+                        ticketCount,
+                        register.allEntriesSnapshot().count { it.desiredBy.isNotEmpty() },
                 )
             }
         }
@@ -460,6 +466,7 @@ class ChunkLoadDriver {
         if (candidates.isEmpty()) return
 
         var issued = 0
+        var alreadyLoadedObserved = 0
         for (ref in candidates) {
             val world = server.getWorld(ref.dimension) ?: continue
 
@@ -467,6 +474,7 @@ class ChunkLoadDriver {
             val alreadyLoaded = world.chunkManager.getWorldChunk(ref.pos.x, ref.pos.z, false)
             if (alreadyLoaded != null) {
                 register.synthesizeLoadObserved(ref, nowTick = tickCounter)
+                alreadyLoadedObserved++
                 continue
             }
 
@@ -484,8 +492,18 @@ class ChunkLoadDriver {
         if (issued > 0) {
             MementoLog.debug(
                     MementoConcept.DRIVER,
-                    "tickets issued count={} outstanding={}",
+                    "ticket issuance batch candidates={} issued={} alreadyLoadedObserved={} outstanding={}",
+                    candidates.size,
                     issued,
+                    alreadyLoadedObserved,
+                    register.allEntriesSnapshot().count { it.ticketName != null }
+            )
+        } else if (alreadyLoadedObserved > 0) {
+            MementoLog.debug(
+                    MementoConcept.DRIVER,
+                    "ticket issuance batch candidates={} issued=0 alreadyLoadedObserved={} outstanding={}",
+                    candidates.size,
+                    alreadyLoadedObserved,
                     register.allEntriesSnapshot().count { it.ticketName != null }
             )
         }

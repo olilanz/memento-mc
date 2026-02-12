@@ -218,8 +218,8 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         }
 
         // 2) Watermark refill, bounded by cadence.
-        val active = desiredKeys.size
-        if (active >= MementoConstants.MEMENTO_SCAN_DESIRE_LOW_WATERMARK) return
+        val activeBeforeRefill = desiredKeys.size
+        if (activeBeforeRefill >= MementoConstants.MEMENTO_SCAN_DESIRE_LOW_WATERMARK) return
         if (tickNow != 0L &&
                         (tickNow - lastRefillTick) <
                                 MementoConstants.MEMENTO_SCAN_DESIRE_REFILL_EVERY_TICKS
@@ -229,6 +229,7 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         lastRefillTick = tickNow
 
         val target = MementoConstants.MEMENTO_SCAN_DESIRE_HIGH_WATERMARK
+        val refillAdded = mutableListOf<ChunkKey>()
         while (desiredKeys.size < target) {
             val needed = target - desiredKeys.size
             val candidates = map.missingSignals(limit = needed)
@@ -236,10 +237,35 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
             var addedAny = false
             for (k in candidates) {
                 if (desiredKeys.size >= target) break
-                if (desiredKeys.add(k)) addedAny = true
+                if (desiredKeys.add(k)) {
+                    refillAdded += k
+                    addedAny = true
+                }
             }
             // Safety: if the map returned only keys already desired, stop to avoid tight loops.
             if (!addedAny) break
+        }
+
+        if (refillAdded.isNotEmpty()) {
+            val head = refillAdded.first()
+            val tail = refillAdded.last()
+            MementoLog.info(
+                    MementoConcept.SCANNER,
+                    "Scanner demand refill at low watermark. active={} added={} activeNow={} head={} r=({}, {}) c=({}, {}) tail={} r=({}, {}) c=({}, {}).",
+                    activeBeforeRefill,
+                    refillAdded.size,
+                    desiredKeys.size,
+                    head.world.value.toString(),
+                    head.regionX,
+                    head.regionZ,
+                    head.chunkX,
+                    head.chunkZ,
+                    tail.world.value.toString(),
+                    tail.regionX,
+                    tail.regionZ,
+                    tail.chunkX,
+                    tail.chunkZ,
+            )
         }
     }
 
@@ -341,7 +367,7 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         } else if (reason == "exhausted_but_missing") {
             MementoLog.info(
                     MementoConcept.SCANNER,
-                    "World scan paused. Missing chunks remain: {}.",
+                    "World scan paused-with-missing. Missing chunks remain: {}.",
                     event.missingChunks,
             )
         } else {
