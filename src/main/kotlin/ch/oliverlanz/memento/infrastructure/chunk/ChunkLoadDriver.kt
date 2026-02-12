@@ -524,7 +524,7 @@ class ChunkLoadDriver {
                         (tickCounter - lastUnsolicitedLoadObservedTick)
                 else -1
 
-        MementoLog.debug(
+        MementoLog.trace(
                 MementoConcept.DRIVER,
                 "tick={} entries={} demand(desired={} queue={}) pressure(tickets={} backOff={} lastUnsolicitedTick={} quietForTicks={}) pipeline(requested={} loadAbsenceVerified={} ticketed={} observed={} awaitingFullLoad={} observedUntracked={} fullyLoaded={} propagationQueue={} propagating={} completedPendingPrune={} expiredPendingPrune={})",
                 tickCounter,
