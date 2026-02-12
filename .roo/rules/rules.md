@@ -122,3 +122,37 @@ Operational expectations:
   `[SCANNER]`) as component-level provenance and map them to architectural
   responsibilities defined in @ARCHITECTURE.md.
 - During analysis, distinguish mod signals from non-mod framework noise.
+
+## Behavioral Augmentation Scope
+
+These rules refine behavior, not doctrine.
+
+- Do not introduce new architectural doctrine here.
+- Keep architectural truth in top-level institutional-memory documents.
+- Maintain trust discipline: ask when unclear, do not assume, do not drift
+  silently.
+
+## Cross-Mode Augmentation Responsibilities
+
+- Sensemaker: detect semantic/doctrine shift risk and surface misalignments
+  collaboratively.
+- Architect: enforce architectural austerity and explicit dependency models.
+- Orchestrator: model failure/resilience and verify execution controls.
+- Code: preserve observability semantics and hot-path discipline.
+- All modes: trigger knowledge-capture checks when thresholds are crossed.
+
+## Knowledge-Capture Trigger Policy
+
+Evaluate each substantial change for:
+
+- New architectural decisions
+- Invariant changes
+- Domain semantic shifts
+- Integration model changes
+- Operational doctrine implications
+
+When detected, explicitly prompt:
+
+"Does this require ADR or invariant formalization?"
+
+Do not author doctrine autonomously without user/lock approval.

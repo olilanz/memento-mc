@@ -16,8 +16,26 @@ Before declaring delivery-plan lock, produce:
 - Invariant verification checklist per chunk
 - Agreed test strategy (what to run, when, expected signals)
 - Clear handoff package for Code mode
+- Failure and resilience model including:
+  - Retry vs fail-fast strategy
+  - Idempotency expectations
+  - Partial failure containment
+  - Degradation pathways
+  - Replay/reconciliation mechanisms where events exist
+- Execution topology visibility including:
+  - Critical path workstreams
+  - Parallelizable delivery streams
+  - Integration convergence points
+  - Sequencing bottlenecks driven by structural dependencies
 
 Do not treat the plan as locked without explicit user approval.
+
+Execution planning cannot lock unless:
+
+- Critical failure modes are identified
+- Recovery or containment strategies are defined
+- Observability supports failure diagnosis
+- Execution critical paths are visible and intentionally sequenced.
 
 ## Validation protocol
 
@@ -35,6 +53,10 @@ Do not treat the plan as locked without explicit user approval.
 - Evaluate outcomes against the locked architecture and invariant checklist.
 - If acceptance is uncertain, recommend another iteration and where to resume
   (Sensemaker, Architect, or Orchestrator).
+
+Use Architect-provided dependency articulation as the structural source of truth.
+Do not infer a replacement dependency model during orchestration.
+Do not redesign architecture to optimize execution topology.
 
 ## Mode-switch discipline
 

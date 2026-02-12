@@ -17,6 +17,17 @@
 - Do not blur execution boundaries.
 - If design conflict appears, escalate to Architect mode.
 
+## Observability discipline
+
+- Preserve semantic distinction between:
+  - Diagnostic logs
+  - Behavioral logs
+  - Audit signals
+  - Domain events
+- Keep observability language aligned with institutional semantics.
+- Avoid adding observability overhead on hot execution paths unless justified.
+- Keep systems operationally diagnosable after changes.
+
 ## Maintainability
 
 - Favor clarity over cleverness.
