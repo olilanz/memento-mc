@@ -25,7 +25,7 @@ object MementoCsvWriter {
         Files.createDirectories(path.parent)
 
         val sb = StringBuilder()
-        sb.append("dimension,chunk_x,chunk_z,scan_tick,inhabited_ticks,dominant_stone,surface_y,biome_id,is_spawn_chunk\n")
+        sb.append("dimension,chunk_x,chunk_z,scan_tick,inhabited_ticks,dominant_stone,surface_y,biome_id,is_spawn_chunk,provenance,unresolved_reason\n")
 
         // Dominant influence map per world (already lore-resolved by StoneTopology)
         val dominantByWorld = linkedMapOf<net.minecraft.registry.RegistryKey<net.minecraft.world.World>, Map<ChunkPos, kotlin.reflect.KClass<out ch.oliverlanz.memento.domain.stones.Stone>>>()
@@ -44,6 +44,8 @@ object MementoCsvWriter {
             val surfaceY = signals?.surfaceY?.toString() ?: ""
             val biome = signals?.biomeId ?: ""
             val isSpawn = signals?.isSpawnChunk?.toString() ?: ""
+            val provenance = entry.provenance.name
+            val unresolvedReason = entry.unresolvedReason?.name ?: ""
 
             sb.append(dim)
                 .append(',').append(key.chunkX)
@@ -54,6 +56,8 @@ object MementoCsvWriter {
                 .append(',').append(surfaceY)
                 .append(',').append(biome)
                 .append(',').append(isSpawn)
+                .append(',').append(provenance)
+                .append(',').append(unresolvedReason)
                 .append('\n')
         }
 

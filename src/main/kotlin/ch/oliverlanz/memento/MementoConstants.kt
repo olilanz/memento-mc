@@ -194,4 +194,11 @@ object MementoConstants {
      * INFO-level operator telemetry only: bounded progress snapshots for convergence reasoning.
      */
     const val MEMENTO_SCAN_HEARTBEAT_EVERY_TICKS: Long = 100L
+
+    /**
+     * Maximum number of externally ingested scan metadata facts applied per server tick.
+     *
+     * Bounded application keeps map mutation costs predictable while preserving eventual progress.
+     */
+    const val MEMENTO_SCAN_METADATA_APPLIER_MAX_PER_TICK: Int = 64
 }

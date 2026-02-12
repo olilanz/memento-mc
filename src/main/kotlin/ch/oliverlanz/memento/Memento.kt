@@ -18,8 +18,8 @@ import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerLogging
 import ch.oliverlanz.memento.domain.stones.StoneTopologyHooks
-import ch.oliverlanz.memento.MementoConstants
 import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
+import ch.oliverlanz.memento.infrastructure.worldscan.TwoPassRegionFileMetadataProvider
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents
@@ -93,6 +93,7 @@ object Memento : ModInitializer {
 
             val scanner = WorldScanner().also {
                 it.attach(server)
+                it.attachFileMetadataProvider(TwoPassRegionFileMetadataProvider(it.metadataIngestionPort()))
                 it.addListener(WorldScanCsvExporter)
             }
 
@@ -145,6 +146,7 @@ object Memento : ModInitializer {
         ServerTickEvents.END_SERVER_TICK.register {
             gameTimeTracker.tick()
             chunkLoadDriver?.tick()
+            worldScanner?.tick()
         }
     }
 }

@@ -2,12 +2,16 @@ package ch.oliverlanz.memento.application.worldscan
 
 import ch.oliverlanz.memento.MementoConstants
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
+import ch.oliverlanz.memento.domain.worldmap.ChunkScanProvenance
+import ch.oliverlanz.memento.domain.worldmap.ChunkScanUnresolvedReason
+import ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry
 import ch.oliverlanz.memento.domain.worldmap.WorldMementoMap
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkAvailabilityListener
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadProvider
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkRef
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
+import ch.oliverlanz.memento.infrastructure.worldscan.FileMetadataProvider
 import java.lang.Math
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
@@ -45,7 +49,20 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
     /** The world map (single source of truth). Kept in memory across proactive runs. */
     private var map: WorldMementoMap? = null
 
+    /** Bounded, tick-thread-only application path for external scan metadata facts. */
+    private var metadataApplier: BoundedScanMetadataTickApplier? = null
+
     private var consumer: ChunkMetadataConsumer? = null
+
+    /** Optional file-primary provider used to run Chunk E orchestration before engine fallback demand. */
+    private var fileMetadataProvider: FileMetadataProvider? = null
+
+    /**
+     * Active scan demand phase:
+     * - [FILE_PRIMARY]: file provider is responsible for first-pass resolution, proactive demand OFF.
+     * - [ENGINE_FALLBACK]: driver demand is active for unresolved leftovers only.
+     */
+    private var demandPhase: DemandPhase = DemandPhase.ENGINE_FALLBACK
 
     /** Observability only. */
     private var plannedChunks: Int = 0
@@ -75,12 +92,37 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
 
     fun attach(server: MinecraftServer) {
         this.server = server
+        ensureSubstrate()
+    }
+
+    fun attachFileMetadataProvider(provider: FileMetadataProvider) {
+        fileMetadataProvider = provider
+    }
+
+    /**
+     * Per-tick scanner runtime processing.
+     *
+     * This intentionally does not generate scan demand. It only drains externally queued facts into
+     * the substrate map on the tick thread.
+     */
+    fun tick() {
+        metadataApplier?.tick()
+    }
+
+    /** Application ingestion boundary for future providers (e.g. file-based readers). */
+    fun metadataIngestionPort(): ScanMetadataIngestionPort {
+        ensureSubstrate()
+        return metadataApplier ?: NoopScanMetadataIngestionPort
     }
 
     fun detach() {
         server = null
         activeScan.set(false)
         map = null
+        demandPhase = DemandPhase.ENGINE_FALLBACK
+        fileMetadataProvider?.close()
+        fileMetadataProvider = null
+        metadataApplier = null
         consumer = null
         plannedChunks = 0
         desiredKeys.clear()
@@ -110,7 +152,7 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         }
 
         // (Re)discover existing chunks and ensure they exist in the in-memory map.
-        val scanMap = map ?: WorldMementoMap().also { map = it }
+        val scanMap = ensureSubstrate()
         val worlds = WorldDiscovery().discover(srv)
         val discoveredRegions = RegionDiscovery().discover(srv, worlds)
         val discoveredChunks = ChunkDiscovery().discover(discoveredRegions)
@@ -144,10 +186,8 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
             return 1
         }
 
-        // Ensure a consumer exists (passive mode also relies on it).
-        if (consumer == null || map !== scanMap) {
-            consumer = ChunkMetadataConsumer(scanMap)
-        }
+        // Substrate consumer is always kept attached to the current map.
+        ensureSubstrate()
 
         plannedChunks = scanMap.totalChunks()
         completionEmittedForCurrentScan = false
@@ -158,6 +198,7 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
                 tickNow - MementoConstants.MEMENTO_SCAN_DESIRE_REFILL_EVERY_TICKS
         lastHeartbeatTick = tickNow
         lastHeartbeatScanned = scanMap.scannedChunks()
+        demandPhase = DemandPhase.ENGINE_FALLBACK
 
         // If already complete, emit completion immediately without entering active scan mode.
         if (scanMap.isComplete()) {
@@ -170,6 +211,24 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
             )
             source.sendFeedback({ Text.literal("Memento: scan already complete.") }, false)
             return 1
+        }
+
+        val provider = fileMetadataProvider
+        if (provider != null) {
+            val started = provider.start(discoveredChunks, tickNow)
+            if (started) {
+                demandPhase = DemandPhase.FILE_PRIMARY
+                MementoLog.info(
+                        MementoConcept.SCANNER,
+                        "scan file-primary phase started chunks={}",
+                        ensured,
+                )
+            } else {
+                MementoLog.warn(
+                        MementoConcept.SCANNER,
+                        "scan file-primary phase skipped reason=provider_busy",
+                )
+            }
         }
 
         activeScan.set(true)
@@ -190,6 +249,12 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
     override fun desiredChunks(): Sequence<ChunkRef> {
         if (!activeScan.get()) return emptySequence()
         val m = map ?: return emptySequence()
+
+        if (demandPhase == DemandPhase.FILE_PRIMARY && !transitionToFallbackWhenReady(m)) {
+            // Chunk E orchestration lock: while file-primary is running (or queued facts are draining),
+            // proactive driver demand remains OFF and only passive/unsolicited enrichment applies.
+            return emptySequence()
+        }
 
         val tickNow = server?.overworld?.time ?: 0L
         reconcileAndRefillDemand(tickNow, m)
@@ -218,12 +283,12 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
     }
 
     private fun reconcileAndRefillDemand(tickNow: Long, map: WorldMementoMap) {
-        // 1) Reconcile: drop any keys that are no longer missing.
+        // 1) Reconcile: drop any keys that no longer need fallback demand.
         if (desiredKeys.isNotEmpty()) {
             val it = desiredKeys.iterator()
             while (it.hasNext()) {
                 val key = it.next()
-                if (!map.isMissing(key)) {
+                if (!needsFallbackDemand(map, key)) {
                     it.remove()
                 }
             }
@@ -244,9 +309,9 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         val refillAdded = mutableListOf<ChunkKey>()
         while (desiredKeys.size < target) {
             val needed = target - desiredKeys.size
-            // Ask for enough ordered missing keys to skip already-demanded entries while still
-            // filling to the high watermark when capacity exists.
-            val candidates = map.missingSignals(limit = desiredKeys.size + needed)
+            // Fallback demand is sourced from unresolved leftovers after file-primary pass
+            // (signals absent and/or still unscanned), not from the original discovery set.
+            val candidates = fallbackCandidates(map, desiredKeys.size + needed)
             if (candidates.isEmpty()) break
             var addedAny = false
             for (k in candidates) {
@@ -265,7 +330,7 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
             val tail = refillAdded.last()
             MementoLog.info(
                     MementoConcept.SCANNER,
-                    "Scanner demand refill from ordered missing set. active={} added={} activeNow={} head={} r=({}, {}) c=({}, {}) tail={} r=({}, {}) c=({}, {}).",
+                    "Scanner fallback demand refill from unresolved leftovers. active={} added={} activeNow={} head={} r=({}, {}) c=({}, {}) tail={} r=({}, {}) c=({}, {}).",
                     activeBeforeRefill,
                     refillAdded.size,
                     desiredKeys.size,
@@ -311,8 +376,62 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         lastHeartbeatScanned = scanned
     }
 
+    private fun transitionToFallbackWhenReady(map: WorldMementoMap): Boolean {
+        val providerComplete = fileMetadataProvider?.isComplete() ?: true
+        val ingestionDrained = (metadataApplier?.pendingCount() ?: 0) <= 0
+        if (!providerComplete || !ingestionDrained) {
+            return false
+        }
+
+        demandPhase = DemandPhase.ENGINE_FALLBACK
+        val tickNow = server?.overworld?.time ?: 0L
+        lastRefillTick = tickNow - MementoConstants.MEMENTO_SCAN_DESIRE_REFILL_EVERY_TICKS
+        MementoLog.info(
+                MementoConcept.SCANNER,
+                "scan transitioned to engine fallback demand unresolvedLeftovers={}",
+                unresolvedFallbackCount(map),
+        )
+        return true
+    }
+
+    private fun fallbackCandidates(map: WorldMementoMap, limit: Int): List<ChunkKey> {
+        if (limit <= 0) return emptyList()
+
+        val unresolvedScanned =
+                map.snapshot()
+                        .asSequence()
+                        .filter { it.signals == null }
+                        .map { it.key }
+
+        val unscanned = map.missingSignals(limit)
+
+        return (unresolvedScanned + unscanned.asSequence())
+                .distinct()
+                .sortedWith(
+                        compareBy(
+                                { it.world.value.toString() },
+                                { it.regionX },
+                                { it.regionZ },
+                                { it.chunkX },
+                                { it.chunkZ },
+                        )
+                )
+                .take(limit)
+                .toList()
+    }
+
+    private fun unresolvedFallbackCount(map: WorldMementoMap): Int {
+        val unresolvedScanned = map.snapshot().count { it.signals == null }
+        val unscanned = map.missingCount()
+        return unresolvedScanned + unscanned
+    }
+
+    private fun needsFallbackDemand(map: WorldMementoMap, key: ChunkKey): Boolean {
+        return map.isMissing(key) || !map.hasSignals(key)
+    }
+
     override fun onChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
-        val m = map ?: return
+        val m = ensureSubstrate()
 
         val chunkX = chunk.pos.x
         val chunkZ = chunk.pos.z
@@ -342,7 +461,7 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
     }
 
     override fun onChunkLoadExpired(world: ServerWorld, pos: ChunkPos) {
-        val m = map ?: return
+        val m = ensureSubstrate()
 
         val chunkX = pos.x
         val chunkZ = pos.z
@@ -365,6 +484,49 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         }
     }
 
+    /**
+     * Ensures the scanner substrate exists outside active scan mode.
+     *
+     * This keeps unsolicited engine chunk-load callbacks observable before `/memento scan` starts,
+     * while preserving the demand boundary (`desiredChunks()` remains empty unless active scan is on).
+     */
+    private fun ensureSubstrate(): WorldMementoMap {
+        val existing = map
+        if (existing != null) {
+            if (consumer == null) consumer = ChunkMetadataConsumer(existing)
+            if (metadataApplier == null) {
+                metadataApplier =
+                        BoundedScanMetadataTickApplier(
+                                map = existing,
+                                maxAppliesPerTick =
+                                        MementoConstants.MEMENTO_SCAN_METADATA_APPLIER_MAX_PER_TICK,
+                        )
+            }
+            return existing
+        }
+
+        val created = WorldMementoMap()
+        map = created
+        consumer = ChunkMetadataConsumer(created)
+        metadataApplier =
+                BoundedScanMetadataTickApplier(
+                        map = created,
+                        maxAppliesPerTick = MementoConstants.MEMENTO_SCAN_METADATA_APPLIER_MAX_PER_TICK,
+                )
+        return created
+    }
+
+    private object NoopScanMetadataIngestionPort : ScanMetadataIngestionPort {
+        override fun ingest(fact: ScanMetadataFact) {
+            // Defensive no-op fallback; should not be reachable after ensureSubstrate().
+        }
+    }
+
+    private enum class DemandPhase {
+        FILE_PRIMARY,
+        ENGINE_FALLBACK,
+    }
+
     private fun emitCompleted(reason: String, map: WorldMementoMap) {
         if (!activeScan.compareAndSet(true, false)) return
         if (completionEmittedForCurrentScan) return
@@ -382,13 +544,22 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
             return
         }
 
+        val snapshot = map.snapshot()
+        val provenanceCounts = aggregateProvenanceCounts(snapshot)
+        val unresolvedReasonCounts = aggregateUnresolvedReasonCounts(snapshot)
+        val unresolvedWithoutReasonCount =
+                snapshot.count { it.signals == null && it.unresolvedReason == null }
+
         val event =
                 WorldScanCompleted(
                         reason = reason,
                         plannedChunks = plannedChunks,
                         scannedChunks = map.scannedChunks(),
                         missingChunks = map.missingCount(),
-                        snapshot = map.snapshot(),
+                        provenanceCounts = provenanceCounts,
+                        unresolvedReasonCounts = unresolvedReasonCounts,
+                        unresolvedWithoutReasonCount = unresolvedWithoutReasonCount,
+                        snapshot = snapshot,
                 )
 
         listeners.forEach { l ->
@@ -402,23 +573,65 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         if (map.isComplete()) {
             MementoLog.info(
                     MementoConcept.SCANNER,
-                    "World scan completed. Scanned: {}. Missing: {}.",
+                    "World scan completed. Scanned: {}. Missing: {}. Provenance={} UnresolvedReasons={} unresolvedWithoutReason={}",
                     event.scannedChunks,
                     event.missingChunks,
+                    formatProvenanceCounts(event.provenanceCounts),
+                    formatUnresolvedReasonCounts(event.unresolvedReasonCounts),
+                    event.unresolvedWithoutReasonCount,
             )
         } else if (reason == "exhausted_but_missing") {
             MementoLog.info(
                     MementoConcept.SCANNER,
-                    "World scan paused-with-missing. Missing chunks remain: {}.",
+                    "World scan paused-with-missing. Missing chunks remain: {}. Provenance={} UnresolvedReasons={} unresolvedWithoutReason={}",
                     event.missingChunks,
+                    formatProvenanceCounts(event.provenanceCounts),
+                    formatUnresolvedReasonCounts(event.unresolvedReasonCounts),
+                    event.unresolvedWithoutReasonCount,
             )
         } else {
             MementoLog.info(
                     MementoConcept.SCANNER,
-                    "World scan completed. Scanned: {}. Missing: {}.",
+                    "World scan completed. Scanned: {}. Missing: {}. Provenance={} UnresolvedReasons={} unresolvedWithoutReason={}",
                     event.scannedChunks,
                     event.missingChunks,
+                    formatProvenanceCounts(event.provenanceCounts),
+                    formatUnresolvedReasonCounts(event.unresolvedReasonCounts),
+                    event.unresolvedWithoutReasonCount,
             )
         }
+    }
+
+    private fun aggregateProvenanceCounts(snapshot: List<ChunkScanSnapshotEntry>): Map<ChunkScanProvenance, Int> {
+        val counts = linkedMapOf<ChunkScanProvenance, Int>()
+        ChunkScanProvenance.values().forEach { provenance ->
+            counts[provenance] = snapshot.count { it.provenance == provenance }
+        }
+        return counts
+    }
+
+    private fun aggregateUnresolvedReasonCounts(
+            snapshot: List<ChunkScanSnapshotEntry>
+    ): Map<ChunkScanUnresolvedReason, Int> {
+        val unresolved = snapshot.asSequence().filter { it.signals == null }
+        val counts = linkedMapOf<ChunkScanUnresolvedReason, Int>()
+        ChunkScanUnresolvedReason.values().forEach { reason ->
+            counts[reason] = unresolved.count { it.unresolvedReason == reason }
+        }
+        return counts
+    }
+
+    private fun formatProvenanceCounts(counts: Map<ChunkScanProvenance, Int>): String {
+        return ChunkScanProvenance.values()
+                .joinToString(prefix = "[", postfix = "]", separator = ",") { provenance ->
+                    "${provenance.name}=${counts[provenance] ?: 0}"
+                }
+    }
+
+    private fun formatUnresolvedReasonCounts(counts: Map<ChunkScanUnresolvedReason, Int>): String {
+        return ChunkScanUnresolvedReason.values()
+                .joinToString(prefix = "[", postfix = "]", separator = ",") { reason ->
+                    "${reason.name}=${counts[reason] ?: 0}"
+                }
     }
 }
