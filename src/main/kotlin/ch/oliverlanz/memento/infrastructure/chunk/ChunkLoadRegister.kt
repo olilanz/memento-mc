@@ -178,6 +178,9 @@ internal class ChunkLoadRegister {
             lock.withLock {
                 val expired = ArrayList<ChunkRef>()
                 val ticketsToRemove = ArrayList<ChunkRef>()
+                val sourceCounts = ExpirySourceCounts()
+                var ticketedAtExpiry = 0
+                var unticketedAtExpiry = 0
 
                 val it = awaitingFullLoad.iterator()
                 while (it.hasNext()) {
@@ -190,8 +193,15 @@ internal class ChunkLoadRegister {
                     it.remove()
                     propagationQueue.remove(chunk)
 
+                    if (entry.requestedBy.contains(RequestSource.SCANNER)) sourceCounts.scanner++
+                    if (entry.requestedBy.contains(RequestSource.RENEWAL)) sourceCounts.renewal++
+                    if (entry.requestedBy.contains(RequestSource.UNSOLICITED)) sourceCounts.unsolicited++
+
                     if (entry.ticketName != null) {
                         ticketsToRemove.add(chunk)
+                        ticketedAtExpiry++
+                    } else {
+                        unticketedAtExpiry++
                     }
 
                     // Drop the entry entirely. Demand (if still present) will re-create it on a
@@ -199,7 +209,19 @@ internal class ChunkLoadRegister {
                     entries.remove(chunk)
                 }
 
-                ExpireResult(expiredEntries = expired, ticketsToRemove = ticketsToRemove.distinct())
+                ExpireResult(
+                        expiredEntries = expired,
+                        ticketsToRemove = ticketsToRemove.distinct(),
+                        telemetry =
+                                ExpiryTelemetry(
+                                        source = sourceCounts.toView(),
+                                        ticketStatus =
+                                                ExpiryTicketStatus(
+                                                        ticketed = ticketedAtExpiry,
+                                                        unticketed = unticketedAtExpiry,
+                                                ),
+                                ),
+                )
             }
 
     /**
@@ -215,6 +237,9 @@ internal class ChunkLoadRegister {
             lock.withLock {
                 val expired = ArrayList<ChunkRef>()
                 val ticketsToRemove = ArrayList<ChunkRef>()
+                val sourceCounts = ExpirySourceCounts()
+                var ticketedAtExpiry = 0
+                var unticketedAtExpiry = 0
 
                 val it = entries.iterator()
                 while (it.hasNext()) {
@@ -224,13 +249,32 @@ internal class ChunkLoadRegister {
                     if ((nowTick - issuedAt) <= expireAfterTicks) continue
 
                     expired.add(chunk)
+                    if (entry.requestedBy.contains(RequestSource.SCANNER)) sourceCounts.scanner++
+                    if (entry.requestedBy.contains(RequestSource.RENEWAL)) sourceCounts.renewal++
+                    if (entry.requestedBy.contains(RequestSource.UNSOLICITED)) sourceCounts.unsolicited++
+
                     if (entry.ticketName != null) {
                         ticketsToRemove.add(chunk)
+                        ticketedAtExpiry++
+                    } else {
+                        unticketedAtExpiry++
                     }
                     it.remove()
                 }
 
-                ExpireResult(expiredEntries = expired, ticketsToRemove = ticketsToRemove.distinct())
+                ExpireResult(
+                        expiredEntries = expired,
+                        ticketsToRemove = ticketsToRemove.distinct(),
+                        telemetry =
+                                ExpiryTelemetry(
+                                        source = sourceCounts.toView(),
+                                        ticketStatus =
+                                                ExpiryTicketStatus(
+                                                        ticketed = ticketedAtExpiry,
+                                                        unticketed = unticketedAtExpiry,
+                                                ),
+                                ),
+                )
             }
     /* =====================================================================
      * Engine observations
@@ -524,7 +568,41 @@ internal class ChunkLoadRegister {
     internal data class ExpireResult(
             val expiredEntries: List<ChunkRef>,
             val ticketsToRemove: List<ChunkRef>,
+            val telemetry: ExpiryTelemetry =
+                    ExpiryTelemetry(
+                            source = ExpirySourceCountsView(0, 0, 0),
+                            ticketStatus = ExpiryTicketStatus(ticketed = 0, unticketed = 0),
+                    ),
     )
+
+    internal data class ExpiryTelemetry(
+            val source: ExpirySourceCountsView,
+            val ticketStatus: ExpiryTicketStatus,
+    )
+
+    internal data class ExpirySourceCountsView(
+            val scanner: Int,
+            val renewal: Int,
+            val unsolicited: Int,
+    )
+
+    internal data class ExpiryTicketStatus(
+            val ticketed: Int,
+            val unticketed: Int,
+    )
+
+    private data class ExpirySourceCounts(
+            var scanner: Int = 0,
+            var renewal: Int = 0,
+            var unsolicited: Int = 0,
+    ) {
+        fun toView(): ExpirySourceCountsView =
+                ExpirySourceCountsView(
+                        scanner = scanner,
+                        renewal = renewal,
+                        unsolicited = unsolicited,
+                )
+    }
 
     internal /**
      * StateInventory represents a continuously maintained accounting of
