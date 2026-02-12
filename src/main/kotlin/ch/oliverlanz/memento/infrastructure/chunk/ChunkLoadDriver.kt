@@ -529,7 +529,7 @@ class ChunkLoadDriver {
 
         MementoLog.debug(
                 MementoConcept.DRIVER,
-                "tick={} entries={} demand(desired={} queue={}) pressure(tickets={} backOff={} lastUnsolicitedTick={} quietForTicks={}) pipeline(requested={} verified={} ticketed={} observed={} awaitingFullLoad={} observedUntracked={} ready={} readyQueue={} propagating={} completedPendingPrune={} expiredPendingPrune={})",
+                "tick={} entries={} demand(desired={} queue={}) pressure(tickets={} backOff={} lastUnsolicitedTick={} quietForTicks={}) pipeline(requested={} loadAbsenceVerified={} ticketed={} observed={} awaitingFullLoad={} observedUntracked={} fullyLoaded={} propagationQueue={} propagating={} completedPendingPrune={} expiredPendingPrune={})",
                 tickCounter,
                 s.total,
                 desiredCount,
