@@ -61,6 +61,12 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
     /** Refill cadence guard (absolute world tick). */
     private var lastRefillTick: Long = 0L
 
+    /** Active-scan heartbeat cadence guard (absolute world tick). */
+    private var lastHeartbeatTick: Long = 0L
+
+    /** Scanner progress sample used to derive heartbeat delta. */
+    private var lastHeartbeatScanned: Int = 0
+
     private val listeners = CopyOnWriteArrayList<WorldScanListener>()
 
     /** True after the current active scan has emitted ScanCompleted. */
@@ -78,6 +84,8 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         plannedChunks = 0
         desiredKeys.clear()
         lastRefillTick = 0L
+        lastHeartbeatTick = 0L
+        lastHeartbeatScanned = 0
         completionEmittedForCurrentScan = false
         listeners.clear()
     }
@@ -147,6 +155,8 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         val tickNow = srv.overworld.time
         lastRefillTick =
                 tickNow - MementoConstants.MEMENTO_SCAN_DESIRE_REFILL_EVERY_TICKS
+        lastHeartbeatTick = tickNow
+        lastHeartbeatScanned = scanMap.scannedChunks()
 
         // If already complete, emit completion immediately without entering active scan mode.
         if (scanMap.isComplete()) {
@@ -182,6 +192,7 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
 
         val tickNow = server?.overworld?.time ?: 0L
         reconcileAndRefillDemand(tickNow, m)
+        maybeEmitActiveHeartbeat(tickNow, m)
 
         if (desiredKeys.isEmpty()) {
             // Defensive: under the locked invariants, exhaustion may only happen when the map is complete.
@@ -267,6 +278,30 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
                     tail.chunkZ,
             )
         }
+    }
+
+    private fun maybeEmitActiveHeartbeat(tickNow: Long, map: WorldMementoMap) {
+        if (tickNow != 0L &&
+                        (tickNow - lastHeartbeatTick) <
+                                MementoConstants.MEMENTO_SCAN_HEARTBEAT_EVERY_TICKS
+        ) {
+            return
+        }
+
+        val scanned = map.scannedChunks()
+        val deltaScanned = scanned - lastHeartbeatScanned
+        MementoLog.info(
+                MementoConcept.SCANNER,
+                "scan heartbeat planned={} scanned={} missing={} deltaScanned={} desiredActive={}",
+                plannedChunks,
+                scanned,
+                map.missingCount(),
+                deltaScanned,
+                desiredKeys.size,
+        )
+
+        lastHeartbeatTick = tickNow
+        lastHeartbeatScanned = scanned
     }
 
     override fun onChunkLoaded(world: ServerWorld, chunk: WorldChunk) {

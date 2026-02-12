@@ -271,9 +271,14 @@ class ChunkLoadDriver {
         if (result.expiredEntries.isNotEmpty()) {
             MementoLog.debug(
                     MementoConcept.DRIVER,
-                    "expiry batch ticket-issued count={} ticketsRemoved={}",
+                    "expiry batch ticket-issued count={} ticketsRemoved={} source(scanner={} renewal={} unsolicited={}) ticketStatus(ticketed={} unticketed={})",
                     result.expiredEntries.size,
                     result.ticketsToRemove.size,
+                    result.telemetry.source.scanner,
+                    result.telemetry.source.renewal,
+                    result.telemetry.source.unsolicited,
+                    result.telemetry.ticketStatus.ticketed,
+                    result.telemetry.ticketStatus.unticketed,
             )
         }
 
@@ -300,9 +305,14 @@ class ChunkLoadDriver {
         if (result.expiredEntries.isNotEmpty()) {
             MementoLog.debug(
                     MementoConcept.DRIVER,
-                    "expiry batch awaiting-full-load count={} ticketsRemoved={}",
+                    "expiry batch awaiting-full-load count={} ticketsRemoved={} source(scanner={} renewal={} unsolicited={}) ticketStatus(ticketed={} unticketed={})",
                     result.expiredEntries.size,
                     result.ticketsToRemove.size,
+                    result.telemetry.source.scanner,
+                    result.telemetry.source.renewal,
+                    result.telemetry.source.unsolicited,
+                    result.telemetry.ticketStatus.ticketed,
+                    result.telemetry.ticketStatus.unticketed,
             )
         }
         for (ref in result.ticketsToRemove) {

@@ -193,9 +193,11 @@ internal class ChunkLoadRegister {
                     it.remove()
                     propagationQueue.remove(chunk)
 
-                    if (entry.requestedBy.contains(RequestSource.SCANNER)) sourceCounts.scanner++
-                    if (entry.requestedBy.contains(RequestSource.RENEWAL)) sourceCounts.renewal++
-                    if (entry.requestedBy.contains(RequestSource.UNSOLICITED)) sourceCounts.unsolicited++
+                    when (entry.telemetrySourceBucket()) {
+                        RequestSource.SCANNER -> sourceCounts.scanner++
+                        RequestSource.RENEWAL -> sourceCounts.renewal++
+                        RequestSource.UNSOLICITED -> sourceCounts.unsolicited++
+                    }
 
                     if (entry.ticketName != null) {
                         ticketsToRemove.add(chunk)
@@ -249,9 +251,11 @@ internal class ChunkLoadRegister {
                     if ((nowTick - issuedAt) <= expireAfterTicks) continue
 
                     expired.add(chunk)
-                    if (entry.requestedBy.contains(RequestSource.SCANNER)) sourceCounts.scanner++
-                    if (entry.requestedBy.contains(RequestSource.RENEWAL)) sourceCounts.renewal++
-                    if (entry.requestedBy.contains(RequestSource.UNSOLICITED)) sourceCounts.unsolicited++
+                    when (entry.telemetrySourceBucket()) {
+                        RequestSource.SCANNER -> sourceCounts.scanner++
+                        RequestSource.RENEWAL -> sourceCounts.renewal++
+                        RequestSource.UNSOLICITED -> sourceCounts.unsolicited++
+                    }
 
                     if (entry.ticketName != null) {
                         ticketsToRemove.add(chunk)
@@ -785,6 +789,19 @@ data class StateInventory(
         fun isSolicited(): Boolean =
                 requestedBy.contains(RequestSource.RENEWAL) ||
                         requestedBy.contains(RequestSource.SCANNER)
+
+        /**
+         * Telemetry source bucket for bounded expiry composition summaries.
+         *
+         * Precedence is explicit and deterministic so source counts form a partition:
+         * RENEWAL > SCANNER > UNSOLICITED.
+         */
+        fun telemetrySourceBucket(): RequestSource =
+                when {
+                    requestedBy.contains(RequestSource.RENEWAL) -> RequestSource.RENEWAL
+                    requestedBy.contains(RequestSource.SCANNER) -> RequestSource.SCANNER
+                    else -> RequestSource.UNSOLICITED
+                }
 
         fun view(): EntryView =
                 EntryView(
