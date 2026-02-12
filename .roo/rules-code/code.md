@@ -2,9 +2,14 @@
 
 ## Institutional memory
 
-- Embed invariant intent in comments.
-- Explain why responsibilities exist.
-- Preserve separation of concerns.
+- Follow institutional-memory authority and hierarchy from @.roo/rules/rules.md.
+- Treat local code comments as binding local institutional memory when they
+  capture design intent, invariants, lifecycle ownership, authority boundaries,
+  and thread/event constraints.
+- Preserve and update intent-bearing comments during implementation.
+- Keep comment intent and behavior synchronized; do not leave stale comments.
+- If implementation requires invalidating existing comment-level memory, make
+  the boundary change explicit and escalate to Architect mode when needed.
 
 ## Safety discipline
 
@@ -17,3 +22,12 @@
 - Favor clarity over cleverness.
 - Keep components cohesive.
 - Avoid silent coupling.
+
+## Build lock protocol
+
+- Implement only what is covered by the locked architecture and delivery plan.
+- Use `./gradlew build` as the default clean build signal unless explicitly
+  overridden.
+- Compile/build until that signal is clean.
+- Report implementation notes and any deviations explicitly.
+- Recommend switching to Orchestrator for validation once build lock is reached.
