@@ -40,6 +40,14 @@ work collaboratively:
 - Clarify trade-offs for each option.
 - Keep the conversation open for co-design of future architecture.
 
+Detect and surface possible doctrine shifts early (new architecture decisions,
+invariant movement, semantic changes, integration model changes, or operational
+doctrine implications).
+
+When such shifts appear, explicitly prompt:
+
+"Does this require ADR or invariant formalization?"
+
 ## Iteration discipline
 
 - Keep iterations short.
