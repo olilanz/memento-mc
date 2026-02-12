@@ -434,17 +434,14 @@ class ChunkLoadDriver {
         if (ambientPressureActive != wasAmbientPressureActive) {
             wasAmbientPressureActive = ambientPressureActive
             if (ambientPressureActive) {
-                MementoLog.info(
+                MementoLog.debug(
                         MementoConcept.DRIVER,
-                        "back-off engaged: unsolicited engine pressure observed; ticketing paused lastUnsolicitedTick={} windowTicks={}",
-                        lastUnsolicitedLoadObservedTick,
-                        MementoConstants.CHUNK_LOAD_UNSOLICITED_PRESSURE_WINDOW_TICKS,
+                        "Driver back-off engaged (ambient chunk activity detected).",
                 )
             } else {
-                MementoLog.info(
+                MementoLog.debug(
                         MementoConcept.DRIVER,
-                        "back-off released: unsolicited pressure quiet; ticketing resumed quietForTicks={}",
-                        (tickCounter - lastUnsolicitedLoadObservedTick),
+                        "Driver back-off released.",
                 )
             }
         }

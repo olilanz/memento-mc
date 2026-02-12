@@ -164,8 +164,7 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         activeScan.set(true)
         MementoLog.info(
                 MementoConcept.SCANNER,
-                "scan started plannedChunks={} scannedChunks={} missing={}",
-                worlds.size,
+                "World scan started. Planned chunks: {}. Scanned: {}. Missing: {}.",
                 plannedChunks,
                 scanMap.scannedChunks(),
                 scanMap.missingCount(),
@@ -332,13 +331,26 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
             }
         }
 
-        MementoLog.info(
-                MementoConcept.SCANNER,
-                "scan completed reason={} plannedChunks={} scannedChunks={} missing={}",
-                reason,
-                event.plannedChunks,
-                event.scannedChunks,
-                event.missingChunks,
-        )
+        if (map.isComplete()) {
+            MementoLog.info(
+                    MementoConcept.SCANNER,
+                    "World scan completed. Scanned: {}. Missing: {}.",
+                    event.scannedChunks,
+                    event.missingChunks,
+            )
+        } else if (reason == "exhausted_but_missing") {
+            MementoLog.info(
+                    MementoConcept.SCANNER,
+                    "World scan paused. Missing chunks remain: {}.",
+                    event.missingChunks,
+            )
+        } else {
+            MementoLog.info(
+                    MementoConcept.SCANNER,
+                    "World scan completed. Scanned: {}. Missing: {}.",
+                    event.scannedChunks,
+                    event.missingChunks,
+            )
+        }
     }
 }
