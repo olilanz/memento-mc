@@ -164,7 +164,7 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         activeScan.set(true)
         MementoLog.info(
                 MementoConcept.SCANNER,
-                "scan started worlds={} plannedChunks={} scannedChunks={} missing={}",
+                "scan started plannedChunks={} scannedChunks={} missing={}",
                 worlds.size,
                 plannedChunks,
                 scanMap.scannedChunks(),
