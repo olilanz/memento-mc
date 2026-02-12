@@ -7,7 +7,35 @@ data class ChunkScanSnapshotEntry(
         val key: ChunkKey,
         val signals: ChunkSignals?,
         val scanTick: Long,
+        val provenance: ChunkScanProvenance = ChunkScanProvenance.ENGINE_UNSOLICITED,
+        val unresolvedReason: ChunkScanUnresolvedReason? = null,
 )
+
+/**
+ * Provenance for how the scanner resolved a chunk's scan outcome.
+ *
+ * Contract-first schema for Chunk A:
+ * - [FILE_PRIMARY]: metadata came from primary region-file reads.
+ * - [ENGINE_FALLBACK]: metadata required an engine/runtime fallback path.
+ * - [ENGINE_UNSOLICITED]: metadata arrived from unsolicited engine chunk availability.
+ */
+enum class ChunkScanProvenance {
+    FILE_PRIMARY,
+    ENGINE_FALLBACK,
+    ENGINE_UNSOLICITED,
+}
+
+/**
+ * Reason why a scanned chunk remains unresolved (signals absent) after a best-effort attempt.
+ *
+ * Contract-first schema for Chunk A only. Behavior wiring is intentionally deferred to later chunks.
+ */
+enum class ChunkScanUnresolvedReason {
+    FILE_LOCKED,
+    FILE_IO_ERROR,
+    FILE_CORRUPT_OR_TRUNCATED,
+    FILE_NBT_UNSUPPORTED,
+}
 
 /**
  * Domain-owned world map for /memento scan.
@@ -34,6 +62,8 @@ class WorldMementoMap {
     private data class ChunkRecord(
             @Volatile var signals: ChunkSignals? = null,
             @Volatile var scanTick: Long? = null,
+            @Volatile var provenance: ChunkScanProvenance = ChunkScanProvenance.ENGINE_UNSOLICITED,
+            @Volatile var unresolvedReason: ChunkScanUnresolvedReason? = null,
     )
 
     private val records = ConcurrentHashMap<ChunkKey, ChunkRecord>()
@@ -66,15 +96,42 @@ class WorldMementoMap {
         return (previous == null)
     }
 
-    /** Marks a chunk as scanned at the given absolute world tick. */
-    fun markScanned(key: ChunkKey, scanTick: Long): Boolean {
+    /**
+     * Marks a chunk as scanned at the given absolute world tick and records compact scan metadata.
+     *
+     * Defaults preserve existing scanner behavior when callers do not yet provide provenance/reason.
+     */
+    fun markScanned(
+            key: ChunkKey,
+            scanTick: Long,
+            provenance: ChunkScanProvenance = ChunkScanProvenance.ENGINE_UNSOLICITED,
+            unresolvedReason: ChunkScanUnresolvedReason? = null,
+    ): Boolean {
         val record = records.computeIfAbsent(key) { ChunkRecord() }
         val first = (record.scanTick == null)
         record.scanTick = scanTick
+        record.provenance = provenance
+        record.unresolvedReason = unresolvedReason
         if (first) {
             scannedCount.incrementAndGet()
         }
         return first
+    }
+
+    /**
+     * Updates scan metadata without changing scan progress counters.
+     *
+     * This is a minimal contract helper for later chunks that may resolve provenance/reason
+     * asynchronously from scan-tick updates.
+     */
+    fun updateScanMetadata(
+            key: ChunkKey,
+            provenance: ChunkScanProvenance,
+            unresolvedReason: ChunkScanUnresolvedReason? = null,
+    ) {
+        val record = records.computeIfAbsent(key) { ChunkRecord() }
+        record.provenance = provenance
+        record.unresolvedReason = unresolvedReason
     }
 
     /** Total number of existing chunks in the map. */
@@ -122,7 +179,15 @@ class WorldMementoMap {
         return records.entries
                 .asSequence()
                 .mapNotNull { (k, v) ->
-                    v.scanTick?.let { tick -> ChunkScanSnapshotEntry(k, v.signals, tick) }
+                    v.scanTick?.let { tick ->
+                        ChunkScanSnapshotEntry(
+                                key = k,
+                                signals = v.signals,
+                                scanTick = tick,
+                                provenance = v.provenance,
+                                unresolvedReason = v.unresolvedReason,
+                        )
+                    }
                 }
                 .sortedWith(
                         compareBy(
