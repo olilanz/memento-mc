@@ -187,4 +187,11 @@ object MementoConstants {
 
     /** Minimum ticks between scanner refills to avoid recomputing missing lists every tick. */
     const val MEMENTO_SCAN_DESIRE_REFILL_EVERY_TICKS: Long = 20L
+
+    /**
+     * Active-scan heartbeat cadence (ticks).
+     *
+     * INFO-level operator telemetry only: bounded progress snapshots for convergence reasoning.
+     */
+    const val MEMENTO_SCAN_HEARTBEAT_EVERY_TICKS: Long = 100L
 }
