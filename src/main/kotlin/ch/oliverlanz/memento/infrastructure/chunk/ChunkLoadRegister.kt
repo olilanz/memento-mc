@@ -27,7 +27,7 @@ internal class ChunkLoadRegister {
     /** Chunks where ENGINE_LOAD_OBSERVED happened, and we are waiting for full chunk load. */
     private val awaitingFullLoad: LinkedHashSet<ChunkRef> = LinkedHashSet()
 
-    /** Chunks that became CHUNK_AVAILABLE and are ready for propagation to subscribers. */
+    /** Chunks that became FULLY_LOADED and are ready for propagation to subscribers. */
     private val propagationQueue: ArrayDeque<ChunkRef> = ArrayDeque()
 
     /** Demand snapshot epoch; advanced once per driver tick when demand is recomputed. */
@@ -454,13 +454,13 @@ internal class ChunkLoadRegister {
     fun isDesired(chunk: ChunkRef): Boolean =
             lock.withLock { entries[chunk]?.desiredBy?.isNotEmpty() == true }
 
-    fun stateSnapshot(): StateSnapshot =
+    fun stateSnapshot(): StateInventory =
             lock.withLock {
                 var requested = 0
                 var verified = 0
                 var ticketed = 0
                 var observed = 0
-                var observedNotAwaiting = 0
+                var observedUntracked = 0
                 var available = 0
                 var propagating = 0
                 var completedPendingPrune = 0
@@ -472,7 +472,7 @@ internal class ChunkLoadRegister {
                         2 -> ticketed++
                         3 -> {
                             observed++
-                            if (!awaitingFullLoad.contains(chunk)) observedNotAwaiting++
+                            if (!awaitingFullLoad.contains(chunk)) observedUntracked++
                         }
                         4 -> available++
                         5 -> propagating++
@@ -480,17 +480,17 @@ internal class ChunkLoadRegister {
                     }
                 }
 
-                StateSnapshot(
+                StateInventory(
                         total = entries.size,
                         requested = requested,
-                        verifiedNotLoaded = verified,
+                        loadAbsenceVerified = verified,
                         ticketIssued = ticketed,
                         engineLoadObserved = observed,
-                        chunkAvailable = available,
+                        fullyLoaded = available,
                         propagating = propagating,
                         completedPendingPrune = completedPendingPrune,
                         awaitingFullLoad = awaitingFullLoad.size,
-                        observedNotAwaiting = observedNotAwaiting,
+                        observedUntracked = observedUntracked,
                         propagationQueue = propagationQueue.size,
                 )
             }
@@ -526,17 +526,24 @@ internal class ChunkLoadRegister {
             val ticketsToRemove: List<ChunkRef>,
     )
 
-    internal data class StateSnapshot(
+    internal /**
+     * StateInventory represents a continuously maintained accounting of
+     * chunk lifecycle states within the register.
+     *
+     * It is NOT a point-in-time snapshot but a structural inventory derived
+     * from authoritative internal state.
+     */
+data class StateInventory(
             val total: Int,
             val requested: Int,
-            val verifiedNotLoaded: Int,
+            val loadAbsenceVerified: Int,
             val ticketIssued: Int,
             val engineLoadObserved: Int,
-            val chunkAvailable: Int,
+            val fullyLoaded: Int,
             val propagating: Int,
             val completedPendingPrune: Int,
             val awaitingFullLoad: Int,
-            val observedNotAwaiting: Int,
+            val observedUntracked: Int,
             val propagationQueue: Int,
     )
 
@@ -624,12 +631,12 @@ internal class ChunkLoadRegister {
 
         fun onChunkAvailable(nowTick: Long) {
             ensure(State.ENGINE_LOAD_OBSERVED)
-            state = State.CHUNK_AVAILABLE
+            state = State.FULLY_LOADED
             lastProgressTick = nowTick
         }
 
         fun beginPropagation(nowTick: Long) {
-            ensure(State.CHUNK_AVAILABLE)
+            ensure(State.FULLY_LOADED)
             state = State.PROPAGATING
             lastProgressTick = nowTick
         }
@@ -669,7 +676,12 @@ internal class ChunkLoadRegister {
                     EngineObservationResult.OUT_OF_ORDER_ACCEPTED
                 }
                 State.ENGINE_LOAD_OBSERVED,
-                State.CHUNK_AVAILABLE,
+                State.FULLY_LOADED,
+    /**
+     * The chunk is physically present and fully accessible in memory.
+     * This reflects Minecraft engine reality only.
+     * It does NOT imply propagation has started.
+     */
                 State.PROPAGATING,
                 State.COMPLETED_PENDING_PRUNE -> {
                     EngineObservationResult.DUPLICATE_IGNORED
@@ -681,7 +693,7 @@ internal class ChunkLoadRegister {
                 ticketName != null &&
                         (state == State.TICKET_ISSUED ||
                                 state == State.ENGINE_LOAD_OBSERVED ||
-                                state == State.CHUNK_AVAILABLE ||
+                                state == State.FULLY_LOADED ||
                                 state == State.PROPAGATING ||
                                 state == State.COMPLETED_PENDING_PRUNE)
 
@@ -715,7 +727,7 @@ internal class ChunkLoadRegister {
         fun isNotLoadedVerified(): Boolean = state == State.NOT_LOADED_VERIFIED
         fun isTicketIssued(): Boolean = state == State.TICKET_ISSUED
         fun isEngineLoadObserved(): Boolean = state == State.ENGINE_LOAD_OBSERVED
-        fun isChunkAvailable(): Boolean = state == State.CHUNK_AVAILABLE
+        fun isChunkAvailable(): Boolean = state == State.FULLY_LOADED
         fun isPropagating(): Boolean = state == State.PROPAGATING
         fun isCompletedPendingPrune(): Boolean = state == State.COMPLETED_PENDING_PRUNE
 
@@ -725,7 +737,7 @@ internal class ChunkLoadRegister {
                     State.NOT_LOADED_VERIFIED -> 1
                     State.TICKET_ISSUED -> 2
                     State.ENGINE_LOAD_OBSERVED -> 3
-                    State.CHUNK_AVAILABLE -> 4
+                    State.FULLY_LOADED -> 4
                     State.PROPAGATING -> 5
                     State.COMPLETED_PENDING_PRUNE -> 6
                 }
@@ -744,7 +756,12 @@ internal class ChunkLoadRegister {
         NOT_LOADED_VERIFIED,
         TICKET_ISSUED,
         ENGINE_LOAD_OBSERVED,
-        CHUNK_AVAILABLE,
+        FULLY_LOADED,
+    /**
+     * The chunk is physically present and fully accessible in memory.
+     * This reflects Minecraft engine reality only.
+     * It does NOT imply propagation has started.
+     */
         PROPAGATING,
         COMPLETED_PENDING_PRUNE,
     }
