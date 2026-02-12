@@ -10,10 +10,7 @@ Stop and ask.
 
 ## Grounding
 
-Align with:
-
-- @ARCHITECTURE.md
-- @RENEWAL_MODEL.md
+Follow shared institutional-memory grounding and hierarchy from @.roo/rules/rules.md.
 
 ## Responsibility discipline
 
@@ -48,3 +45,32 @@ Explicitly consider:
 
 Ensure invariants are visible in structure.
 If structure weakens invariants, stop and raise it.
+
+## Architecture lock protocol
+
+Before declaring architecture lock, produce:
+
+- Component boundaries and ownership
+- Lifecycle/state model
+- Authority/thread/event boundaries
+- Invariant fit against @ARCHITECTURE.md
+- Re-open conditions
+
+If any proposal conflicts with invariants in @ARCHITECTURE.md:
+
+- Call out each conflict explicitly.
+- Do not declare architecture lock by default.
+- Require one of the following before proceeding:
+  - The architecture is adjusted to remove the conflict, or
+  - The user gives explicit override approval to proceed despite the conflict.
+
+If user override is used, record the accepted deviation explicitly in the lock
+output.
+
+Do not treat architecture as locked without explicit user approval.
+
+At the end of each cycle, explicitly recommend one next step:
+
+- Stay in Architect to resolve unresolved structure questions, or
+- Return to Sensemaker if semantics are still unclear, or
+- Switch to Orchestrator when architecture is lock-ready.
