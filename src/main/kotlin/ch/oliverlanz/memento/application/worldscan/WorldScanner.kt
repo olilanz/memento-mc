@@ -9,6 +9,7 @@ import ch.oliverlanz.memento.infrastructure.chunk.ChunkRef
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import java.lang.Math
+import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import net.minecraft.server.MinecraftServer
@@ -290,12 +291,16 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
 
         val scanned = map.scannedChunks()
         val deltaScanned = scanned - lastHeartbeatScanned
+        val progressPct =
+                if (plannedChunks <= 0) 0.0
+                else (scanned.toDouble() * 100.0) / plannedChunks.toDouble()
+        val progressPctText = String.format(Locale.ROOT, "%.1f", progressPct)
         MementoLog.info(
                 MementoConcept.SCANNER,
-                "scan heartbeat planned={} scanned={} missing={} deltaScanned={} desiredActive={}",
-                plannedChunks,
+                "scan heartbeat scanned={}/{} ({}%) deltaScanned={} desiredActive={}",
                 scanned,
-                map.missingCount(),
+                plannedChunks,
+                progressPctText,
                 deltaScanned,
                 desiredKeys.size,
         )
