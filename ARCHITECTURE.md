@@ -141,11 +141,13 @@ There is no separate scan plan. **The map is the plan** (ADR‑009).
 
 ### World scanner
 
-The scanner owns **demand and reconciliation**. It decides what should be observed next based on the current state of the WorldMap.
+The scanner owns **filesystem discovery reconciliation and completion** for `/memento scan`.
 
-Scanning is reactive. It observes what the engine makes available and converges without retries (ADR‑015). A chunk is considered scanned once observation has occurred, regardless of metadata completeness (ADR‑013).
+Active scan is file-primary and two-pass. Chunk metadata is read from region/NBT files off-thread and applied to the WorldMap on the server tick thread. The scanner does not emit proactive engine demand.
 
-Completion switches the scanner into a passive mode. Observation continues, but no new demand is generated.
+A chunk is considered scanned once file observation has occurred, regardless of metadata completeness. Chunks unresolved after the two-pass file scan remain recorded as unresolved in the WorldMap and completion aggregates; active scan still completes.
+
+After completion, scanner behavior is passive/reactive only: unsolicited engine observations can still enrich map metadata over time, but no active demand path is opened.
 
 ### Chunk Load Driver
 
@@ -154,6 +156,8 @@ The Chunk Load Driver encapsulates all interaction with the Minecraft engine’s
 It executes load requests, observes engine signals, and forwards observations when chunks are safely accessible. It does not decide *what* to load.
 
 There is no internal scheduler. Load pacing relies on Minecraft’s own scheduling and on observed latency (ADR‑010).
+
+For scanning doctrine, the driver has no scanner-demand responsibility. It continues to serve renewal demand and to surface unsolicited engine observations.
 
 ```mermaid
 stateDiagram-v2
@@ -176,7 +180,8 @@ Visual effects explain what the system is doing, but they never influence decisi
 
 ```mermaid
 flowchart TB
-    Scanner --> Driver
+    FileSystem --> Scanner
+    Scanner --> WorldMap
     Driver --> Engine
     Engine --> Driver
     Driver --> WorldMap
@@ -194,12 +199,15 @@ The following properties must remain true:
 * Minecraft owns chunk lifecycle authority
 * No forced chunk unloads
 * Detection is separated from execution
-* Scanner owns demand; driver owns execution
+* Scanner owns filesystem scan orchestration and reconciliation
+* Driver owns engine execution for renewal demand only
+* Scanner does not generate proactive engine demand
 * No central orchestrator
 * No internal load scheduler
 * Piggyback unsolicited loads
 * WorldMap is authoritative memory
 * Partial knowledge is valid
+* Active scan may complete with unresolved leftovers recorded explicitly
 * Observability must explain stalling and progress
 
 Violating these invariants requires an explicit architectural decision.
@@ -244,7 +252,7 @@ Each Witherstone produces exactly one RenewalBatch.
 Engine interaction is mediated through typed events.
 → Direct callbacks leaked threading assumptions into the domain.
 
-### ADR‑007: Engine‑mediated scanning
+### ADR‑007: Engine‑mediated scanning (superseded by ADR‑012)
 
 Scanning reacts to engine availability.
 → Aggressive scheduling caused load storms.
@@ -263,3 +271,13 @@ The map itself is the plan.
 
 Pacing is based on observed latency.
 → Static modes failed under real load.
+
+### ADR‑011: Scan completion allows unresolved file leftovers
+
+Active scan completion is defined by completion of file-primary two-pass processing and queue drain, not by full metadata success for every chunk. Unresolved leftovers remain first-class WorldMap state and completion telemetry.
+→ Treating unresolved leftovers as non-terminal blocked scan closure despite explicit best-effort semantics.
+
+### ADR‑012: Filesystem-primary scanning with no scanner demand
+
+Active scanning is driven by filesystem region/NBT reads, not by scanner-issued engine demand. The engine remains a passive observation source only for unsolicited loads.
+→ Scanner demand paths coupled detection to engine pressure and increased orchestration complexity.
