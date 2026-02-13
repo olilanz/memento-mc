@@ -75,7 +75,7 @@ internal class ChunkLoadRegister {
                 val entry =
                         entries.getOrPut(chunk) { Entry(chunk = chunk, firstSeenTick = nowTick) }
                 entry.desiredBy += source
-                entry.lastProgressTick = nowTick
+                entry.markProgress(nowTick)
                 entry.view()
             }
 
@@ -325,7 +325,7 @@ internal class ChunkLoadRegister {
             lock.withLock {
                 val entry = entries.getOrPut(chunk) { Entry(chunk, firstSeenTick = nowTick) }
                 entry.requestedBy += source
-                entry.lastProgressTick = nowTick
+                entry.markProgress(nowTick)
                 entry.view()
             }
 
@@ -401,18 +401,7 @@ internal class ChunkLoadRegister {
     fun issueTicket(chunk: ChunkRef, ticketName: String, nowTick: Long) =
             lock.withLock { entries[chunk]?.issueTicket(ticketName, nowTick) }
 
-    /**
-     * Attaches a ticket to a chunk already in ENGINE_LOAD_OBSERVED.
-     *
-     * NOTE: Ticketing unsolicited engine loads can cause uncontrolled world growth (spillover
-     * begets more spillover). The driver should avoid using this for unsolicited observations.
-     */
-    fun attachObservedTicket(chunk: ChunkRef, ticketName: String, nowTick: Long) =
-            lock.withLock { entries[chunk]?.attachTicketWhileObserved(ticketName, nowTick) }
-
     fun ticketName(chunk: ChunkRef): String? = lock.withLock { entries[chunk]?.ticketName }
-
-    fun hasTicket(chunk: ChunkRef): Boolean = lock.withLock { entries[chunk]?.hasTicket() == true }
 
     /** True when the register already contains an entry for [chunk] (any origin). */
     fun containsEntry(chunk: ChunkRef): Boolean = lock.withLock { entries.containsKey(chunk) }
@@ -649,135 +638,59 @@ data class StateInventory(
             val chunk: ChunkRef,
             val firstSeenTick: Long,
     ) {
-        private var state: State = State.REQUESTED
+        private val lifecycle = ChunkLifecycleMachine(chunk = chunk, firstSeenTick = firstSeenTick)
 
         val desiredBy: MutableSet<RequestSource> = mutableSetOf()
         var desiredEpoch: Long = 0L
 
         val requestedBy: MutableSet<RequestSource> = mutableSetOf()
 
-        var ticketName: String? = null
-            private set
+        val ticketName: String?
+            get() = lifecycle.ticketName
 
-        var lastProgressTick: Long = firstSeenTick
+        val lastProgressTick: Long
+            get() = lifecycle.lastProgressTick
 
-        var loadObservedTick: Long? = null
-            private set
+        val loadObservedTick: Long?
+            get() = lifecycle.loadObservedTick
 
-        var completedTick: Long? = null
-            private set
+        val completedTick: Long?
+            get() = lifecycle.completedTick
+
+        fun markProgress(nowTick: Long) {
+            lifecycle.markProgress(nowTick)
+        }
 
         fun verifyNotLoaded(nowTick: Long) {
-            ensure(State.REQUESTED)
-            state = State.NOT_LOADED_VERIFIED
-            lastProgressTick = nowTick
+            lifecycle.verifyNotLoaded(nowTick)
         }
 
         /** Synthetic observation for "already loaded" checks (tick thread). */
         fun synthesizeLoadObserved(nowTick: Long) {
-            if (state != State.REQUESTED) return
-            state = State.ENGINE_LOAD_OBSERVED
-            loadObservedTick = nowTick
-            lastProgressTick = nowTick
+            lifecycle.synthesizeLoadObserved(nowTick)
         }
 
         fun issueTicket(ticket: String, nowTick: Long) {
-            ensure(State.NOT_LOADED_VERIFIED)
-            ticketName = ticket
-            state = State.TICKET_ISSUED
-            lastProgressTick = nowTick
-        }
-
-        fun onEngineLoadObserved(nowTick: Long) {
-            ensure(State.TICKET_ISSUED)
-            state = State.ENGINE_LOAD_OBSERVED
-            loadObservedTick = nowTick
-            lastProgressTick = nowTick
-        }
-
-        fun attachTicketWhileObserved(ticketName: String, nowTick: Long) {
-            if (state != State.ENGINE_LOAD_OBSERVED) return
-            if (this.ticketName != null) return
-            this.ticketName = ticketName
-            lastProgressTick = nowTick
-        }
-
-        fun resetFromAwaiting(nowTick: Long) {
-            // Keep desiredBy/requestedBy; this is hygiene reset only.
-            ticketName = null
-            loadObservedTick = null
-            completedTick = null
-            state = State.REQUESTED
-            lastProgressTick = nowTick
+            lifecycle.issueTicket(ticket, nowTick)
         }
 
         fun onChunkAvailable(nowTick: Long) {
-            ensure(State.ENGINE_LOAD_OBSERVED)
-            state = State.FULLY_LOADED
-            lastProgressTick = nowTick
+            lifecycle.onChunkAvailable(nowTick)
         }
 
         fun beginPropagation(nowTick: Long) {
-            ensure(State.FULLY_LOADED)
-            state = State.PROPAGATING
-            lastProgressTick = nowTick
+            lifecycle.beginPropagation(nowTick)
         }
 
         fun completePropagation(nowTick: Long) {
-            ensure(State.PROPAGATING)
-            state = State.COMPLETED_PENDING_PRUNE
-            completedTick = nowTick
-            lastProgressTick = nowTick
+            lifecycle.completePropagation(nowTick)
         }
 
         /** Engine observation tolerant path. */
-        fun recordEngineLoadObserved(nowTick: Long): EngineObservationResult {
-            return when (state) {
-                State.TICKET_ISSUED -> {
-                    onEngineLoadObserved(nowTick)
-                    EngineObservationResult.ACCEPTED
-                }
-                State.NOT_LOADED_VERIFIED -> {
-                    // Out-of-order but survivable: engine signaled load completion while we were
-                    // still
-                    // between "verify not loaded" and "issue ticket" on the tick thread.
-                    // We must not lose this observation; otherwise the entry can stall in
-                    // TICKET_ISSUED
-                    // (no further engine callbacks) and never progress to full-load polling.
-                    state = State.ENGINE_LOAD_OBSERVED
-                    loadObservedTick = nowTick
-                    lastProgressTick = nowTick
-                    EngineObservationResult.OUT_OF_ORDER_ACCEPTED
-                }
-                State.REQUESTED -> {
-                    // Unexpected but survivable: we have an engine signal before we finished our
-                    // local steps.
-                    state = State.ENGINE_LOAD_OBSERVED
-                    loadObservedTick = nowTick
-                    lastProgressTick = nowTick
-                    EngineObservationResult.OUT_OF_ORDER_ACCEPTED
-                }
-                State.ENGINE_LOAD_OBSERVED,
-                State.FULLY_LOADED,
-    /**
-     * The chunk is physically present and fully accessible in memory.
-     * This reflects Minecraft engine reality only.
-     * It does NOT imply propagation has started.
-     */
-                State.PROPAGATING,
-                State.COMPLETED_PENDING_PRUNE -> {
-                    EngineObservationResult.DUPLICATE_IGNORED
-                }
-            }
-        }
+        fun recordEngineLoadObserved(nowTick: Long): EngineObservationResult =
+                lifecycle.recordEngineLoadObserved(nowTick)
 
-        fun hasTicket(): Boolean =
-                ticketName != null &&
-                        (state == State.TICKET_ISSUED ||
-                                state == State.ENGINE_LOAD_OBSERVED ||
-                                state == State.FULLY_LOADED ||
-                                state == State.PROPAGATING ||
-                                state == State.COMPLETED_PENDING_PRUNE)
+        fun hasTicket(): Boolean = lifecycle.hasTicket()
 
         /**
          * True if this entry has ever been requested by a driver demand provider (scanner or
@@ -806,7 +719,7 @@ data class StateInventory(
         fun view(): EntryView =
                 EntryView(
                         chunk = chunk,
-                        state = state.name,
+                        state = lifecycle.stateName(),
                         ticketName = ticketName,
                         desiredBy = desiredBy.toSet(),
                         requestedBy = requestedBy.toSet(),
@@ -818,6 +731,133 @@ data class StateInventory(
 
         // NOTE: These helpers exist so the outer register does not access the private state
         // directly.
+        fun isRequested(): Boolean = lifecycle.isRequested()
+        fun isNotLoadedVerified(): Boolean = lifecycle.isNotLoadedVerified()
+        fun isTicketIssued(): Boolean = lifecycle.isTicketIssued()
+        fun isEngineLoadObserved(): Boolean = lifecycle.isEngineLoadObserved()
+        fun isChunkAvailable(): Boolean = lifecycle.isChunkAvailable()
+        fun isPropagating(): Boolean = lifecycle.isPropagating()
+        fun isCompletedPendingPrune(): Boolean = lifecycle.isCompletedPendingPrune()
+
+        fun stateIndexForCounting(): Int = lifecycle.stateIndexForCounting()
+    }
+
+    /**
+     * Internal per-chunk lifecycle machine.
+     *
+     * Owns transition authority and lifecycle metadata for exactly one chunk entry.
+     */
+    private class ChunkLifecycleMachine(
+            private val chunk: ChunkRef,
+            firstSeenTick: Long,
+    ) {
+        private var state: State = State.REQUESTED
+
+        var ticketName: String? = null
+            private set
+
+        var lastProgressTick: Long = firstSeenTick
+            private set
+
+        var loadObservedTick: Long? = null
+            private set
+
+        var completedTick: Long? = null
+            private set
+
+        fun markProgress(nowTick: Long) {
+            lastProgressTick = nowTick
+        }
+
+        fun verifyNotLoaded(nowTick: Long) {
+            ensure(State.REQUESTED)
+            state = State.NOT_LOADED_VERIFIED
+            lastProgressTick = nowTick
+        }
+
+        fun synthesizeLoadObserved(nowTick: Long) {
+            if (state != State.REQUESTED) return
+            state = State.ENGINE_LOAD_OBSERVED
+            loadObservedTick = nowTick
+            lastProgressTick = nowTick
+        }
+
+        fun issueTicket(ticket: String, nowTick: Long) {
+            ensure(State.NOT_LOADED_VERIFIED)
+            ticketName = ticket
+            state = State.TICKET_ISSUED
+            lastProgressTick = nowTick
+        }
+
+        fun onChunkAvailable(nowTick: Long) {
+            ensure(State.ENGINE_LOAD_OBSERVED)
+            state = State.FULLY_LOADED
+            lastProgressTick = nowTick
+        }
+
+        fun beginPropagation(nowTick: Long) {
+            ensure(State.FULLY_LOADED)
+            state = State.PROPAGATING
+            lastProgressTick = nowTick
+        }
+
+        fun completePropagation(nowTick: Long) {
+            ensure(State.PROPAGATING)
+            state = State.COMPLETED_PENDING_PRUNE
+            completedTick = nowTick
+            lastProgressTick = nowTick
+        }
+
+        private fun onEngineLoadObserved(nowTick: Long) {
+            ensure(State.TICKET_ISSUED)
+            state = State.ENGINE_LOAD_OBSERVED
+            loadObservedTick = nowTick
+            lastProgressTick = nowTick
+        }
+
+        /** Engine observation tolerant path. */
+        fun recordEngineLoadObserved(nowTick: Long): EngineObservationResult {
+            return when (state) {
+                State.TICKET_ISSUED -> {
+                    onEngineLoadObserved(nowTick)
+                    EngineObservationResult.ACCEPTED
+                }
+                State.NOT_LOADED_VERIFIED -> {
+                    // Out-of-order but survivable: engine signaled load completion while we were
+                    // still between "verify not loaded" and "issue ticket" on the tick thread.
+                    // We must not lose this observation; otherwise the entry can stall in
+                    // TICKET_ISSUED (no further engine callbacks) and never progress to full-load
+                    // polling.
+                    state = State.ENGINE_LOAD_OBSERVED
+                    loadObservedTick = nowTick
+                    lastProgressTick = nowTick
+                    EngineObservationResult.OUT_OF_ORDER_ACCEPTED
+                }
+                State.REQUESTED -> {
+                    // Unexpected but survivable: we have an engine signal before we finished our
+                    // local steps.
+                    state = State.ENGINE_LOAD_OBSERVED
+                    loadObservedTick = nowTick
+                    lastProgressTick = nowTick
+                    EngineObservationResult.OUT_OF_ORDER_ACCEPTED
+                }
+                State.ENGINE_LOAD_OBSERVED,
+                State.FULLY_LOADED,
+                State.PROPAGATING,
+                State.COMPLETED_PENDING_PRUNE -> EngineObservationResult.DUPLICATE_IGNORED
+            }
+        }
+
+        fun hasTicket(): Boolean =
+                ticketName != null &&
+                        (state == State.TICKET_ISSUED ||
+                                state == State.ENGINE_LOAD_OBSERVED ||
+                                state == State.FULLY_LOADED ||
+                                state == State.PROPAGATING ||
+                                state == State.COMPLETED_PENDING_PRUNE)
+
+        fun stateName(): String = state.name
+
         fun isRequested(): Boolean = state == State.REQUESTED
         fun isNotLoadedVerified(): Boolean = state == State.NOT_LOADED_VERIFIED
         fun isTicketIssued(): Boolean = state == State.TICKET_ISSUED
@@ -844,20 +884,21 @@ data class StateInventory(
                 )
             }
         }
-    }
 
-    private enum class State {
-        REQUESTED,
-        NOT_LOADED_VERIFIED,
-        TICKET_ISSUED,
-        ENGINE_LOAD_OBSERVED,
-        FULLY_LOADED,
-    /**
-     * The chunk is physically present and fully accessible in memory.
-     * This reflects Minecraft engine reality only.
-     * It does NOT imply propagation has started.
-     */
-        PROPAGATING,
-        COMPLETED_PENDING_PRUNE,
+        private enum class State {
+            REQUESTED,
+            NOT_LOADED_VERIFIED,
+            TICKET_ISSUED,
+            ENGINE_LOAD_OBSERVED,
+            FULLY_LOADED,
+
+            /**
+             * The chunk is physically present and fully accessible in memory.
+             * This reflects Minecraft engine reality only.
+             * It does NOT imply propagation has started.
+             */
+            PROPAGATING,
+            COMPLETED_PENDING_PRUNE,
+        }
     }
 }
