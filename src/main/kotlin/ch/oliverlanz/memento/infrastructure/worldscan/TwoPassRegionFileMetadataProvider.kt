@@ -38,7 +38,7 @@ import net.minecraft.nbt.NbtSizeTracker
 /**
  * File-primary metadata provider with locked two-pass policy.
  *
- * Chunk C behavior:
+ * Behavior:
  * - Pass 1: attempts all discovered chunk work units from [WorldDiscoveryPlan]
  * - Pass 2: attempts only transient failures ([ChunkScanUnresolvedReason.FILE_LOCKED],
  *   [ChunkScanUnresolvedReason.FILE_IO_ERROR])
@@ -87,9 +87,16 @@ class TwoPassRegionFileMetadataProvider(
             runCatching {
                 runTwoPass(work, scanTick)
             }.onFailure { t ->
-                MementoLog.error(MementoConcept.SCANNER, "file metadata provider failed", t)
+                if (lifecycle.get() == FileMetadataProviderLifecycle.CANCELLED || t is InterruptedException) {
+                    MementoLog.debug(MementoConcept.SCANNER, "file metadata provider cancelled")
+                } else {
+                    MementoLog.error(MementoConcept.SCANNER, "file metadata provider failed", t)
+                }
             }
-            lifecycle.set(FileMetadataProviderLifecycle.COMPLETE)
+
+            if (lifecycle.get() != FileMetadataProviderLifecycle.CANCELLED) {
+                lifecycle.set(FileMetadataProviderLifecycle.COMPLETE)
+            }
         }
 
         return true
@@ -106,19 +113,27 @@ class TwoPassRegionFileMetadataProvider(
         )
     }
 
-    override fun isComplete(): Boolean = lifecycle.get() == FileMetadataProviderLifecycle.COMPLETE
+    override fun isComplete(): Boolean {
+        return when (lifecycle.get()) {
+            FileMetadataProviderLifecycle.COMPLETE,
+            FileMetadataProviderLifecycle.CANCELLED -> true
+            else -> false
+        }
+    }
 
     override fun close() {
+        lifecycle.set(FileMetadataProviderLifecycle.CANCELLED)
         runFuture?.cancel(true)
         executor.shutdownNow()
-        lifecycle.set(FileMetadataProviderLifecycle.COMPLETE)
     }
 
     private fun runTwoPass(work: List<FileChunkWorkUnit>, scanTick: Long) {
         val transientRetry = ArrayList<FileChunkWorkUnit>()
 
         // Pass 1: all discovered chunks.
-        work.forEach { unit ->
+        for (unit in work) {
+            if (Thread.currentThread().isInterrupted) return
+
             val result = readChunkMetadata(unit)
             emitFact(unit.key, result, scanTick)
             firstPassProcessed.incrementAndGet()
@@ -136,7 +151,9 @@ class TwoPassRegionFileMetadataProvider(
             Thread.sleep(delayedReconciliationMillis)
         }
 
-        transientRetry.forEach { unit ->
+        for (unit in transientRetry) {
+            if (Thread.currentThread().isInterrupted) return
+
             val result = readChunkMetadata(unit)
             emitFact(unit.key, result, scanTick)
             secondPassProcessed.incrementAndGet()
@@ -341,4 +358,3 @@ class TwoPassRegionFileMetadataProvider(
         private const val DEFAULT_DELAYED_RECONCILIATION_MILLIS = 250L
     }
 }
-

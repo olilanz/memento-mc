@@ -54,7 +54,7 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
 
     private var consumer: ChunkMetadataConsumer? = null
 
-    /** Optional file-primary provider used to run Chunk E orchestration before engine fallback demand. */
+    /** Optional file-primary provider used before engine fallback demand is enabled. */
     private var fileMetadataProvider: FileMetadataProvider? = null
 
     /**
@@ -116,6 +116,23 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
     }
 
     fun detach() {
+        val providerStatus = fileMetadataProvider?.status()
+        val pendingFacts = metadataApplier?.pendingCount() ?: 0
+
+        if (providerStatus != null) {
+            MementoLog.info(
+                    MementoConcept.SCANNER,
+                    "scan shutdown summary providerLifecycle={} firstPass={}/{} secondPass={}/{} emittedFacts={} unappliedQueuedFacts={}",
+                    providerStatus.lifecycle,
+                    providerStatus.firstPassProcessed,
+                    providerStatus.firstPassTotal,
+                    providerStatus.secondPassProcessed,
+                    providerStatus.secondPassTotal,
+                    providerStatus.emittedFacts,
+                    pendingFacts,
+            )
+        }
+
         server = null
         activeScan.set(false)
         map = null
@@ -251,8 +268,8 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         val m = map ?: return emptySequence()
 
         if (demandPhase == DemandPhase.FILE_PRIMARY && !transitionToFallbackWhenReady(m)) {
-            // Chunk E orchestration lock: while file-primary is running (or queued facts are draining),
-            // proactive driver demand remains OFF and only passive/unsolicited enrichment applies.
+            // While file-primary is running (or queued facts are draining), proactive driver demand
+            // remains OFF and only passive/unsolicited enrichment applies.
             return emptySequence()
         }
 
