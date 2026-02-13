@@ -139,25 +139,37 @@ It is monotonic in meaning: once a chunk is known or observed, that knowledge is
 
 There is no separate scan plan. **The map is the plan** (ADR‑009).
 
+### WorldMapService
+
+`WorldMapService` is the **domain lifecycle and mutation authority** for `WorldMap`.
+
+It owns:
+
+* startup and shutdown lifecycle of the authoritative map instance
+* ingestion of metadata facts from infrastructure publishers
+* tick-thread application of metadata facts into `WorldMap`
+
+No infrastructure component mutates `WorldMap` directly.
+
 ### World scanner
 
-The scanner owns **filesystem discovery reconciliation and completion** for `/memento scan`.
+The scanner is an infrastructure component that owns **filesystem discovery reconciliation and completion** for `/memento scan`.
 
-Active scan is file-primary and two-pass. Chunk metadata is read from region/NBT files off-thread and applied to the WorldMap on the server tick thread. The scanner does not emit proactive engine demand.
+Active scan is file-primary and two-pass. Chunk metadata is read from region/NBT files off-thread and emitted as metadata facts into `WorldMapService` for tick-thread application. The scanner does not emit proactive engine demand.
 
 A chunk is considered scanned once file observation has occurred, regardless of metadata completeness. Chunks unresolved after the two-pass file scan remain recorded as unresolved in the WorldMap and completion aggregates; active scan still completes.
 
-After completion, scanner behavior is passive/reactive only: unsolicited engine observations can still enrich map metadata over time, but no active demand path is opened.
+After completion, scanner behavior is passive/reactive only: unsolicited engine observations can still enrich map metadata over time through metadata-fact ingestion, but no active demand path is opened.
 
 ### Chunk Load Driver
 
 The Chunk Load Driver encapsulates all interaction with the Minecraft engine’s chunk lifecycle (ADR‑008).
 
-It executes load requests, observes engine signals, and forwards observations when chunks are safely accessible. It does not decide *what* to load.
+It executes renewal load requests, observes engine signals including ambient load activity, and emits metadata facts when chunks are safely accessible. It does not decide *what* to load.
 
 There is no internal scheduler. Load pacing relies on Minecraft’s own scheduling and on observed latency (ADR‑010).
 
-For scanning doctrine, the driver has no scanner-demand responsibility. It continues to serve renewal demand and to surface unsolicited engine observations.
+For scanning doctrine, the driver has no scanner-demand responsibility. It serves renewal demand and ambient observation pathways, and it does not emit map facts for expiry outcomes that never reached full-load accessibility.
 
 ```mermaid
 stateDiagram-v2
@@ -181,10 +193,11 @@ Visual effects explain what the system is doing, but they never influence decisi
 ```mermaid
 flowchart TB
     FileSystem --> Scanner
-    Scanner --> WorldMap
+    Scanner --> WorldMapService
     Driver --> Engine
     Engine --> Driver
-    Driver --> WorldMap
+    Driver --> WorldMapService
+    WorldMapService --> WorldMap
     WorldMap --> Renewal
 ```
 
@@ -199,13 +212,17 @@ The following properties must remain true:
 * Minecraft owns chunk lifecycle authority
 * No forced chunk unloads
 * Detection is separated from execution
-* Scanner owns filesystem scan orchestration and reconciliation
-* Driver owns engine execution for renewal demand only
+* Scanner owns filesystem scan orchestration and reconciliation for active runs
+* Driver owns engine execution for renewal demand and ambient load observation handling
 * Scanner does not generate proactive engine demand
 * No central orchestrator
 * No internal load scheduler
 * Piggyback unsolicited loads
 * WorldMap is authoritative memory
+* WorldMapService is the sole world map lifecycle and mutation authority
+* Scanner and Driver publish boundary-safe metadata facts, not chunk runtime objects
+* Driver emits world map metadata facts only when full-load accessibility is reached
+* Expiry outcomes without full-load accessibility do not mutate WorldMap
 * Partial knowledge is valid
 * Active scan may complete with unresolved leftovers recorded explicitly
 * Observability must explain stalling and progress
@@ -281,3 +298,11 @@ Active scan completion is defined by completion of file-primary two-pass process
 
 Active scanning is driven by filesystem region/NBT reads, not by scanner-issued engine demand. The engine remains a passive observation source only for unsolicited loads.
 → Scanner demand paths coupled detection to engine pressure and increased orchestration complexity.
+
+### ADR‑013: Domain WorldMapService and metadata-fact ingestion boundary
+
+World map lifecycle and mutation authority are centralized in domain `WorldMapService`. Scanner and Driver are infrastructure publishers that emit boundary-safe metadata facts; they do not propagate chunk runtime objects across the boundary.
+
+Driver serves renewal demand plus ambient load observation handling, and emits world map facts only when full-load accessibility is reached. Expiry outcomes without full-load accessibility remain lifecycle signals and do not mutate world map state.
+
+→ Direct scanner-owned map lifecycle and chunk-object propagation blurred authority and thread boundaries, increasing coupling and reducing explainability.
