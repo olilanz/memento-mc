@@ -73,7 +73,7 @@ object Memento : ModInitializer {
             chunkLoadDriver = ChunkLoadDriver().also {
                 it.attach(server)
 
-                // Explicit driver precedence: renewal first, scanner fallback.
+                // Explicit driver authority: renewal demand only.
                 it.registerRenewalProvider(renewalChunkLoadProvider!!)
 
                 // Single fan-out point for chunk availability → domain renewal tracker
@@ -100,8 +100,7 @@ object Memento : ModInitializer {
             worldScanner = scanner
             CommandHandlers.attachWorldScanner(scanner)
 
-            // World scanner provider (lower priority)
-            chunkLoadDriver?.registerScanProvider(scanner)
+            // World scanner remains a passive chunk-availability consumer.
             chunkLoadDriver?.registerConsumer(scanner)
 
             // Fan out domain events
