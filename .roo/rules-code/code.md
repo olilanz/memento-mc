@@ -33,6 +33,8 @@
 - Favor clarity over cleverness.
 - Keep components cohesive.
 - Avoid silent coupling.
+- Keep code comments free of delivery-plan/procedure references (e.g., "Chunk A", "step 3").
+- Comments must explain runtime intent, invariants, authority boundaries, and rationale only.
 
 ## Build lock protocol
 
