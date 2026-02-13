@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.application.worldscan
+package ch.oliverlanz.memento.infrastructure.worldscan
 
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog

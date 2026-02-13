@@ -1,6 +1,8 @@
-package ch.oliverlanz.memento.application.worldscan
+package ch.oliverlanz.memento.infrastructure.worldscan
 
+import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
+import ch.oliverlanz.memento.domain.worldmap.ChunkScanProvenance
 import ch.oliverlanz.memento.domain.worldmap.ChunkSignals
 import ch.oliverlanz.memento.domain.worldmap.WorldMementoMap
 import net.minecraft.server.world.ServerWorld
@@ -19,7 +21,12 @@ class ChunkMetadataConsumer(
     private val map: WorldMementoMap,
 ) {
 
-    fun onChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
+    fun extractFact(
+        world: ServerWorld,
+        chunk: WorldChunk,
+        source: ChunkScanProvenance,
+        scanTick: Long,
+    ): ChunkMetadataFact {
         val pos: ChunkPos = chunk.pos
 
         val key = ChunkKey(
@@ -30,11 +37,9 @@ class ChunkMetadataConsumer(
             chunkZ = pos.z,
         )
 
-        // If we already have signals for this chunk, treat as duplicate and keep scanner progress
-        // bookkeeping in [WorldScanner]. Avoid per-chunk observability spam here.
-        if (map.hasSignals(key)) {
-            return
-        }
+        // Duplicate publications are acceptable and handled idempotently at ingestion time.
+        // Keep read-side check available for optional diagnostics and future guards.
+        map.hasSignals(key)
 
         // Safe surface sample (center of chunk), computed from the chunk's own heightmap.
         // This must not call back into the chunk manager.
@@ -43,7 +48,7 @@ class ChunkMetadataConsumer(
             hm.get(8, 8)
         }.getOrNull()
 
-        val firstAttach = map.upsertSignals(
+        return ChunkMetadataFact(
             key = key,
             signals = ChunkSignals(
                 inhabitedTimeTicks = chunk.inhabitedTime,
@@ -51,10 +56,9 @@ class ChunkMetadataConsumer(
                 surfaceY = surfaceY,
                 biomeId = null,
                 isSpawnChunk = false,
-            )
+            ),
+            source = source,
+            scanTick = scanTick,
         )
-
-        // First attach / update semantics are preserved; no per-chunk logs here by policy.
-        if (firstAttach) return
     }
 }

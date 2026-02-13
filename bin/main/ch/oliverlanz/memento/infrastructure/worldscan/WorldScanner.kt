@@ -1,11 +1,14 @@
-package ch.oliverlanz.memento.application.worldscan
+package ch.oliverlanz.memento.infrastructure.worldscan
 
 import ch.oliverlanz.memento.MementoConstants
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
+import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
+import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataIngestionPort
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanProvenance
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanUnresolvedReason
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry
 import ch.oliverlanz.memento.domain.worldmap.WorldMementoMap
+import ch.oliverlanz.memento.domain.worldmap.WorldMapService
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkAvailabilityListener
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
@@ -13,13 +16,13 @@ import ch.oliverlanz.memento.infrastructure.worldscan.FileMetadataProvider
 import java.lang.Math
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.command.ServerCommandSource
 import net.minecraft.server.world.ServerWorld
 import net.minecraft.text.Text
 import net.minecraft.util.math.ChunkPos
-import net.minecraft.world.chunk.WorldChunk
 
 /**
  * World scanner.
@@ -43,11 +46,14 @@ class WorldScanner : ChunkAvailabilityListener {
      */
     private val activeScan = AtomicBoolean(false)
 
-    /** The world map (single source of truth). Kept in memory across active runs. */
-    private var map: WorldMementoMap? = null
+    /** Domain-owned world-map lifecycle/ingestion authority. */
+    private var worldMapService: WorldMapService? = null
 
-    /** Bounded, tick-thread-only application path for external scan metadata facts. */
-    private var metadataApplier: BoundedScanMetadataTickApplier? = null
+    /** Domain ingestion port consumed by scanner publications. */
+    private var ingestionPort: ChunkMetadataIngestionPort? = null
+
+    /** File-provider facts are queued and drained on tick thread by scanner runtime. */
+    private val pendingFileFacts = ConcurrentLinkedQueue<ScanMetadataFact>()
 
     private var consumer: ChunkMetadataConsumer? = null
 
@@ -70,6 +76,19 @@ class WorldScanner : ChunkAvailabilityListener {
 
     fun attach(server: MinecraftServer) {
         this.server = server
+        MementoLog.info(
+                MementoConcept.SCANNER,
+                "scanner attach(server): worldMapServiceAttached={} ingestionPortBound={}",
+                worldMapService != null,
+                ingestionPort != null,
+        )
+        ensureSubstrate()
+    }
+
+    fun attachWorldMapService(service: WorldMapService) {
+        worldMapService = service
+        ingestionPort = service.ingestionPort()
+        MementoLog.info(MementoConcept.SCANNER, "scanner attachWorldMapService: service bound")
         ensureSubstrate()
     }
 
@@ -84,10 +103,10 @@ class WorldScanner : ChunkAvailabilityListener {
      * the substrate map on the tick thread.
      */
     fun tick() {
-        metadataApplier?.tick()
+        drainQueuedFileFacts()
 
         if (!activeScan.get()) return
-        val m = map ?: return
+        val m = mapSnapshot() ?: return
         val tickNow = server?.overworld?.time ?: 0L
         maybeEmitActiveHeartbeat(tickNow, m)
         maybeFinalizeActiveScan(m)
@@ -96,12 +115,12 @@ class WorldScanner : ChunkAvailabilityListener {
     /** Application ingestion boundary for future providers (e.g. file-based readers). */
     fun metadataIngestionPort(): ScanMetadataIngestionPort {
         ensureSubstrate()
-        return metadataApplier ?: NoopScanMetadataIngestionPort
+        return scannerQueueIngestionPort
     }
 
     fun detach() {
         val providerStatus = fileMetadataProvider?.status()
-        val pendingFacts = metadataApplier?.pendingCount() ?: 0
+        val pendingFacts = pendingFileFacts.size
 
         if (providerStatus != null) {
             MementoLog.info(
@@ -119,10 +138,11 @@ class WorldScanner : ChunkAvailabilityListener {
 
         server = null
         activeScan.set(false)
-        map = null
         fileMetadataProvider?.close()
         fileMetadataProvider = null
-        metadataApplier = null
+        worldMapService = null
+        ingestionPort = null
+        pendingFileFacts.clear()
         consumer = null
         plannedChunks = 0
         lastHeartbeatTick = 0L
@@ -245,7 +265,7 @@ class WorldScanner : ChunkAvailabilityListener {
         }
 
         val providerComplete = fileMetadataProvider?.isComplete() ?: true
-        val ingestionDrained = (metadataApplier?.pendingCount() ?: 0) <= 0
+        val ingestionDrained = pendingFileFacts.isEmpty()
         if (providerComplete && ingestionDrained) {
             emitCompleted(reason = "exhausted_but_missing", map = map)
         }
@@ -279,23 +299,9 @@ class WorldScanner : ChunkAvailabilityListener {
         lastHeartbeatScanned = scanned
     }
 
-    override fun onChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
-        val m = ensureSubstrate()
-
-        val chunkX = chunk.pos.x
-        val chunkZ = chunk.pos.z
-        val key =
-                ChunkKey(
-                        world = world.registryKey,
-                        regionX = Math.floorDiv(chunkX, 32),
-                        regionZ = Math.floorDiv(chunkZ, 32),
-                        chunkX = chunkX,
-                        chunkZ = chunkZ,
-                )
-
-        // Always consume metadata into the map (passive/reactive behavior).
-        consumer?.onChunkLoaded(world, chunk)
-        m.markScanned(key, world.time)
+    override fun onChunkMetadata(world: ServerWorld, fact: ChunkMetadataFact) {
+        val m = mapSnapshot() ?: return
+        ingestionPort?.ingest(fact)
         // If not active scan, we do not drive demand; we only enrich the map.
         if (!activeScan.get()) return
 
@@ -309,21 +315,7 @@ class WorldScanner : ChunkAvailabilityListener {
     }
 
     override fun onChunkLoadExpired(world: ServerWorld, pos: ChunkPos) {
-        val m = ensureSubstrate()
-
-        val chunkX = pos.x
-        val chunkZ = pos.z
-        val key =
-                ChunkKey(
-                        world = world.registryKey,
-                        regionX = Math.floorDiv(chunkX, 32),
-                        regionZ = Math.floorDiv(chunkZ, 32),
-                        chunkX = chunkX,
-                        chunkZ = chunkZ,
-                )
-
-        // Best-effort coverage: record scan tick even when no chunk was accessible for propagation.
-        m.markScanned(key, world.time)
+        val m = mapSnapshot() ?: return
 
         if (!activeScan.get()) return
         if (m.isComplete()) {
@@ -333,30 +325,42 @@ class WorldScanner : ChunkAvailabilityListener {
 
     /** Ensures the scanner substrate exists outside active scan mode. */
     private fun ensureSubstrate(): WorldMementoMap {
-        val existing = map
+        val existing = mapSnapshot()
         if (existing != null) {
             if (consumer == null) consumer = ChunkMetadataConsumer(existing)
-            if (metadataApplier == null) {
-                metadataApplier =
-                        BoundedScanMetadataTickApplier(
-                                map = existing,
-                                maxAppliesPerTick =
-                                        MementoConstants.MEMENTO_SCAN_METADATA_APPLIER_MAX_PER_TICK,
-                        )
-            }
             return existing
         }
 
-        val created = WorldMementoMap()
-        map = created
-        consumer = ChunkMetadataConsumer(created)
-        metadataApplier =
-                BoundedScanMetadataTickApplier(
-                        map = created,
-                        maxAppliesPerTick = MementoConstants.MEMENTO_SCAN_METADATA_APPLIER_MAX_PER_TICK,
-                )
-        return created
+        error("WorldScanner requires attached WorldMapService before use")
     }
+
+    private fun mapSnapshot(): WorldMementoMap? = worldMapService?.substrate()
+
+    fun emitChunkMetadataFromLoadedChunk(
+            world: ServerWorld,
+            chunk: net.minecraft.world.chunk.WorldChunk,
+            source: ChunkScanProvenance,
+            scanTick: Long,
+    ) {
+        val m = ensureSubstrate()
+        val c = consumer ?: ChunkMetadataConsumer(m).also { consumer = it }
+        val fact = c.extractFact(world = world, chunk = chunk, source = source, scanTick = scanTick)
+        ingestionPort?.ingest(fact)
+    }
+
+    private fun drainQueuedFileFacts() {
+        val port = ingestionPort ?: return
+        if (MementoConstants.MEMENTO_SCAN_METADATA_APPLIER_MAX_PER_TICK <= 0) return
+
+        var forwarded = 0
+        while (forwarded < MementoConstants.MEMENTO_SCAN_METADATA_APPLIER_MAX_PER_TICK) {
+            val fact = pendingFileFacts.poll() ?: break
+            port.ingest(fact)
+            forwarded++
+        }
+    }
+
+    private val scannerQueueIngestionPort = ScanMetadataIngestionPort { fact -> pendingFileFacts.add(fact) }
 
     private object NoopScanMetadataIngestionPort : ScanMetadataIngestionPort {
         override fun ingest(fact: ScanMetadataFact) {
