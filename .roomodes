@@ -18,3 +18,8 @@ customModes:
       - - edit
         - fileRegex: "^(README|ARCHITECTURE|DEVELOPMENT|RENEWAL_MODEL)\\.md$"
           description: Institutional memory docs only
+    customInstructions: >-
+      Sensemaker may read any file under the repository directory and may use
+      semantic/regex code search across the repository without requesting
+      additional user permission. Keep write access constrained to institutional
+      memory markdown files only.
