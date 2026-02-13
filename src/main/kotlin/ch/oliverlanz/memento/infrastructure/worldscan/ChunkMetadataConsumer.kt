@@ -1,13 +1,14 @@
-package ch.oliverlanz.memento.application.worldscan
+package ch.oliverlanz.memento.infrastructure.worldscan
 
+import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
+import ch.oliverlanz.memento.domain.worldmap.ChunkScanProvenance
 import ch.oliverlanz.memento.domain.worldmap.ChunkSignals
 import ch.oliverlanz.memento.domain.worldmap.WorldMementoMap
 import net.minecraft.server.world.ServerWorld
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.Heightmap
 import net.minecraft.world.chunk.WorldChunk
-import org.slf4j.LoggerFactory
 
 /**
  * Consumes already-loaded chunks and extracts signals into the domain-owned [WorldMementoMap].
@@ -20,9 +21,12 @@ class ChunkMetadataConsumer(
     private val map: WorldMementoMap,
 ) {
 
-    private val log = LoggerFactory.getLogger("memento")
-
-    fun onChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
+    fun extractFact(
+        world: ServerWorld,
+        chunk: WorldChunk,
+        source: ChunkScanProvenance,
+        scanTick: Long,
+    ): ChunkMetadataFact {
         val pos: ChunkPos = chunk.pos
 
         val key = ChunkKey(
@@ -33,17 +37,9 @@ class ChunkMetadataConsumer(
             chunkZ = pos.z,
         )
 
-        // If we already have signals for this chunk, we can treat this as a duplicate load.
-        // We still mark the plan as completed so scanning can make forward progress.
-        if (map.hasSignals(key)) {
-            log.debug(
-                "[SCAN] duplicate load dim={} chunk=({}, {}) (signals already present)",
-                world.registryKey.value.toString(),
-                pos.x,
-                pos.z,
-            )
-            return
-        }
+        // Duplicate publications are acceptable and handled idempotently at ingestion time.
+        // Keep read-side check available for optional diagnostics and future guards.
+        map.hasSignals(key)
 
         // Safe surface sample (center of chunk), computed from the chunk's own heightmap.
         // This must not call back into the chunk manager.
@@ -52,10 +48,7 @@ class ChunkMetadataConsumer(
             hm.get(8, 8)
         }.getOrNull()
 
-        val beforeMissing = map.missingCount()
-        val beforeScanned = map.scannedChunks()
-
-        val firstAttach = map.upsertSignals(
+        return ChunkMetadataFact(
             key = key,
             signals = ChunkSignals(
                 inhabitedTimeTicks = chunk.inhabitedTime,
@@ -63,24 +56,9 @@ class ChunkMetadataConsumer(
                 surfaceY = surfaceY,
                 biomeId = null,
                 isSpawnChunk = false,
-            )
-        )
-
-        val afterMissing = map.missingCount()
-        val afterScanned = map.scannedChunks()
-
-        // Telemetry: tie map mutation to convergence.
-        // This is intentionally INFO for now.
-        log.debug(
-            "[SCAN] signals {} dim={} chunk=({}, {}) missing {}->{} scanned {}->{}",
-            if (firstAttach) "ATTACHED" else "UPDATED",
-            world.registryKey.value.toString(),
-            pos.x,
-            pos.z,
-            beforeMissing,
-            afterMissing,
-            beforeScanned,
-            afterScanned,
+            ),
+            source = source,
+            scanTick = scanTick,
         )
     }
 }

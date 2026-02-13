@@ -11,9 +11,10 @@ import net.minecraft.text.Text
 import net.minecraft.util.Formatting
 import net.minecraft.util.hit.HitResult
 import net.minecraft.util.math.BlockPos
-import org.slf4j.LoggerFactory
 import ch.oliverlanz.memento.application.visualization.EffectsHost
-import ch.oliverlanz.memento.application.worldscan.MementoRunController
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
+import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
 
 /**
  * Application-layer command handlers.
@@ -24,13 +25,12 @@ import ch.oliverlanz.memento.application.worldscan.MementoRunController
  */
 object CommandHandlers {
 
-    private val log = LoggerFactory.getLogger("memento")
 
     @Volatile
     private var effectsHost: EffectsHost? = null
 
     @Volatile
-    private var runController: MementoRunController? = null
+    private var worldScanner: WorldScanner? = null
 
     fun attachVisualizationEngine(engine: EffectsHost) {
         effectsHost = engine
@@ -40,12 +40,12 @@ object CommandHandlers {
         effectsHost = null
     }
 
-    fun attachRunController(controller: MementoRunController) {
-        runController = controller
+    fun attachWorldScanner(scanner: WorldScanner) {
+        worldScanner = scanner
     }
 
-    fun detachRunController() {
-        runController = null
+    fun detachWorldScanner() {
+        worldScanner = null
     }
 
     enum class StoneKind { WITHERSTONE, LORESTONE }
@@ -73,7 +73,7 @@ object CommandHandlers {
             }
             1
         } catch (e: Exception) {
-            log.error("[CMD] list failed", e)
+            MementoLog.error(MementoConcept.OPERATOR, "command=list failed", e)
             source.sendError(Text.literal("Memento: could not list stones (see server log)."))
             0
         }
@@ -94,14 +94,14 @@ object CommandHandlers {
             }
             1
         } catch (e: Exception) {
-            log.error("[CMD] inspect failed name='{}'", name, e)
+            MementoLog.error(MementoConcept.OPERATOR, "command=inspect failed name='{}'", e, name)
             source.sendError(Text.literal("Memento: could not inspect stone (see server log)."))
             0
         }
     }
 
     fun visualize(source: ServerCommandSource, name: String): Int {
-        log.info("[CMD] visualize name='{}' by={}", name, source.name)
+        MementoLog.info(MementoConcept.OPERATOR, "command=visualize name='{}' by={}", name, source.name)
 
         val stone = StoneTopology.get(name)
         if (stone == null) {
@@ -120,32 +120,32 @@ object CommandHandlers {
             source.sendFeedback({ Text.literal("Visualizing '$name' for a short time.").formatted(Formatting.YELLOW) }, false)
             1
         } catch (e: Exception) {
-            log.error("[CMD] visualize failed name='{}'", name, e)
+            MementoLog.error(MementoConcept.OPERATOR, "command=visualize failed name='{}'", e, name)
             source.sendError(Text.literal("Memento: could not visualize stone (see server log)."))
             0
         }
     }
 
-    fun run(source: ServerCommandSource): Int {
-        log.info("[CMD] run by={}", source.name)
+    fun scan(source: ServerCommandSource): Int {
+        MementoLog.info(MementoConcept.OPERATOR, "command=scan by={}", source.name)
 
-        val controller = runController
-        if (controller == null) {
-            source.sendError(Text.literal("Run controller is not ready yet."))
+        val scanner = worldScanner
+        if (scanner == null) {
+            source.sendError(Text.literal("Scanner is not ready yet."))
             return 0
         }
 
         return try {
-            controller.start(source)
+            scanner.startActiveScan(source)
         } catch (e: Exception) {
-            log.error("[CMD] run failed", e)
-            source.sendError(Text.literal("Memento: could not start run (see server log)."))
+            MementoLog.error(MementoConcept.OPERATOR, "command=scan failed", e)
+            source.sendError(Text.literal("Memento: could not start scan (see server log)."))
             0
         }
     }
 
     fun addWitherstone(source: ServerCommandSource, name: String, radius: Int, daysToMaturity: Int): Int {
-        log.info("[CMD] addWitherstone name='{}' radius={} daysToMaturity={} by={}", name, radius, daysToMaturity, source.name)
+        MementoLog.info(MementoConcept.OPERATOR, "command=addWitherstone name='{}' radius={} daysToMaturity={} by={}", name, radius, daysToMaturity, source.name)
         val player = source.playerOrThrow
         val dim = source.world.registryKey
 
@@ -173,7 +173,7 @@ object CommandHandlers {
     }
 
     fun addLorestone(source: ServerCommandSource, name: String, radius: Int): Int {
-        log.info("[CMD] addLorestone name='{}' radius={} by={}", name, radius, source.name)
+        MementoLog.info(MementoConcept.OPERATOR, "command=addLorestone name='{}' radius={} by={}", name, radius, source.name)
         val player = source.playerOrThrow
         val dim = source.world.registryKey
 
@@ -199,7 +199,7 @@ object CommandHandlers {
     }
 
     fun remove(source: ServerCommandSource, name: String): Int {
-        log.info("[CMD] removeStone name='{}' by={}", name, source.name)
+        MementoLog.info(MementoConcept.OPERATOR, "command=removeStone name='{}' by={}", name, source.name)
         return try {
             val existing = StoneTopology.get(name)
             if (existing == null) {
@@ -212,14 +212,14 @@ object CommandHandlers {
             source.sendFeedback({ Text.literal("Removed ${existing.javaClass.simpleName.lowercase()} '$name'.").formatted(Formatting.YELLOW) }, false)
             1
         } catch (e: Exception) {
-            log.error("[CMD] remove failed name='{}'", name, e)
+            MementoLog.error(MementoConcept.OPERATOR, "command=removeStone failed name='{}'", e, name)
             source.sendError(Text.literal("Memento: could not remove stone (see server log)."))
             0
         }
     }
 
         fun alterRadius(source: ServerCommandSource, name: String, value: Int): Int {
-        log.info("[CMD] alterRadius name='{}' radius={} by={}", name, value, source.name)
+        MementoLog.info(MementoConcept.OPERATOR, "command=alterRadius name='{}' radius={} by={}", name, value, source.name)
 
         return try {
             val ok = StoneTopology.alterRadius(
@@ -239,7 +239,7 @@ object CommandHandlers {
                 1
             }
         } catch (e: Exception) {
-            log.error("[CMD] alterRadius failed name='{}' radius={}", name, value, e)
+            MementoLog.error(MementoConcept.OPERATOR, "command=alterRadius failed name='{}' radius={}", e, name, value)
             source.sendError(Text.literal("Memento: could not alter radius (see server log)."))
             0
         }
@@ -247,7 +247,7 @@ object CommandHandlers {
 
 
         fun alterDaysToMaturity(source: ServerCommandSource, name: String, value: Int): Int {
-        log.info("[CMD] alterDaysToMaturity name='{}' daysToMaturity={} by={}", name, value, source.name)
+        MementoLog.info(MementoConcept.OPERATOR, "command=alterDaysToMaturity name='{}' daysToMaturity={} by={}", name, value, source.name)
 
         return try {
             when (
@@ -281,7 +281,7 @@ object CommandHandlers {
                 }
             }
         } catch (e: Exception) {
-            log.error("[CMD] alterDaysToMaturity failed name='{}' daysToMaturity={}", name, value, e)
+            MementoLog.error(MementoConcept.OPERATOR, "command=alterDaysToMaturity failed name='{}' daysToMaturity={}", e, name, value)
             source.sendError(Text.literal("Memento: could not alter daysToMaturity (see server log)."))
             0
         }

@@ -5,8 +5,9 @@ import ch.oliverlanz.memento.domain.events.StoneLifecycleState
 import ch.oliverlanz.memento.domain.events.StoneLifecycleTransition
 import ch.oliverlanz.memento.domain.events.StoneLifecycleTrigger
 import ch.oliverlanz.memento.infrastructure.MementoDebug
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import net.minecraft.server.MinecraftServer
-import org.slf4j.LoggerFactory
 
 /**
  * Adapter hooks for wiring StoneTopology into the mod runtime.
@@ -14,19 +15,16 @@ import org.slf4j.LoggerFactory
  * Keeps the integration surface small and avoids entangling legacy and shadow implementations.
  */
 object StoneTopologyHooks {
-
-    private val log = LoggerFactory.getLogger("memento")
-
     private var loggingAttached = false
     private var serverRef: MinecraftServer? = null
 
     fun onServerStarted(server: MinecraftServer) {
-        // Subscribe to domain events BEFORE attach(), so we observe startup reconciliation transitions.
+        // Subscribe to domain events BEFORE attach(), so we observe startup lifecycle transitions.
         attachLoggingOnce()
 
         serverRef = server
 
-        log.info("[STONE] attach trigger=SERVER_START")
+        MementoLog.info(MementoConcept.STONE, "attach trigger=SERVER_START")
         StoneTopology.attach(server)
         StoneTopology.evaluate(StoneLifecycleTrigger.SERVER_START)
         logLoadedSnapshot()
@@ -43,12 +41,12 @@ object StoneTopologyHooks {
     }
 
     fun onNightlyCheckpoint(days: Int) {
-        log.info("[STONE] maturity check trigger=NIGHTLY_TICK days={}", days)
+        MementoLog.info(MementoConcept.STONE, "maturity check trigger=NIGHTLY_TICK days={}", days)
         StoneTopology.advanceDays(days, StoneLifecycleTrigger.NIGHTLY_TICK)
     }
 
     fun onAdminTimeAdjustment() {
-        log.info("[STONE] maturity check trigger=OP_COMMAND")
+        MementoLog.info(MementoConcept.STONE, "maturity check trigger=OP_COMMAND")
         StoneTopology.evaluate(StoneLifecycleTrigger.OP_COMMAND)
     }
 
@@ -60,14 +58,15 @@ object StoneTopologyHooks {
 
     private fun logLoadedSnapshot() {
         val stones = StoneTopology.list()
-        log.info("[STONE] loaded count={}", stones.size)
+        MementoLog.info(MementoConcept.STONE, "loaded count={}", stones.size)
 
         for (s in stones) {
             when (s) {
                 is Witherstone -> {
                     val pos = "(${s.position.x},${s.position.y},${s.position.z})"
-                    log.info(
-                        "[STONE] loaded witherstone='{}' dim='{}' pos={} state={} days={} r={}",
+                    MementoLog.info(
+                        MementoConcept.STONE,
+                        "loaded witherstone='{}' dim='{}' pos={} state={} days={} r={}",
                         s.name,
                         s.dimension.value.toString(),
                         pos,
@@ -79,8 +78,9 @@ object StoneTopologyHooks {
 
                 is Lorestone -> {
                     val pos = "(${s.position.x},${s.position.y},${s.position.z})"
-                    log.info(
-                        "[STONE] loaded lorestone='{}' dim='{}' pos={} r={}",
+                    MementoLog.info(
+                        MementoConcept.STONE,
+                        "loaded lorestone='{}' dim='{}' pos={} r={}",
                         s.name,
                         s.dimension.value.toString(),
                         pos,
@@ -94,8 +94,9 @@ object StoneTopologyHooks {
     private fun logTransition(e: StoneLifecycleTransition) {
         val stone = e.stone
         val pos = "(${stone.position.x},${stone.position.y},${stone.position.z})"
-        log.info(
-            "[STONE] stone='{}' dim='{}' pos={} {} -> {} trigger={}",
+        MementoLog.info(
+            MementoConcept.STONE,
+            "stone='{}' dim='{}' pos={} {} -> {} trigger={}",
             stone.name,
             stone.dimension.value.toString(),
             pos,

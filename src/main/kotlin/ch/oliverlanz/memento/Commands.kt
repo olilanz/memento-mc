@@ -57,11 +57,11 @@ object Commands {
                 )
 
                 /* ======================
-                 * RUN
+                 * SCAN
                  * ====================== */
-                .then(literal("run")
+                .then(literal("scan")
                     .executes { ctx ->
-                        CommandHandlers.run(ctx.source)
+                        CommandHandlers.scan(ctx.source)
                     }
                 )
                 /* ======================

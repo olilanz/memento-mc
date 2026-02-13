@@ -1,8 +1,5 @@
-package ch.oliverlanz.memento.application.worldscan
+package ch.oliverlanz.memento.domain.worldmap
 
-import ch.oliverlanz.memento.domain.worldmap.ChunkMementoView
-import ch.oliverlanz.memento.domain.worldmap.WorldMementoMap
-import ch.oliverlanz.memento.domain.worldmap.WorldMementoTopology
 import ch.oliverlanz.memento.domain.stones.Lorestone
 import ch.oliverlanz.memento.domain.stones.Stone
 import ch.oliverlanz.memento.domain.stones.StoneTopology
@@ -30,6 +27,39 @@ object StoneInfluenceSuperposition {
         val dominantByChunkByWorld = linkedMapOf<RegistryKey<World>, Map<ChunkPos, KClass<out Stone>>>()
 
         val entries = substrate.snapshot().map { (key, signals) ->
+            val dominantByChunk = dominantByChunkByWorld.getOrPut(key.world) {
+                StoneTopology.getInfluencedChunkSet(key.world)
+            }
+
+            val dominant = dominantByChunk[ChunkPos(key.chunkX, key.chunkZ)]
+
+            val hasLore = dominant == Lorestone::class
+            val hasWither = dominant == Witherstone::class
+
+            ChunkMementoView(
+                key = key,
+                signals = signals,
+                dominantStoneKind = dominant,
+                hasLorestoneInfluence = hasLore,
+                hasWitherstoneInfluence = hasWither,
+            )
+        }
+
+        return WorldMementoTopology(entries)
+    }
+
+    /**
+     * Apply stone influence onto a scan completion snapshot.
+     *
+     * This avoids reading from a live [WorldMementoMap] after completion, as the map may
+     * continue to evolve in passive mode while the world grows.
+     */
+    fun applySnapshot(snapshot: List<ChunkScanSnapshotEntry>): WorldMementoTopology {
+        val dominantByChunkByWorld = linkedMapOf<RegistryKey<World>, Map<ChunkPos, KClass<out Stone>>>()
+
+        val entries = snapshot.map { entry ->
+            val key = entry.key
+            val signals = entry.signals
             val dominantByChunk = dominantByChunkByWorld.getOrPut(key.world) {
                 StoneTopology.getInfluencedChunkSet(key.world)
             }

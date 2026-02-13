@@ -10,29 +10,34 @@ import ch.oliverlanz.memento.application.renewal.WitherstoneConsumptionBridge
 import ch.oliverlanz.memento.application.stone.StoneMaturityTimeBridge
 import ch.oliverlanz.memento.application.time.GameTimeTracker
 import ch.oliverlanz.memento.application.visualization.EffectsHost
-import ch.oliverlanz.memento.application.worldscan.MementoRunController
+import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
+import ch.oliverlanz.memento.domain.worldmap.WorldMapService
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchLifecycleTransition
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerLogging
 import ch.oliverlanz.memento.domain.stones.StoneTopologyHooks
-import ch.oliverlanz.memento.MementoConstants
 import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
+import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanCsvExporter
+import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
+import ch.oliverlanz.memento.infrastructure.worldscan.TwoPassRegionFileMetadataProvider
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents
 import net.minecraft.server.MinecraftServer
-import org.slf4j.LoggerFactory
+import net.minecraft.server.world.ServerWorld
+import net.minecraft.util.math.ChunkPos
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 
 object Memento : ModInitializer {
-
-    private val log = LoggerFactory.getLogger("Memento")
 
     private var effectsHost: EffectsHost? = null
     private val gameTimeTracker = GameTimeTracker()
 
-    private var runController: MementoRunController? = null
+    private var worldScanner: WorldScanner? = null
+    private var worldMapService: WorldMapService? = null
 
     // Renewal wiring (application / infrastructure)
     private var renewalInitialObserver: RenewalInitialObserver? = null
@@ -52,20 +57,16 @@ object Memento : ModInitializer {
     }
 
     override fun onInitialize() {
-        log.info("Initializing Memento")
+        MementoLog.info(MementoConcept.WORLD, "initializing")
 
         Commands.register()
 
         // The ChunkLoadDriver owns the engine event subscriptions.
-        // (We still call the installation from here, but the driver is the only class
-        // that knows about / handles ServerChunkEvents.)
         ChunkLoadDriver.installEngineHooks()
 
         ServerLifecycleEvents.SERVER_STARTED.register { server: MinecraftServer ->
 
-            // ------------------------------------------------------------
-            // Wiring order matters.
-            // ------------------------------------------------------------
+            worldMapService = WorldMapService().also { it.attach() }
 
             RenewalTrackerLogging.attachOnce()
             renewalInitialObserver = RenewalInitialObserver().also { it.attach(server) }
@@ -76,35 +77,41 @@ object Memento : ModInitializer {
             chunkLoadDriver = ChunkLoadDriver().also {
                 it.attach(server)
 
-                // Provider precedence: renewal first.
-                it.registerProvider(renewalChunkLoadProvider!!)
+                // Explicit driver authority: renewal demand only.
+                it.registerRenewalProvider(renewalChunkLoadProvider!!)
 
-                // Single fan-out point for chunk availability.
+                // Single fan-out point for chunk availability → domain renewal tracker
                 it.registerConsumer(object : ChunkAvailabilityListener {
-                    override fun onChunkLoaded(world: net.minecraft.server.world.ServerWorld, chunk: net.minecraft.world.chunk.WorldChunk) {
-                        ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks.onChunkLoaded(world.registryKey, chunk.pos)
+                    override fun onChunkMetadata(world: ServerWorld, fact: ChunkMetadataFact) {
+                        RenewalTrackerHooks.onChunkLoaded(
+                            world.registryKey,
+                            ChunkPos(fact.key.chunkX, fact.key.chunkZ)
+                        )
                     }
 
-                    override fun onChunkUnloaded(world: net.minecraft.server.world.ServerWorld, pos: net.minecraft.util.math.ChunkPos) {
-                        ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks.onChunkUnloaded(world.registryKey, pos)
+                    override fun onChunkUnloaded(world: ServerWorld, pos: ChunkPos) {
+                        RenewalTrackerHooks.onChunkUnloaded(world.registryKey, pos)
                     }
                 })
-
-                // Renewal provider consumes loads to dedupe intent.
-                it.registerConsumer(renewalChunkLoadProvider!!)
             }
 
             effectsHost = EffectsHost(server)
             CommandHandlers.attachVisualizationEngine(effectsHost!!)
 
-            runController = MementoRunController().also {
+            val scanner = WorldScanner().also {
+                val service = checkNotNull(worldMapService) { "WorldMapService must be initialized before WorldScanner bootstrap" }
+                MementoLog.info(MementoConcept.SCANNER, "bootstrap scanner: binding WorldMapService before server attach")
+                it.attachWorldMapService(service)
                 it.attach(server)
-                CommandHandlers.attachRunController(it)
+                it.attachFileMetadataProvider(TwoPassRegionFileMetadataProvider(it.metadataIngestionPort()))
+                it.addListener(WorldScanCsvExporter)
             }
 
-            // World scanner provider (lower priority)
-            chunkLoadDriver?.registerProvider(runController!!)
-            chunkLoadDriver?.registerConsumer(runController!!)
+            worldScanner = scanner
+            CommandHandlers.attachWorldScanner(scanner)
+
+            // World scanner remains a passive chunk-availability consumer.
+            chunkLoadDriver?.registerConsumer(scanner)
 
             // Fan out domain events
             RenewalTracker.subscribe(renewalEventListener)
@@ -136,10 +143,13 @@ object Memento : ModInitializer {
             StoneTopologyHooks.onServerStopping()
 
             CommandHandlers.detachVisualizationEngine()
-            CommandHandlers.detachRunController()
+            CommandHandlers.detachWorldScanner()
 
-            runController?.detach()
-            runController = null
+            worldScanner?.detach()
+            worldScanner = null
+
+            worldMapService?.detach()
+            worldMapService = null
 
             effectsHost = null
         }
@@ -147,8 +157,9 @@ object Memento : ModInitializer {
         // Transport tick only
         ServerTickEvents.END_SERVER_TICK.register {
             gameTimeTracker.tick()
-            runController?.tick()
+            worldMapService?.tick()
             chunkLoadDriver?.tick()
+            worldScanner?.tick()
         }
     }
 }

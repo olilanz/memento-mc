@@ -1,11 +1,11 @@
-package ch.oliverlanz.memento.application.worldscan
+package ch.oliverlanz.memento.infrastructure.worldscan
 
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
 import net.minecraft.world.World
 
 /**
- * Stage 1 of the /memento run pipeline: discover runtime worlds.
+ * Stage 1 of the /memento scan pipeline: discover runtime worlds.
  *
  * Design lock:
  * - We trust the server's loaded worlds as the authoritative set.

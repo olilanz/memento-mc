@@ -1,4 +1,3 @@
-
 package ch.oliverlanz.memento.infrastructure.chunk
 
 interface ChunkLoadProvider {

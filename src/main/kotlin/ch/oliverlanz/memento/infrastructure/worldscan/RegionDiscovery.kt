@@ -1,15 +1,16 @@
-package ch.oliverlanz.memento.application.worldscan
+package ch.oliverlanz.memento.infrastructure.worldscan
 
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
 import net.minecraft.util.WorldSavePath
 import net.minecraft.world.World
-import org.slf4j.LoggerFactory
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * Stage 2 of the /memento run pipeline: discover on-disk region files for each world.
+ * Stage 2 of the /memento scan pipeline: discover on-disk region files for each world.
  *
  * Design lock (persistence-based discovery):
  * - Regions are discovered by enumerating `region/r.<x>.<z>.mca` under the canonical Minecraft save layout.
@@ -18,15 +19,13 @@ import java.nio.file.Path
  */
 class RegionDiscovery {
 
-    private val log = LoggerFactory.getLogger("memento")
-
     fun discover(server: MinecraftServer, worlds: List<RegistryKey<World>>): WorldDiscoveryPlan {
         val root = server.getSavePath(WorldSavePath.ROOT)
 
         val discovered = worlds.map { worldKey ->
             val regionDir = resolveRegionDirectory(root, worldKey)
             val regions = discoverRegions(regionDir)
-            log.debug("[RUN] discovered world={} regions={}", worldKey.value, regions.size)
+            MementoLog.debug(MementoConcept.SCANNER, "discovered world={} regions={}", worldKey.value, regions.size)
             DiscoveredWorld(world = worldKey, regions = regions)
         }
 
@@ -48,7 +47,7 @@ class RegionDiscovery {
 
     private fun discoverRegions(regionDir: Path): List<RegionRef> {
         if (!Files.isDirectory(regionDir)) {
-            log.debug("[RUN] region folder missing; skipping dir={}", regionDir.toAbsolutePath())
+            MementoLog.debug(MementoConcept.SCANNER, "region folder missing; skipping dir={}", regionDir.toAbsolutePath())
             return emptyList()
         }
 

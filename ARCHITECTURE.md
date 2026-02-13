@@ -1,285 +1,308 @@
-# Memento — Architecture (Draft)
+# Memento — Architecture
 
-This document is **institutional memory** for Memento’s architecture. It records the boundaries, invariants, and lifecycle decisions that must remain stable so we don’t re-litigate rejected approaches or erode semantics during iteration.
+This document is **institutional memory** for Memento’s architecture.
 
-It is not user-facing documentation. It prioritizes **durable decisions** over implementation detail.
+It records architectural intent, responsibility boundaries, and hard‑won decisions so that future maintainers do not have to rediscover them through failure. The focus is on **what must remain true**, not on explaining the code line‑by‑line.
+
+This document is not user‑facing. Gameplay concepts, player experience, and operator semantics are covered in [README.md](README.md) and [RENEWAL_MODEL.md](RENEWAL_MODEL.md). Development setup and workflows are covered in [DEVELOPMENT.md](DEVELOPMENT.md). Where those documents already define concepts, this document references them instead of repeating them.
+
+Architectural decisions are referenced by **ADR number**. ADRs are part of the contract: they explain *why* the architecture looks the way it does.
 
 ---
 
-## Context map
+## 1. Mental model: two interacting mechanisms
+
+Memento is built around **two distinct but interacting mechanisms**:
+
+1. **Player‑driven, time‑based in‑game mechanics**
+2. **Autonomous, conservative world renewal**
+
+These mechanisms serve different purposes and have different guarantees, but they operate on the same physical substrate: **Minecraft chunks**.
+
+The player‑driven side exists to express *intent*. Stones allow players and operators to guide renewal or explicitly protect land. These mechanics are visible, explainable, and grounded in gameplay.
+
+The autonomous side exists to preserve long‑term world health. It observes the world gradually, tolerates incomplete information, and acts conservatively. Its goal is not speed or completeness, but **eventual, safe progress**.
+
+Neither mechanism fully controls the other. Player intent influences autonomous renewal, but does not force it. Autonomous renewal remains cautious even in the presence of explicit guidance. This separation is foundational and is reinforced throughout the architecture (ADR‑001).
+
+The **scanner** exists to bridge these mechanisms. It observes the world over time and builds durable knowledge that enables renewal decisions and later forgettability computation. Observation is explicitly decoupled from execution.
 
 ```mermaid
-flowchart TB
-  Player["Player"] -->|plays / loads chunks| Server["Minecraft Server"]
-  Operator["Operator"] -->|admin actions / commands| Server
+flowchart LR
+    Player[Player actions]
+    Stones[Stones & maturation]
+    Scanner[World scanner]
+    WorldMap[WorldMap]
+    Renewal[Autonomous renewal]
 
-  subgraph Server
-    Engine["Engine Runtime (ticks, chunk lifecycle)"]
-    World["Worlds / Dimensions"]
-    Persist["Persistence (region files, level.dat)"]
-    WorldGen["World Generation (vanilla)"]
-  end
-
-  subgraph Memento["Memento Mod"]
-    Commands["Command Handlers"]
-    Driver["Chunk Load Driver"]
-    Domain["Domain (Stones, Renewal, WorldMap)"]
-    Effects["Effects Engine (server-side particles)"]
-    Scanner["World Scanner / Snapshot Pipeline"]
-  end
-
-  Commands --> Scanner
-  Commands --> Effects
-
-  Scanner --> Driver
-  Domain --> Driver
-
-  Driver --> Engine
-  Engine --> World
-  World --> Persist
-  WorldGen --> World
-
-  Domain --> Effects
-  Domain --> Persist
+    Player --> Stones
+    Stones -->|intent| Renewal
+    Scanner -->|observations| WorldMap
+    WorldMap --> Renewal
 ```
-
-**Lock:** Minecraft owns *world generation* and *chunk lifecycle authority*.  
-Memento guides renewal and produces effects and snapshots; it does not implement its own worldgen.
 
 ---
 
-## Structural map and dependency direction
+## 2. Player‑driven mechanics (in‑game layer)
+
+The player‑driven layer is responsible for **expressing intent**, not for executing change.
+
+Stones are designed to be understandable in‑world artifacts. They mature over time, produce visible effects, and can be inspected by operators. Their role is to say *what should eventually happen*, not *when or how it happens*.
+
+### Witherstone — intent to renew
+
+A Witherstone expresses explicit intent that an area may renew. It matures over time and, once mature, produces exactly one `RenewalBatch`. That batch has a clear lifecycle and ownership and is never reused (ADR‑005).
+
+The Witherstone itself does not load chunks, does not trigger regeneration, and does not bypass engine constraints. It merely establishes eligibility.
+
+### Lorestone — intent to protect
+
+A Lorestone expresses protection. It marks land as non‑renewable regardless of natural forgettability or Witherstone influence.
+
+Lorestones have no automatic lifecycle and are never consumed implicitly. Their purpose is to give operators a durable, conservative override without weakening the autonomous model.
+
+Player‑driven mechanics deliberately **do not**:
+
+* scan chunks
+* load chunks
+* schedule renewal
+
+Those responsibilities belong to the autonomous layer.
+
+---
+
+## 3. Autonomous, conservative renewal (system layer)
+
+Autonomous renewal is designed to operate safely in long‑running servers with incomplete information and unpredictable player behavior.
+
+It prefers inaction over action. It tolerates missing data. It avoids holding unnecessary runtime state. These properties are not optimizations; they are safeguards derived from repeated failure modes.
+
+### Detection versus execution
+
+Memento strictly separates **detection** from **execution** (ADR‑002).
+
+Detection answers questions such as:
+
+* Which chunks are known?
+* Which chunks are eligible for renewal?
+
+Execution answers a different question:
+
+* When does the world allow change without disruption?
+
+Detection does not depend on chunk load state. Execution is deferred until chunks unload and reload naturally. Renewal never forces chunk unloads or reloads.
+
+### Server authority
+
+Minecraft remains authoritative over chunk lifecycle, scheduling, and world generation (ADR‑003).
+
+Memento does not implement its own world generation and does not override engine lifecycle rules. All renewal is opportunistic and engine‑mediated.
+
+---
+
+## 4. Shared core: chunks, observation, and state
+
+Both mechanisms operate on chunks, but **chunk loading is a shared, scarce resource** in a modded ecosystem.
+
+Other mods may load chunks for their own purposes. Memento must coexist with them rather than compete. For this reason, scanning deliberately piggybacks on unsolicited chunk loads and avoids aggressive scheduling (ADR‑009).
+
+### Events as the domain boundary
+
+All interaction between the Minecraft engine and Memento’s domain logic happens through **typed domain events** (ADR‑006).
+
+Engine callbacks are treated as *facts*. They are recorded and processed later on controlled execution paths. No semantic decisions are made inside engine threads.
 
 ```mermaid
-flowchart TB
-  subgraph Application["Application Layer (orchestration + IO)"]
-    Commands["Command Handlers"]
-    Scanner["World Scanner"]
-    Effects["Effects Engine"]
-    IO["Logs / CSV"]
-  end
-
-  subgraph Infrastructure["Infrastructure Layer"]
-    Driver["Chunk Load Driver"]
-  end
-
-  subgraph Domain["Domain Layer (authoritative truth)"]
-    WorldMap["WorldMap"]
-    StoneTopology["StoneTopology"]
-    RenewalModel["Renewal Model"]
-    Events["Typed Domain Events"]
-  end
-
-  subgraph External["External"]
-    MC["Minecraft Engine"]
-    FS["World persistence"]
-  end
-
-  Commands --> Scanner
-  Commands --> Effects
-
-  Scanner --> Driver
-  RenewalModel --> Driver
-
-  Driver --> MC
-
-  Scanner --> WorldMap
-  Scanner --> IO
-
-  StoneTopology --> Events
-  RenewalModel --> Events
-  Events --> Effects
-  Events --> IO
-
-  Domain -. no engine calls .-> MC
-  Domain -. no filesystem IO .-> FS
+sequenceDiagram
+    Engine ->> Driver: chunk load observed
+    Driver ->> Queue: record event
+    Queue ->> Domain: process on server tick
 ```
 
-**Lock:**  
-Only the **Chunk Load Driver** interacts directly with the Minecraft engine’s chunk lifecycle events.
+This decoupling prevents concurrency bugs and makes progress observable and explainable.
 
 ---
 
-## Renewal paths
+## 5. Core components and responsibilities
 
-Memento supports **two renewal paths**:
+### StoneTopology
 
-1. **Automatic renewal**  
-   Gradual renewal of rarely visited regions (outskirts). This is the primary objective.
+`StoneTopology` is the sole authority on how stone influences combine. All renewal eligibility resolution flows through it (ADR‑004).
 
-2. **Player / operator-controlled renewal**  
-   Explicit placement of stones to guide renewal or protection.
+If this component is wrong or bypassed, the system loses semantic consistency. For that reason, no other component may infer stone influence independently.
 
-**Lock:** Complexity is stabilized through the stone-driven path first.
+### WorldMap
 
----
+`WorldMap` is Memento’s **institutional memory**. It records what the system has observed about the world.
 
-## Core world interaction model
+It is monotonic in meaning: once a chunk is known or observed, that knowledge is not forgotten. Missing or partial metadata is a valid state, not an error.
 
-### Detection vs execution
+There is no separate scan plan. **The map is the plan** (ADR‑009).
 
-Memento strictly separates:
+### WorldMapService
 
-- **Detection** of what *should* be renewed
-- **Execution** of renewal *when the world allows it*
+`WorldMapService` is the **domain lifecycle and mutation authority** for `WorldMap`.
 
-Detection is independent of chunk load state. Execution is deferred.
+It owns:
 
-### Deferred execution
+* startup and shutdown lifecycle of the authoritative map instance
+* ingestion of metadata facts from infrastructure publishers
+* tick-thread application of metadata facts into `WorldMap`
 
-Renewal does **not** force chunk unloads or immediate reloads.  
-Progress depends on naturally observed server events.
+No infrastructure component mutates `WorldMap` directly.
 
-**Lock:** Renewal is eventually consistent and non-deterministic by design.
+### World scanner
 
----
+The scanner is an infrastructure component that owns **filesystem discovery reconciliation and completion** for `/memento scan`.
 
-## Chunk loading and pacing
+Active scan is file-primary and two-pass. Chunk metadata is read from region/NBT files off-thread and emitted as metadata facts into `WorldMapService` for tick-thread application. The scanner does not emit proactive engine demand.
+
+A chunk is considered scanned once file observation has occurred, regardless of metadata completeness. Chunks unresolved after the two-pass file scan remain recorded as unresolved in the WorldMap and completion aggregates; active scan still completes.
+
+After completion, scanner behavior is passive/reactive only: unsolicited engine observations can still enrich map metadata over time through metadata-fact ingestion, but no active demand path is opened.
 
 ### Chunk Load Driver
 
-The Chunk Load Driver is the **sole mediator** between Memento and engine chunk lifecycle signals.
+The Chunk Load Driver encapsulates all interaction with the Minecraft engine’s chunk lifecycle (ADR‑008).
 
-Responsibilities:
+It executes renewal load requests, observes engine signals including ambient load activity, and emits metadata facts when chunks are safely accessible. It does not decide *what* to load.
 
-- Issue and manage chunk load tickets
-- Observe engine load/unload signals (signal-only)
-- Defer forwarding until chunks are safely accessible
-- Re-arm tickets if access is delayed
-- Apply adaptive pacing based on observed load latency
-- Emit clear, structured logs for observability
+There is no internal scheduler. Load pacing relies on Minecraft’s own scheduling and on observed latency (ADR‑010).
 
-**Lock:** No other class may subscribe to engine chunk load or unload events.
-
-### Adaptive pacing
-
-The driver measures the latency between:
-
-- ticket issuance  
-- and chunk accessibility
-
-A smoothed moving average is used to determine when to issue the next ticket.
-
-**Lock:** Pacing is based on observed behavior, not static yield or passive modes.
-
----
-
-## World inspection and scanning
-
-### WorldMap as plan
-
-The **WorldMap** is the authoritative structure describing all known chunks.
-
-- Built from region discovery
-- Gradually enriched with metadata
-- Serves as both *inspection state* and *renewal input*
-
-There is no separate scan plan or discovery phase.
-
-**Lock:** The map *is* the plan.
-
-### Scanner behavior
-
-The scanner:
-
-- Iterates over the WorldMap
-- Requests chunks whose metadata is missing
-- Extracts metadata when chunks become accessible
-- Explicitly marks chunks as scanned when metadata is stored
-- Terminates when all chunks have metadata and the snapshot is written
-
-Progress is explicit and observable.
-
-**Lock:** There must be a single, obvious point where a chunk becomes “scanned”.
-
----
-
-## Stones
-
-### Witherstone
-
-Witherstone expresses **intent to renew** an area.
-
-- Matures over time
-- Produces exactly one RenewalBatch
-- Is consumed once renewal completes
-
-### Lorestone
-
-Lorestone expresses **protection**.
-
-- Has no automated lifecycle
-- Is never consumed automatically
-- Overrides renewal influence
-
----
-
-## Lifecycles and intersection
-
-Witherstone and RenewalBatch lifecycles are distinct but linked.
+For scanning doctrine, the driver has no scanner-demand responsibility. It serves renewal demand and ambient observation pathways, and it does not emit map facts for expiry outcomes that never reached full-load accessibility.
 
 ```mermaid
 stateDiagram-v2
-  [*] --> PLACED
-  PLACED --> MATURING
-  MATURING --> MATURED
-  MATURED --> CONSUMED
-
-  state "RenewalBatch" as B {
-    [*] --> DERIVED
-    DERIVED --> BLOCKED
-    BLOCKED --> FREE
-    FREE --> RENEWING
-    RENEWING --> RENEWED
-  }
-
-  MATURED --> B.DERIVED
+    [*] --> Requested
+    Requested --> Loading
+    Loading --> Observed
+    Observed --> FullyLoaded
+    FullyLoaded --> Propagated
 ```
 
-**Locks:**
+### Visualization
 
-- One Witherstone produces exactly one RenewalBatch
-- RenewalBatch progression is event-driven
+Visualization is server‑side, vanilla, and observational only (ADR‑018, ADR‑019).
 
----
-
-## Domain events as boundary
-
-The domain emits **typed events** describing facts and transitions.
-
-Application and infrastructure react to these events for:
-
-- visualization
-- scheduling
-- logging
-- snapshot output
-
-**Lock:** Domain events separate semantic decisions from execution.
+Visual effects explain what the system is doing, but they never influence decisions or control flow.
 
 ---
 
-## Architectural invariants
+## 6. Illustrative flows
 
-1. Chunk lifecycle authority remains with the server
-2. No forced chunk unloads
-3. Renewal is deferred and event-driven
-4. WorldMap is the plan
-5. Renewal works without inspection
-6. One driver owns engine interaction
-7. Domain remains pure
-8. Observability must explain stalling and progress
+```mermaid
+flowchart TB
+    FileSystem --> Scanner
+    Scanner --> WorldMapService
+    Driver --> Engine
+    Engine --> Driver
+    Driver --> WorldMapService
+    WorldMapService --> WorldMap
+    WorldMap --> Renewal
+```
+
+The important aspect is directionality: intent flows downward, observations flow upward, and no component shortcuts these paths.
 
 ---
 
-## ADR index (append-only)
+## 7. Architectural invariants (locks)
 
-- ADR-001: Two renewal paths; stone-driven path stabilizes mechanics
-- ADR-002: Detection vs execution; deferred renewal
-- ADR-003: Server authority over chunk lifecycle
-- ADR-004: StoneTopology is sole influence authority
-- ADR-005: One Witherstone → one RenewalBatch
-- ADR-006: Typed domain events as boundary
-- ADR-007: Engine-mediated scanning
-- ADR-008: Chunk Load Driver encapsulates engine interaction
-- ADR-009: WorldMap replaces scan plans
-- ADR-010: Adaptive pacing replaces yield/passive modes
+The following properties must remain true:
+
+* Minecraft owns chunk lifecycle authority
+* No forced chunk unloads
+* Detection is separated from execution
+* Scanner owns filesystem scan orchestration and reconciliation for active runs
+* Driver owns engine execution for renewal demand and ambient load observation handling
+* Scanner does not generate proactive engine demand
+* No central orchestrator
+* No internal load scheduler
+* Piggyback unsolicited loads
+* WorldMap is authoritative memory
+* WorldMapService is the sole world map lifecycle and mutation authority
+* Scanner and Driver publish boundary-safe metadata facts, not chunk runtime objects
+* Driver emits world map metadata facts only when full-load accessibility is reached
+* Expiry outcomes without full-load accessibility do not mutate WorldMap
+* Partial knowledge is valid
+* Active scan may complete with unresolved leftovers recorded explicitly
+* Observability must explain stalling and progress
+
+Violating these invariants requires an explicit architectural decision.
+
+---
+
+## 8. Notes on extensions
+
+The scanner and WorldMap form the foundation for later forgettability computation and analysis. Algorithmic details are intentionally excluded from this document.
+
+---
+
+## 9. Architectural Decision Records (ADRs)
+
+### ADR‑001: Two renewal mechanisms coexist
+
+Two renewal mechanisms exist: player‑driven stones and autonomous renewal. Separating them stabilizes semantics and preserves player agency.
+→ Collapsing them caused renewal to become reactive and brittle.
+
+### ADR‑002: Detection vs execution
+
+Detection observes eligibility; execution applies change when the world allows it.
+→ Coupling them caused cascading side effects and irrecoverable partial progress.
+
+### ADR‑003: Server authority over chunk lifecycle
+
+Minecraft owns chunk lifecycle and scheduling.
+→ Overriding this caused instability and engine conflicts.
+
+### ADR‑004: StoneTopology is sole influence authority
+
+All stone influence resolution flows through StoneTopology.
+→ Duplicate logic drifted and produced conflicting outcomes.
+
+### ADR‑005: One Witherstone → one RenewalBatch
+
+Each Witherstone produces exactly one RenewalBatch.
+→ Reuse or multiplexing destroyed lifecycle clarity.
+
+### ADR‑006: Typed domain events as boundary
+
+Engine interaction is mediated through typed events.
+→ Direct callbacks leaked threading assumptions into the domain.
+
+### ADR‑007: Engine‑mediated scanning (superseded by ADR‑012)
+
+Scanning reacts to engine availability.
+→ Aggressive scheduling caused load storms.
+
+### ADR‑008: Shared Chunk Load Driver
+
+All engine interaction is encapsulated in the driver.
+→ Bypassing it reintroduced concurrency bugs.
+
+### ADR‑009: WorldMap replaces scan plans
+
+The map itself is the plan.
+→ Separate plans drifted from reality.
+
+### ADR‑010: Adaptive pacing over fixed modes
+
+Pacing is based on observed latency.
+→ Static modes failed under real load.
+
+### ADR‑011: Scan completion allows unresolved file leftovers
+
+Active scan completion is defined by completion of file-primary two-pass processing and queue drain, not by full metadata success for every chunk. Unresolved leftovers remain first-class WorldMap state and completion telemetry.
+→ Treating unresolved leftovers as non-terminal blocked scan closure despite explicit best-effort semantics.
+
+### ADR‑012: Filesystem-primary scanning with no scanner demand
+
+Active scanning is driven by filesystem region/NBT reads, not by scanner-issued engine demand. The engine remains a passive observation source only for unsolicited loads.
+→ Scanner demand paths coupled detection to engine pressure and increased orchestration complexity.
+
+### ADR‑013: Domain WorldMapService and metadata-fact ingestion boundary
+
+World map lifecycle and mutation authority are centralized in domain `WorldMapService`. Scanner and Driver are infrastructure publishers that emit boundary-safe metadata facts; they do not propagate chunk runtime objects across the boundary.
+
+Driver serves renewal demand plus ambient load observation handling, and emits world map facts only when full-load accessibility is reached. Expiry outcomes without full-load accessibility remain lifecycle signals and do not mutate world map state.
+
+→ Direct scanner-owned map lifecycle and chunk-object propagation blurred authority and thread boundaries, increasing coupling and reducing explainability.

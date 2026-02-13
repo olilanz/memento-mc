@@ -1,26 +1,25 @@
-package ch.oliverlanz.memento.application.worldscan
+package ch.oliverlanz.memento.infrastructure.worldscan
 
-import org.slf4j.LoggerFactory
+import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
+import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * Stage 3 of the /memento run pipeline: discover chunk work units inside each region.
+ * Stage 3 of the /memento scan pipeline: discover chunk work units inside each region.
  *
  * Slice (real chunk existence discovery):
  * - Reads the Anvil region header (first 4096 bytes = location table).
- * - Treats a chunk as existing if its sector offset is non-zero.
+ * - Treats a chunk as existing only when slot offset/count bounds are valid.
  * - Emits region-local chunk coordinates (0..31) in deterministic header order.
  *
  * Out of scope for this slice:
  * - Parsing chunk payloads (NBT)
  * - Using region timestamps
- * - Validating chunk offsets/sizes
  */
 class ChunkDiscovery {
 
-    private val log = LoggerFactory.getLogger("memento")
 
     fun discover(plan: WorldDiscoveryPlan): WorldDiscoveryPlan {
         val discovered = plan.worlds.map { world ->
@@ -38,8 +37,9 @@ class ChunkDiscovery {
             }
 
             // INFO level: summary only (no per-file spam)
-            log.debug(
-                "[RUN] region file scan completed world={} regionFilesFound={} regionFilesUsed={} regionFilesSkippedEmpty={} regionsWithChunks={} regionsWithNoChunks={} chunksDiscovered={}",
+            MementoLog.debug(
+                MementoConcept.SCANNER,
+                "region file scan completed world={} regionFilesFound={} regionFilesUsed={} regionFilesSkippedEmpty={} regionsWithChunks={} regionsWithNoChunks={} chunksDiscovered={} acceptedSlots={} rejectedZeroCount={} rejectedOutOfBounds={} rejectedMalformed={}",
                 stats.world,
                 stats.regionFilesFound,
                 stats.regionFilesUsed,
@@ -47,6 +47,10 @@ class ChunkDiscovery {
                 stats.regionsWithChunks,
                 stats.regionsWithNoChunks,
                 stats.chunksDiscovered,
+                stats.acceptedSlots,
+                stats.rejectedZeroCount,
+                stats.rejectedOutOfBounds,
+                stats.rejectedMalformed,
             )
 
             world.copy(regions = regionsWithChunks)
@@ -56,7 +60,9 @@ class ChunkDiscovery {
     }
 
     private fun discoverExistingChunks(regionFile: Path, stats: WorldChunkDiscoveryStats): List<ChunkRef> {
-        val header = tryReadLocationTable(regionFile, stats) ?: return emptyList()
+        val table = tryReadLocationTable(regionFile, stats) ?: return emptyList()
+        val header = table.locationTable
+        val fileSectorCount = table.fileSectorCount
 
         // 1024 entries * 4 bytes = 4096 bytes. Header entry index maps to (localX, localZ):
         // localX = i % 32, localZ = i / 32
@@ -69,18 +75,35 @@ class ChunkDiscovery {
             val sectorOffset = (b0 shl 16) or (b1 shl 8) or b2
             val sectorCount = header[base + 3].toInt() and 0xFF
 
-            if (sectorOffset != 0) {
-                val localX = i % REGION_WIDTH
-                val localZ = i / REGION_WIDTH
-                out.add(
-                    ChunkRef(
-                        localX = localX,
-                        localZ = localZ,
-                        sectorOffset = sectorOffset,
-                        sectorCount = sectorCount,
-                    ),
-                )
+            if (sectorOffset == 0) {
+                if (sectorCount > 0) {
+                    stats.rejectedMalformed++
+                }
+                continue
             }
+
+            if (sectorCount == 0) {
+                stats.rejectedZeroCount++
+                continue
+            }
+
+            val slotEnd = sectorOffset.toLong() + sectorCount.toLong()
+            if (slotEnd > fileSectorCount.toLong()) {
+                stats.rejectedOutOfBounds++
+                continue
+            }
+
+            val localX = i % REGION_WIDTH
+            val localZ = i / REGION_WIDTH
+            out.add(
+                ChunkRef(
+                    localX = localX,
+                    localZ = localZ,
+                    sectorOffset = sectorOffset,
+                    sectorCount = sectorCount,
+                ),
+            )
+            stats.acceptedSlots++
         }
         return out
     }
@@ -88,25 +111,26 @@ class ChunkDiscovery {
     /**
      * Reads the location table (first 4096 bytes) or returns null if the file can't be used.
      *
-     * Error handling is intentionally "log + skip" to keep /memento run inspectable and robust.
+     * Error handling is intentionally "log + skip" to keep /memento scan inspectable and robust.
      */
-    private fun tryReadLocationTable(regionFile: Path, stats: WorldChunkDiscoveryStats): ByteArray? {
+    private fun tryReadLocationTable(regionFile: Path, stats: WorldChunkDiscoveryStats): RegionLocationTable? {
         val size = try {
             Files.size(regionFile)
         } catch (e: IOException) {
             stats.regionFilesSkippedUnreadable++
-            log.debug("[RUN] region file unreadable; skipping file={} error={}", regionFile, e.message)
+            MementoLog.debug(MementoConcept.SCANNER, "region file unreadable; skipping file={} error={}", regionFile, e.message)
             return null
         } catch (e: SecurityException) {
             stats.regionFilesSkippedUnreadable++
-            log.debug("[RUN] region file access denied; skipping file={} error={}", regionFile, e.message)
+            MementoLog.debug(MementoConcept.SCANNER, "region file access denied; skipping file={} error={}", regionFile, e.message)
             return null
         }
 
         if (size < LOCATION_TABLE_BYTES.toLong()) {
             stats.regionFilesSkippedTooSmall++
-            log.trace(
-                "[RUN] region file too small; skipping file={} sizeBytes={}",
+            MementoLog.trace(
+                MementoConcept.SCANNER,
+                "region file too small; skipping file={} sizeBytes={}",
                 regionFile,
                 size,
             )
@@ -114,6 +138,7 @@ class ChunkDiscovery {
         }
 
         stats.regionFilesUsed++
+        val fileSectorCount = (size / SECTOR_BYTES.toLong()).toInt()
 
         return try {
             Files.newInputStream(regionFile).use { input ->
@@ -126,24 +151,25 @@ class ChunkDiscovery {
                 }
                 if (readTotal < buf.size) {
                     stats.regionFilesSkippedHeaderShortRead++
-                    log.debug(
-                        "[RUN] region header short read; skipping file={} readBytes={} expectedBytes={}",
+                    MementoLog.debug(
+                        MementoConcept.SCANNER,
+                        "region header short read; skipping file={} readBytes={} expectedBytes={}",
                         regionFile,
                         readTotal,
                         buf.size,
                     )
                     null
                 } else {
-                    buf
+                    RegionLocationTable(locationTable = buf, fileSectorCount = fileSectorCount)
                 }
             }
         } catch (e: IOException) {
             stats.regionFilesSkippedReadFailed++
-            log.debug("[RUN] region file read failed; skipping file={} error={}", regionFile, e.message)
+            MementoLog.debug(MementoConcept.SCANNER, "region file read failed; skipping file={} error={}", regionFile, e.message)
             null
         } catch (e: SecurityException) {
             stats.regionFilesSkippedReadFailed++
-            log.debug("[RUN] region file read denied; skipping file={} error={}", regionFile, e.message)
+            MementoLog.debug(MementoConcept.SCANNER, "region file read denied; skipping file={} error={}", regionFile, e.message)
             null
         }
     }
@@ -159,9 +185,19 @@ class ChunkDiscovery {
         var regionsWithChunks: Int = 0,
         var regionsWithNoChunks: Int = 0,
         var chunksDiscovered: Int = 0,
+        var acceptedSlots: Int = 0,
+        var rejectedZeroCount: Int = 0,
+        var rejectedOutOfBounds: Int = 0,
+        var rejectedMalformed: Int = 0,
+    )
+
+    private data class RegionLocationTable(
+        val locationTable: ByteArray,
+        val fileSectorCount: Int,
     )
 
     private companion object {
+        private const val SECTOR_BYTES: Int = 4096
         private const val REGION_WIDTH: Int = 32
         private const val LOCATION_ENTRY_BYTES: Int = 4
         private const val LOCATION_TABLE_ENTRIES: Int = REGION_WIDTH * REGION_WIDTH
