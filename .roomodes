@@ -15,6 +15,7 @@ customModes:
       design lock before handoff to Architect or Orchestrator.
     groups:
       - read
+      - search
       - - edit
         - fileRegex: "^(README|ARCHITECTURE|DEVELOPMENT|RENEWAL_MODEL)\\.md$"
           description: Institutional memory docs only
