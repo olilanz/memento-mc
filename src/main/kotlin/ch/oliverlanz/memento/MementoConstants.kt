@@ -172,22 +172,6 @@ object MementoConstants {
      */
     const val MEMENTO_SCAN_CHUNK_SLOTS_PER_TICK: Int = 2
 
-    /* ---------------------------------------------------------------------
-     * Scanner demand regulation (high/low watermarks)
-     * ------------------------------------------------------------------ */
-
-    /**
-     * When the scanner's current desired set falls below this watermark, it refills demand up to
-     * [MEMENTO_SCAN_DESIRE_HIGH_WATERMARK].
-     */
-    const val MEMENTO_SCAN_DESIRE_LOW_WATERMARK: Int = 64
-
-    /** Target size for scanner demand after refill. */
-    const val MEMENTO_SCAN_DESIRE_HIGH_WATERMARK: Int = CHUNK_LOAD_MAX_OUTSTANDING_TICKETS
-
-    /** Minimum ticks between scanner refills to avoid recomputing missing lists every tick. */
-    const val MEMENTO_SCAN_DESIRE_REFILL_EVERY_TICKS: Long = 20L
-
     /**
      * Active-scan heartbeat cadence (ticks).
      *

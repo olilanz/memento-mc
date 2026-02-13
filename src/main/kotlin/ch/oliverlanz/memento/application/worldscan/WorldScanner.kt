@@ -7,8 +7,6 @@ import ch.oliverlanz.memento.domain.worldmap.ChunkScanUnresolvedReason
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry
 import ch.oliverlanz.memento.domain.worldmap.WorldMementoMap
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkAvailabilityListener
-import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadProvider
-import ch.oliverlanz.memento.infrastructure.chunk.ChunkRef
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import ch.oliverlanz.memento.infrastructure.worldscan.FileMetadataProvider
@@ -27,26 +25,25 @@ import net.minecraft.world.chunk.WorldChunk
  * World scanner.
  *
  * Responsibility boundaries:
- * - Owns demand (desired chunk set) derived from the WorldMementoMap.
- * - Owns reconciliation (a chunk stops being demanded once metadata is attached).
- * - Receives chunk availability via the ChunkLoadDriver's propagation callback.
+ * - Owns scan lifecycle and map convergence accounting.
+ * - Owns file-primary scan startup and metadata ingestion into the map.
+ * - Receives chunk availability via the ChunkLoadDriver's propagation callback for passive
+ *   unsolicited enrichment.
  *
- * This class implements both:
- * - [ChunkLoadProvider] (driver pulls demand)
- * - [ChunkAvailabilityListener] (driver pushes availability)
+ * This class implements [ChunkAvailabilityListener] (driver pushes availability).
  */
-class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
+class WorldScanner : ChunkAvailabilityListener {
 
     private var server: MinecraftServer? = null
 
     /**
      * Scan mode:
-     * - active=true -> propose chunks to the driver (baseline scan)
+     * - active=true -> run active filesystem-first scan lifecycle
      * - active=false -> passive/reactive only (keep map fresh opportunistically)
      */
     private val activeScan = AtomicBoolean(false)
 
-    /** The world map (single source of truth). Kept in memory across proactive runs. */
+    /** The world map (single source of truth). Kept in memory across active runs. */
     private var map: WorldMementoMap? = null
 
     /** Bounded, tick-thread-only application path for external scan metadata facts. */
@@ -54,30 +51,11 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
 
     private var consumer: ChunkMetadataConsumer? = null
 
-    /** Optional file-primary provider used before engine fallback demand is enabled. */
+    /** Optional file-primary provider used for filesystem-first scan enrichment. */
     private var fileMetadataProvider: FileMetadataProvider? = null
-
-    /**
-     * Active scan demand phase:
-     * - [FILE_PRIMARY]: file provider is responsible for first-pass resolution, proactive demand OFF.
-     * - [ENGINE_FALLBACK]: driver demand is active for unresolved leftovers only.
-     */
-    private var demandPhase: DemandPhase = DemandPhase.ENGINE_FALLBACK
 
     /** Observability only. */
     private var plannedChunks: Int = 0
-
-    /**
-     * Current scanner demand set (ChunkKey), regulated by high/low watermarks.
-     *
-     * - Scanner expresses intent by exposing this set via [desiredChunks].
-     * - The driver remains responsible for ticket pacing and pressure balancing.
-     * - The map remains the sole authority for scan completion (scanTick).
-     */
-    private val desiredKeys = LinkedHashSet<ChunkKey>()
-
-    /** Refill cadence guard (absolute world tick). */
-    private var lastRefillTick: Long = 0L
 
     /** Active-scan heartbeat cadence guard (absolute world tick). */
     private var lastHeartbeatTick: Long = 0L
@@ -107,6 +85,12 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
      */
     fun tick() {
         metadataApplier?.tick()
+
+        if (!activeScan.get()) return
+        val m = map ?: return
+        val tickNow = server?.overworld?.time ?: 0L
+        maybeEmitActiveHeartbeat(tickNow, m)
+        maybeFinalizeActiveScan(m)
     }
 
     /** Application ingestion boundary for future providers (e.g. file-based readers). */
@@ -136,14 +120,11 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         server = null
         activeScan.set(false)
         map = null
-        demandPhase = DemandPhase.ENGINE_FALLBACK
         fileMetadataProvider?.close()
         fileMetadataProvider = null
         metadataApplier = null
         consumer = null
         plannedChunks = 0
-        desiredKeys.clear()
-        lastRefillTick = 0L
         lastHeartbeatTick = 0L
         lastHeartbeatScanned = 0
         completionEmittedForCurrentScan = false
@@ -208,14 +189,9 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
 
         plannedChunks = scanMap.totalChunks()
         completionEmittedForCurrentScan = false
-        desiredKeys.clear()
-        // Force an immediate first refill (cadence guard) on the next desiredChunks() call.
         val tickNow = srv.overworld.time
-        lastRefillTick =
-                tickNow - MementoConstants.MEMENTO_SCAN_DESIRE_REFILL_EVERY_TICKS
         lastHeartbeatTick = tickNow
         lastHeartbeatScanned = scanMap.scannedChunks()
-        demandPhase = DemandPhase.ENGINE_FALLBACK
 
         // If already complete, emit completion immediately without entering active scan mode.
         if (scanMap.isComplete()) {
@@ -234,7 +210,6 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         if (provider != null) {
             val started = provider.start(discoveredChunks, tickNow)
             if (started) {
-                demandPhase = DemandPhase.FILE_PRIMARY
                 MementoLog.info(
                         MementoConcept.SCANNER,
                         "scan file-primary phase started chunks={}",
@@ -263,105 +238,16 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         return 1
     }
 
-    override fun desiredChunks(): Sequence<ChunkRef> {
-        if (!activeScan.get()) return emptySequence()
-        val m = map ?: return emptySequence()
-
-        if (demandPhase == DemandPhase.FILE_PRIMARY && !transitionToFallbackWhenReady(m)) {
-            // While file-primary is running (or queued facts are draining), proactive driver demand
-            // remains OFF and only passive/unsolicited enrichment applies.
-            return emptySequence()
+    private fun maybeFinalizeActiveScan(map: WorldMementoMap) {
+        if (map.isComplete()) {
+            emitCompleted(reason = "complete", map = map)
+            return
         }
 
-        val tickNow = server?.overworld?.time ?: 0L
-        reconcileAndRefillDemand(tickNow, m)
-        maybeEmitActiveHeartbeat(tickNow, m)
-
-        if (desiredKeys.isEmpty()) {
-            // Defensive: under the locked invariants, exhaustion may only happen when the map is complete.
-            // If we still have missing entries, force a refill once (cadence-safe) before giving up.
-            if (!m.isComplete() && m.missingCount() > 0) {
-                lastRefillTick =
-                        tickNow - MementoConstants.MEMENTO_SCAN_DESIRE_REFILL_EVERY_TICKS
-                reconcileAndRefillDemand(tickNow, m)
-            }
-            if (desiredKeys.isEmpty()) {
-                emitCompleted(
-                        reason = if (m.isComplete()) "exhausted" else "exhausted_but_missing",
-                        map = m
-                )
-                return emptySequence()
-            }
-        }
-
-        return desiredKeys.asSequence().map { key ->
-            ChunkRef(key.world, ChunkPos(key.chunkX, key.chunkZ))
-        }
-    }
-
-    private fun reconcileAndRefillDemand(tickNow: Long, map: WorldMementoMap) {
-        // 1) Reconcile: drop any keys that no longer need fallback demand.
-        if (desiredKeys.isNotEmpty()) {
-            val it = desiredKeys.iterator()
-            while (it.hasNext()) {
-                val key = it.next()
-                if (!needsFallbackDemand(map, key)) {
-                    it.remove()
-                }
-            }
-        }
-
-        // 2) Watermark refill, bounded by cadence.
-        val activeBeforeRefill = desiredKeys.size
-        if (activeBeforeRefill >= MementoConstants.MEMENTO_SCAN_DESIRE_LOW_WATERMARK) return
-        if (tickNow != 0L &&
-                        (tickNow - lastRefillTick) <
-                                MementoConstants.MEMENTO_SCAN_DESIRE_REFILL_EVERY_TICKS
-        )
-                return
-
-        lastRefillTick = tickNow
-
-        val target = MementoConstants.MEMENTO_SCAN_DESIRE_HIGH_WATERMARK
-        val refillAdded = mutableListOf<ChunkKey>()
-        while (desiredKeys.size < target) {
-            val needed = target - desiredKeys.size
-            // Fallback demand is sourced from unresolved leftovers after file-primary pass
-            // (signals absent and/or still unscanned), not from the original discovery set.
-            val candidates = fallbackCandidates(map, desiredKeys.size + needed)
-            if (candidates.isEmpty()) break
-            var addedAny = false
-            for (k in candidates) {
-                if (desiredKeys.size >= target) break
-                if (desiredKeys.add(k)) {
-                    refillAdded += k
-                    addedAny = true
-                }
-            }
-            // Safety: if the map returned only keys already desired, stop to avoid tight loops.
-            if (!addedAny) break
-        }
-
-        if (refillAdded.isNotEmpty()) {
-            val head = refillAdded.first()
-            val tail = refillAdded.last()
-            MementoLog.info(
-                    MementoConcept.SCANNER,
-                    "Scanner fallback demand refill from unresolved leftovers. active={} added={} activeNow={} head={} r=({}, {}) c=({}, {}) tail={} r=({}, {}) c=({}, {}).",
-                    activeBeforeRefill,
-                    refillAdded.size,
-                    desiredKeys.size,
-                    head.world.value.toString(),
-                    head.regionX,
-                    head.regionZ,
-                    head.chunkX,
-                    head.chunkZ,
-                    tail.world.value.toString(),
-                    tail.regionX,
-                    tail.regionZ,
-                    tail.chunkX,
-                    tail.chunkZ,
-            )
+        val providerComplete = fileMetadataProvider?.isComplete() ?: true
+        val ingestionDrained = (metadataApplier?.pendingCount() ?: 0) <= 0
+        if (providerComplete && ingestionDrained) {
+            emitCompleted(reason = "exhausted_but_missing", map = map)
         }
     }
 
@@ -386,65 +272,11 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
                 plannedChunks,
                 progressPctText,
                 deltaScanned,
-                desiredKeys.size,
+                0,
         )
 
         lastHeartbeatTick = tickNow
         lastHeartbeatScanned = scanned
-    }
-
-    private fun transitionToFallbackWhenReady(map: WorldMementoMap): Boolean {
-        val providerComplete = fileMetadataProvider?.isComplete() ?: true
-        val ingestionDrained = (metadataApplier?.pendingCount() ?: 0) <= 0
-        if (!providerComplete || !ingestionDrained) {
-            return false
-        }
-
-        demandPhase = DemandPhase.ENGINE_FALLBACK
-        val tickNow = server?.overworld?.time ?: 0L
-        lastRefillTick = tickNow - MementoConstants.MEMENTO_SCAN_DESIRE_REFILL_EVERY_TICKS
-        MementoLog.info(
-                MementoConcept.SCANNER,
-                "scan transitioned to engine fallback demand unresolvedLeftovers={}",
-                unresolvedFallbackCount(map),
-        )
-        return true
-    }
-
-    private fun fallbackCandidates(map: WorldMementoMap, limit: Int): List<ChunkKey> {
-        if (limit <= 0) return emptyList()
-
-        val unresolvedScanned =
-                map.snapshot()
-                        .asSequence()
-                        .filter { it.signals == null }
-                        .map { it.key }
-
-        val unscanned = map.missingSignals(limit)
-
-        return (unresolvedScanned + unscanned.asSequence())
-                .distinct()
-                .sortedWith(
-                        compareBy(
-                                { it.world.value.toString() },
-                                { it.regionX },
-                                { it.regionZ },
-                                { it.chunkX },
-                                { it.chunkZ },
-                        )
-                )
-                .take(limit)
-                .toList()
-    }
-
-    private fun unresolvedFallbackCount(map: WorldMementoMap): Int {
-        val unresolvedScanned = map.snapshot().count { it.signals == null }
-        val unscanned = map.missingCount()
-        return unresolvedScanned + unscanned
-    }
-
-    private fun needsFallbackDemand(map: WorldMementoMap, key: ChunkKey): Boolean {
-        return map.isMissing(key) || !map.hasSignals(key)
     }
 
     override fun onChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
@@ -464,7 +296,6 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         // Always consume metadata into the map (passive/reactive behavior).
         consumer?.onChunkLoaded(world, chunk)
         m.markScanned(key, world.time)
-        desiredKeys.remove(key)
         // If not active scan, we do not drive demand; we only enrich the map.
         if (!activeScan.get()) return
 
@@ -493,7 +324,6 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
 
         // Best-effort coverage: record scan tick even when no chunk was accessible for propagation.
         m.markScanned(key, world.time)
-        desiredKeys.remove(key)
 
         if (!activeScan.get()) return
         if (m.isComplete()) {
@@ -501,12 +331,7 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         }
     }
 
-    /**
-     * Ensures the scanner substrate exists outside active scan mode.
-     *
-     * This keeps unsolicited engine chunk-load callbacks observable before `/memento scan` starts,
-     * while preserving the demand boundary (`desiredChunks()` remains empty unless active scan is on).
-     */
+    /** Ensures the scanner substrate exists outside active scan mode. */
     private fun ensureSubstrate(): WorldMementoMap {
         val existing = map
         if (existing != null) {
@@ -539,17 +364,10 @@ class WorldScanner : ChunkLoadProvider, ChunkAvailabilityListener {
         }
     }
 
-    private enum class DemandPhase {
-        FILE_PRIMARY,
-        ENGINE_FALLBACK,
-    }
-
     private fun emitCompleted(reason: String, map: WorldMementoMap) {
         if (!activeScan.compareAndSet(true, false)) return
         if (completionEmittedForCurrentScan) return
         completionEmittedForCurrentScan = true
-
-        desiredKeys.clear()
 
         val srv = server
         if (srv == null) {

@@ -15,14 +15,13 @@ import net.minecraft.world.chunk.WorldChunk
  * Infrastructure-owned chunk load driver.
  *
  * Responsibility boundaries:
- * - Providers (RENEWAL, SCANNER) express *desire* only (which chunks would be useful).
+ * - Providers (RENEWAL) express *desire* only (which chunks would be useful).
  * - The DRIVER is the sole owner of engine subscriptions and ticket pressure.
  * - The engine decides *when* chunks load and whether they ever reach a stable FULLY_LOADED state.
  *
  * Pressure balancing:
- * - The DRIVER arbitrates pressure across three origins: 1) renewal desire 2) scanner desire 3)
- * unsolicited engine loads (external pressure)
- * - Renewal is always prioritized over scanning.
+ * - The DRIVER arbitrates pressure across two origins: 1) renewal desire 2) unsolicited engine
+ *   loads (external pressure)
  * - Under active unsolicited pressure (unsolicited engine chunk loads), the driver backs off
  * entirely and does not issue new tickets. Already-issued tickets remain in place.
  *
@@ -58,7 +57,6 @@ class ChunkLoadDriver {
     }
 
     private var renewalProvider: ChunkLoadProvider? = null
-    private var scanProvider: ChunkLoadProvider? = null
     private val listeners = mutableListOf<ChunkAvailabilityListener>()
     private var server: MinecraftServer? = null
 
@@ -131,10 +129,6 @@ class ChunkLoadDriver {
         renewalProvider = provider
     }
 
-    fun registerScanProvider(provider: ChunkLoadProvider) {
-        scanProvider = provider
-    }
-
     fun registerConsumer(listener: ChunkAvailabilityListener) {
         listeners += listener
     }
@@ -148,16 +142,11 @@ class ChunkLoadDriver {
 
         val s = server ?: return
 
-        // 1) Recompute demand snapshot (renewal first, then scanner).
+        // 1) Recompute demand snapshot.
         register.beginDemandSnapshot()
         markDesiredFromProvider(
                 renewalProvider,
                 ChunkLoadRegister.RequestSource.RENEWAL,
-                nowTick = tickCounter
-        )
-        markDesiredFromProvider(
-                scanProvider,
-                ChunkLoadRegister.RequestSource.SCANNER,
                 nowTick = tickCounter
         )
 
