@@ -156,3 +156,11 @@ When detected, explicitly prompt:
 "Does this require ADR or invariant formalization?"
 
 Do not author doctrine autonomously without user/lock approval.
+
+## ADR Record Handling Policy
+
+- Existing ADR entries are immutable once accepted.
+- Do not edit the body text of existing ADRs.
+- If an ADR is no longer current, only mark it as superseded in its title.
+- Record new decisions by appending a new ADR entry.
+- New ADRs may reference older ADRs, including superseded ones.
