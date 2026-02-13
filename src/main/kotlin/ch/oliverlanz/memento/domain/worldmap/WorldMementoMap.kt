@@ -14,7 +14,7 @@ data class ChunkScanSnapshotEntry(
 /**
  * Provenance for how the scanner resolved a chunk's scan outcome.
  *
- * Contract-first schema for Chunk A:
+ * The value captures the evidence path that produced the scan record:
  * - [FILE_PRIMARY]: metadata came from primary region-file reads.
  * - [ENGINE_FALLBACK]: metadata required an engine/runtime fallback path.
  * - [ENGINE_UNSOLICITED]: metadata arrived from unsolicited engine chunk availability.
@@ -27,8 +27,6 @@ enum class ChunkScanProvenance {
 
 /**
  * Reason why a scanned chunk remains unresolved (signals absent) after a best-effort attempt.
- *
- * Contract-first schema for Chunk A only. Behavior wiring is intentionally deferred to later chunks.
  */
 enum class ChunkScanUnresolvedReason {
     FILE_LOCKED,

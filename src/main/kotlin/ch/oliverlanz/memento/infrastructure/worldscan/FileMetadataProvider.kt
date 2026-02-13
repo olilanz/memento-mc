@@ -5,7 +5,7 @@ import ch.oliverlanz.memento.application.worldscan.WorldDiscoveryPlan
 /**
  * Infrastructure-owned file metadata provider lifecycle.
  *
- * Chunk C contract:
+ * Contract:
  * - input is discovery work from [WorldDiscoveryPlan]
  * - provider runs off-thread
  * - provider owns exactly two passes (immediate + one delayed transient reconciliation)
@@ -29,6 +29,7 @@ interface FileMetadataProvider : AutoCloseable {
 enum class FileMetadataProviderLifecycle {
     IDLE,
     RUNNING,
+    CANCELLED,
     COMPLETE,
 }
 
@@ -40,4 +41,3 @@ data class FileMetadataProviderStatus(
     val secondPassProcessed: Int = 0,
     val emittedFacts: Int = 0,
 )
-
