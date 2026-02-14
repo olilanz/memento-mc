@@ -15,6 +15,20 @@ import kotlin.reflect.KClass
 object StoneMapService {
 
     /**
+     * Returns the influenced chunks for a specific stone identity in its own dimension.
+     *
+     * This is a read-only projection of [StoneTopology.influenceSnapshot].
+     */
+    fun influencedChunks(stone: StoneView): Set<ChunkPos> {
+        return StoneTopology
+            .influenceSnapshot()
+            .dimensions[stone.dimension]
+            ?.byStone
+            ?.get(stone.name)
+            ?: emptySet()
+    }
+
+    /**
      * Returns the dominant stone kind per influenced chunk for the given dimension.
      *
      * This is a read-only projection of [StoneTopology.influenceSnapshot].
@@ -29,4 +43,3 @@ object StoneMapService {
             ?: emptyMap()
     }
 }
-

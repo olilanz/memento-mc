@@ -30,13 +30,16 @@ The **scanner** exists to bridge these mechanisms. It observes the world over ti
 ```mermaid
 flowchart LR
     Player[Player actions]
-    Stones[Stones & maturation]
+    StoneAuthority[Stone authority]
+    StoneMap[Stone map]
     Scanner[World scanner]
     WorldMap[WorldMap]
     Renewal[Autonomous renewal]
 
-    Player --> Stones
-    Stones -->|intent| Renewal
+    Player --> StoneAuthority
+    StoneAuthority -->|lifecycle events| Renewal
+    StoneAuthority -->|projection input| StoneMap
+    StoneMap -->|dominant influence| Renewal
     Scanner -->|observations| WorldMap
     WorldMap --> Renewal
 ```
@@ -108,9 +111,16 @@ Other mods may load chunks for their own purposes. Memento must coexist with the
 
 ### Events as the domain boundary
 
-All interaction between the Minecraft engine and Memento’s domain logic happens through **typed domain events** (ADR‑006).
+All interaction between runtime boundaries and domain logic happens through **typed domain events and typed metadata facts** (ADR‑006, ADR‑013).
 
-Engine callbacks are treated as *facts*. They are recorded and processed later on controlled execution paths. No semantic decisions are made inside engine threads.
+Boundary doctrine is explicit:
+
+* Engine callbacks are treated as boundary signals, not as direct mutation points.
+* Scanner and Driver publish metadata facts into domain-owned ingestion.
+* Stone lifecycle transitions are emitted as typed domain events.
+* Renewal-side recomputation is event-driven and consumes dominance from `StoneMapService`.
+
+No semantic decisions are made inside engine threads.
 
 ```mermaid
 sequenceDiagram
@@ -125,11 +135,27 @@ This decoupling prevents concurrency bugs and makes progress observable and expl
 
 ## 5. Core components and responsibilities
 
-### StoneTopology
+### Stone authority (current implementation name: `StoneTopology`)
 
-`StoneTopology` is the sole authority on how stone influences combine. All renewal eligibility resolution flows through it (ADR‑004).
+Stone authority owns stone register lifecycle semantics:
 
-If this component is wrong or bypassed, the system loses semantic consistency. For that reason, no other component may infer stone influence independently.
+* placement and removal
+* maturity progression and lifecycle transitions
+* persistence of stone definitions
+
+It does not own factual world memory and does not own scanner orchestration.
+
+### Stone map (`StoneMapService`)
+
+`StoneMapService` is the sole influence-projection authority for dominant stone resolution at chunk granularity (ADR‑014).
+
+It projects from stone authority state and provides read surfaces for consumers such as renewal and world-map overlays. No other component may infer dominance independently.
+
+### Renewal engine
+
+Renewal consumes world facts from `WorldMapService` and stone influence from `StoneMapService`.
+
+Renewal eligibility derivation is owned on the renewal side and must use `StoneMapService` for dominant-stone lookup rather than re-deriving stone influence internally.
 
 ### WorldMap
 
@@ -194,6 +220,8 @@ Visual effects explain what the system is doing, but they never influence decisi
 flowchart TB
     FileSystem --> Scanner
     Scanner --> WorldMapService
+    StoneAuthority --> StoneMap
+    StoneMap --> Renewal
     Driver --> Engine
     Engine --> Driver
     Driver --> WorldMapService
@@ -220,6 +248,9 @@ The following properties must remain true:
 * Piggyback unsolicited loads
 * WorldMap is authoritative memory
 * WorldMapService is the sole world map lifecycle and mutation authority
+* Stone authority owns stone placement lifecycle and persistence
+* StoneMapService is the sole dominant-stone projection authority
+* Renewal and overlays consume StoneMapService for dominance lookup
 * Scanner and Driver publish boundary-safe metadata facts, not chunk runtime objects
 * Driver emits world map metadata facts only when full-load accessibility is reached
 * Expiry outcomes without full-load accessibility do not mutate WorldMap
@@ -254,10 +285,21 @@ Detection observes eligibility; execution applies change when the world allows i
 Minecraft owns chunk lifecycle and scheduling.
 → Overriding this caused instability and engine conflicts.
 
-### ADR‑004: StoneTopology is sole influence authority
+### ADR‑004: StoneTopology is sole influence authority (superseded by ADR‑014)
 
 All stone influence resolution flows through StoneTopology.
 → Duplicate logic drifted and produced conflicting outcomes.
+
+### ADR‑014: Split stone lifecycle authority and stone influence projection authority
+
+Stone lifecycle ownership remains in stone authority (current implementation name: `StoneTopology`) for placement, removal, maturity transitions, and persistence.
+
+Dominant-stone projection at chunk granularity is owned solely by `StoneMapService`.
+
+Renewal-side derivation consumes `StoneMapService` dominance and must not re-derive influence independently.
+
+Class renaming to `StoneAuthority` is deferred until functional parity validation is complete.
+→ This split preserves lifecycle clarity while removing projection duplication risk across renewal and overlays.
 
 ### ADR‑005: One Witherstone → one RenewalBatch
 
