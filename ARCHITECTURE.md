@@ -197,6 +197,26 @@ There is no internal scheduler. Load pacing relies on Minecraft’s own scheduli
 
 For scanning doctrine, the driver has no scanner-demand responsibility. It serves renewal demand and ambient observation pathways, and it does not emit map facts for expiry outcomes that never reached full-load accessibility.
 
+### Pulse generator
+
+Pulse generation is an infrastructure concern that shields domain logic from raw server tick handling.
+
+The pulse generator emits cadence signals only. It does not call domain components with semantic intent and it does not decide what business logic should run.
+
+Cadence tiers are centralized in `MementoConstants` and currently defined as:
+
+* HIGH = every 1 tick
+* MEDIUM = every 10 ticks
+* LOW = every 100 ticks
+* ULTRA_LOW = every 1000 ticks
+* EXTREME_LOW = every 10000 ticks
+
+Cadence delivery doctrine:
+
+* Domain and application components subscribe to cadence signals and own their own logic.
+* Startup wiring may register subscriptions, but must not encode semantic execution policy inside the pulse generator.
+* Non-HIGH cadences are phase-staggered so they do not co-fire on the same server tick.
+
 ```mermaid
 stateDiagram-v2
     [*] --> Requested
@@ -219,6 +239,8 @@ Visual effects explain what the system is doing, but they never influence decisi
 ```mermaid
 flowchart TB
     FileSystem --> Scanner
+    EngineTick --> Pulse
+    Pulse --> DomainSubscribers
     Scanner --> WorldMapService
     StoneAuthority --> StoneMap
     StoneMap --> Renewal
@@ -244,7 +266,10 @@ The following properties must remain true:
 * Driver owns engine execution for renewal demand and ambient load observation handling
 * Scanner does not generate proactive engine demand
 * No central orchestrator
+* Pulse generator is cadence transport only, never semantic orchestration
 * No internal load scheduler
+* Cadence constants are centralized in `MementoConstants` with no in-code magic cadence numbers
+* Non-HIGH cadence tiers are phase-staggered and must not co-fire on the same server tick
 * Piggyback unsolicited loads
 * WorldMap is authoritative memory
 * WorldMapService is the sole world map lifecycle and mutation authority
@@ -354,3 +379,13 @@ World map lifecycle and mutation authority are centralized in domain `WorldMapSe
 Driver serves renewal demand plus ambient load observation handling, and emits world map facts only when full-load accessibility is reached. Expiry outcomes without full-load accessibility remain lifecycle signals and do not mutate world map state.
 
 → Direct scanner-owned map lifecycle and chunk-object propagation blurred authority and thread boundaries, increasing coupling and reducing explainability.
+
+### ADR‑016: Infrastructure pulse generator and cadence shielding
+
+Server tick handling is shielded through an infrastructure pulse generator that emits cadence signals and does not execute semantic domain decisions.
+
+Domain and application components subscribe to cadence tiers and own their own logic. Startup wiring may bind subscribers but does not transfer semantic authority to the pulse generator.
+
+Cadence tier values are centralized in `MementoConstants` and currently locked to 1, 10, 100, 1000, and 10000 tick intervals. Non-HIGH cadence tiers are phase-staggered and must not co-fire on the same server tick.
+
+→ Direct per-component raw tick handling and ad-hoc cadence literals caused drift in politeness policy and reduced runtime explainability.

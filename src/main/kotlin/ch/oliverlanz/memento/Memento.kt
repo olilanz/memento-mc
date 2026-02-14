@@ -19,6 +19,10 @@ import ch.oliverlanz.memento.domain.renewal.RenewalChunkObservationBridge
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerLogging
 import ch.oliverlanz.memento.domain.stones.StoneAuthorityWiring
 import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
+import ch.oliverlanz.memento.infrastructure.pulse.PulseCadence
+import ch.oliverlanz.memento.infrastructure.pulse.PulseClock
+import ch.oliverlanz.memento.infrastructure.pulse.PulseEvents
+import ch.oliverlanz.memento.infrastructure.pulse.PulseGenerator
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanCsvExporter
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
 import ch.oliverlanz.memento.infrastructure.worldscan.TwoPassRegionFileMetadataProvider
@@ -38,11 +42,34 @@ object Memento : ModInitializer {
 
     private var worldScanner: WorldScanner? = null
     private var worldMapService: WorldMapService? = null
+    private val pulseGenerator = PulseGenerator()
 
     // Renewal wiring (application / infrastructure)
     private var renewalInitialObserver: RenewalInitialObserver? = null
     private var renewalChunkLoadProvider: RenewalChunkLoadProvider? = null
     private var chunkLoadDriver: ChunkLoadDriver? = null
+
+    private val onHighPulse: (PulseClock) -> Unit = {
+        gameTimeTracker.tick()
+        chunkLoadDriver?.tick()
+    }
+
+    private val onMediumPulse: (PulseClock) -> Unit = {
+        worldMapService?.tick()
+    }
+
+    private val onLowPulse: (PulseClock) -> Unit = {
+        worldScanner?.tick()
+        RenewalRegenerationBridge.tickThreadProcess()
+    }
+
+    private val onUltraLowPulse: (PulseClock) -> Unit = {
+        // Reserved for future heavy maintenance cadence.
+    }
+
+    private val onExtremeLowPulse: (PulseClock) -> Unit = {
+        // Reserved for future very-low-frequency maintenance cadence.
+    }
 
     // Single listener to fan out RenewalTracker domain events
     private val renewalEventListener: (RenewalEvent) -> Unit = { e ->
@@ -65,6 +92,13 @@ object Memento : ModInitializer {
         ChunkLoadDriver.installEngineHooks()
 
         ServerLifecycleEvents.SERVER_STARTED.register { server: MinecraftServer ->
+
+            pulseGenerator.reset()
+            PulseEvents.subscribe(PulseCadence.HIGH, onHighPulse)
+            PulseEvents.subscribe(PulseCadence.MEDIUM, onMediumPulse)
+            PulseEvents.subscribe(PulseCadence.LOW, onLowPulse)
+            PulseEvents.subscribe(PulseCadence.ULTRA_LOW, onUltraLowPulse)
+            PulseEvents.subscribe(PulseCadence.EXTREME_LOW, onExtremeLowPulse)
 
             worldMapService = WorldMapService().also { it.attach() }
 
@@ -124,6 +158,12 @@ object Memento : ModInitializer {
 
         ServerLifecycleEvents.SERVER_STOPPING.register {
 
+            PulseEvents.unsubscribe(PulseCadence.EXTREME_LOW, onExtremeLowPulse)
+            PulseEvents.unsubscribe(PulseCadence.ULTRA_LOW, onUltraLowPulse)
+            PulseEvents.unsubscribe(PulseCadence.LOW, onLowPulse)
+            PulseEvents.unsubscribe(PulseCadence.MEDIUM, onMediumPulse)
+            PulseEvents.unsubscribe(PulseCadence.HIGH, onHighPulse)
+
             gameTimeTracker.detach()
             RenewalTracker.unsubscribe(renewalEventListener)
 
@@ -156,10 +196,7 @@ object Memento : ModInitializer {
 
         // Transport tick only
         ServerTickEvents.END_SERVER_TICK.register {
-            gameTimeTracker.tick()
-            worldMapService?.tick()
-            chunkLoadDriver?.tick()
-            worldScanner?.tick()
+            pulseGenerator.onServerTick()
         }
     }
 }
