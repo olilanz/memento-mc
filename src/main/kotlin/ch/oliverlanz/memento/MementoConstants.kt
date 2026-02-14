@@ -12,8 +12,11 @@ object MementoConstants {
      * Infrastructure pulse generator (cadence transport)
      * ------------------------------------------------------------------ */
 
-    /** Every server tick (baseline cadence). */
+    /** Every server tick (pulse baseline cadence). */
     const val PULSE_CADENCE_HIGH_TICKS: Long = 1L
+
+    /** Clock transport publication cadence, expressed in HIGH pulses. */
+    const val GAME_CLOCK_PUBLISH_EVERY_HIGH_PULSES: Long = 2L
 
     /** Medium cadence for bounded recurring work. */
     const val PULSE_CADENCE_MEDIUM_TICKS: Long = 10L

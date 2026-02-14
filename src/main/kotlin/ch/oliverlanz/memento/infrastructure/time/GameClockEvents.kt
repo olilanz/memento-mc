@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.application.time
+package ch.oliverlanz.memento.infrastructure.time
 
 /**
  * Application-level event bus for high-frequency clock updates.

@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.application.time
+package ch.oliverlanz.memento.infrastructure.time
 
 /**
  * Snapshot of game time, derived from the overworld.
@@ -66,4 +66,3 @@ fun GameTicks.toGameSeconds(): GameSeconds =
     GameSeconds(value.toDouble() / GameTimeUnits.TICKS_PER_SECOND.toDouble())
 
 fun Long.asGameTicks(): GameTicks = GameTicks(this)
-
