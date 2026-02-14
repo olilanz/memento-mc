@@ -19,15 +19,9 @@ object StoneAuthorityWiring {
     private var serverRef: MinecraftServer? = null
 
     fun onServerStarted(server: MinecraftServer) {
-        // Subscribe to domain events BEFORE attach(), so we observe startup lifecycle transitions.
+        // Subscribe to domain events before explicit startup stone processing.
         attachLoggingOnce()
-
         serverRef = server
-
-        MementoLog.info(MementoConcept.STONE, "attach trigger=SERVER_START")
-        StoneAuthority.attach(server)
-        StoneAuthority.evaluate(StoneLifecycleTrigger.SERVER_START)
-        logLoadedSnapshot()
     }
 
     fun onServerStopping() {

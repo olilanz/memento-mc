@@ -44,30 +44,66 @@ object StoneAuthority {
 
     /**
      * Initialize once per server start.
-     * Loads persisted stones (fault-tolerant: corrupt => empty) and makes the register ready.
+     * Makes the register ready for authoritative mutations.
      */
     fun attach(server: MinecraftServer) {
         if (initialized) return
         this.server = server
         initialized = true
 
-        val loaded = StoneAuthorityPersistence.load(server)
+        stones.clear()
+        influenceTree = StoneInfluenceTree.EMPTY
+    }
 
+    /**
+     * Explicit bootstrap phase: process persisted stone definitions through the same
+     * authoritative mutation + lifecycle-transition pathway used at runtime.
+     */
+    fun processPersistedStones(trigger: StoneLifecycleTrigger) {
+        requireInitialized()
+        val s = checkNotNull(server) { "StoneAuthority not attached." }
+
+        val loaded = StoneAuthorityPersistence.load(s)
         log.info(ch.oliverlanz.memento.infrastructure.observability.MementoConcept.STONE, "persistence loaded count={}", loaded.size)
 
-        stones.clear()
-        for (s in loaded) {
-            // Enforce name uniqueness: ignore duplicates on disk (first wins).
-            if (!stones.containsKey(s.name)) stones[s.name] = s
+        val seen = linkedSetOf<String>()
+
+        for (stone in loaded) {
+            if (!seen.add(stone.name)) {
+                // Enforce name uniqueness from persistence input (first wins).
+                continue
+            }
+
+            try {
+                when (stone) {
+                    is Witherstone -> addWitherstone(
+                        name = stone.name,
+                        dimension = stone.dimension,
+                        position = stone.position,
+                        radius = stone.radius,
+                        daysToMaturity = stone.daysToMaturity,
+                        trigger = trigger,
+                    )
+
+                    is Lorestone -> addLorestone(
+                        name = stone.name,
+                        dimension = stone.dimension,
+                        position = stone.position,
+                        radius = stone.radius,
+                        trigger = trigger,
+                    )
+                }
+            } catch (e: IllegalArgumentException) {
+                log.warn(
+                    ch.oliverlanz.memento.infrastructure.observability.MementoConcept.STONE,
+                    "persisted stone skipped name='{}' reason='{}'",
+                    stone.name,
+                    e.message ?: "invalid definition",
+                )
+            }
         }
 
-        log.info(ch.oliverlanz.memento.infrastructure.observability.MementoConcept.STONE, "register after load count={}", stones.size)
-
-        // Build derived influence snapshot for the loaded register.
-        rebuildInfluenceTree()
-
-        // Note: lifecycle evaluation is orchestrated externally (e.g., server start hook).
-        persist()
+        log.info(ch.oliverlanz.memento.infrastructure.observability.MementoConcept.STONE, "register after persistence processing count={}", stones.size)
     }
 
     fun detach() {
@@ -209,6 +245,7 @@ object StoneAuthority {
         dimension: RegistryKey<World>,
         position: BlockPos,
         radius: Int,
+        trigger: StoneLifecycleTrigger = StoneLifecycleTrigger.OP_COMMAND,
     ) {
         requireInitialized()
         require(name.isNotBlank()) { "Stone name must not be blank." }
@@ -232,7 +269,7 @@ object StoneAuthority {
                 stone = l,
                 from = null,
                 to = StoneLifecycleState.PLACED,
-                trigger = StoneLifecycleTrigger.OP_COMMAND,
+                trigger = trigger,
             )
         )
 

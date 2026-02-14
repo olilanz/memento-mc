@@ -38,6 +38,7 @@ object Commands {
                  * ====================== */
                 .then(literal("inspect")
                     .then(argument("name", StringArgumentType.word())
+                        .suggests(CommandHandlers::suggestAnyStoneName)
                         .executes { ctx ->
                             CommandHandlers.inspect(ctx.source, StringArgumentType.getString(ctx, "name"))
                         }
@@ -53,6 +54,7 @@ object Commands {
                         CommandHandlers.visualizeAll(ctx.source)
                     }
                     .then(argument("name", StringArgumentType.word())
+                        .suggests(CommandHandlers::suggestAnyStoneName)
                         .executes { ctx ->
                             CommandHandlers.visualize(ctx.source, StringArgumentType.getString(ctx, "name"))
                         }
@@ -135,6 +137,7 @@ object Commands {
                 .then(literal("remove")
                     .then(literal("witherstone")
                         .then(argument("name", StringArgumentType.word())
+                            .suggests(CommandHandlers::suggestWitherstoneName)
                             .executes { ctx ->
                                 CommandHandlers.remove(ctx.source, StringArgumentType.getString(ctx, "name"))
                             }
@@ -142,6 +145,7 @@ object Commands {
                     )
                     .then(literal("lorestone")
                         .then(argument("name", StringArgumentType.word())
+                            .suggests(CommandHandlers::suggestLorestoneName)
                             .executes { ctx ->
                                 CommandHandlers.remove(ctx.source, StringArgumentType.getString(ctx, "name"))
                             }
@@ -155,6 +159,7 @@ object Commands {
                  * ====================== */
                 .then(literal("alter")
                     .then(argument("name", StringArgumentType.word())
+                        .suggests(CommandHandlers::suggestAnyStoneName)
                         .then(literal("radius")
                             .then(argument("value", IntegerArgumentType.integer(0, 10))
                                 .executes { ctx ->
