@@ -6,7 +6,7 @@ import ch.oliverlanz.memento.domain.events.StoneLifecycleTransition
 import ch.oliverlanz.memento.domain.events.StoneLifecycleTrigger
 import ch.oliverlanz.memento.domain.renewal.StoneRenewalDerivation
 import ch.oliverlanz.memento.MementoConstants
-import ch.oliverlanz.memento.infrastructure.StoneTopologyPersistence
+import ch.oliverlanz.memento.infrastructure.StoneAuthorityPersistence
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
 import net.minecraft.util.math.BlockPos
@@ -17,7 +17,7 @@ import net.minecraft.world.World
      * New-generation stone register (shadow).
  *
      * Authority:
- * - StoneTopology owns stone lifecycle state (register, placement, maturity, persistence).
+ * - StoneAuthority owns stone lifecycle state (register, placement, maturity, persistence).
  * - Renewal derivation consumes this lifecycle state through renewal-side orchestration.
  *
      * Invariants:
@@ -26,7 +26,7 @@ import net.minecraft.world.World
  * - Lifecycle transitions are explicit and observable via structured events.
  * - Persistence is overwrite-on-change (no dirty state by design).
  */
-object StoneTopology {
+object StoneAuthority {
 
     private val log = ch.oliverlanz.memento.infrastructure.observability.MementoLog
 
@@ -51,7 +51,7 @@ object StoneTopology {
         this.server = server
         initialized = true
 
-        val loaded = StoneTopologyPersistence.load(server)
+        val loaded = StoneAuthorityPersistence.load(server)
 
         log.info(ch.oliverlanz.memento.infrastructure.observability.MementoConcept.STONE, "persistence loaded count={}", loaded.size)
 
@@ -501,10 +501,10 @@ object StoneTopology {
     }
     private fun persist() {
         val s = server ?: return
-        StoneTopologyPersistence.save(s, stones.values.toList())
+        StoneAuthorityPersistence.save(s, stones.values.toList())
     }
 
     private fun requireInitialized() {
-        check(initialized) { "StoneTopology not attached. Call StoneTopology.attach(server) on SERVER_STARTED." }
+        check(initialized) { "StoneAuthority not attached. Call StoneAuthority.attach(server) on SERVER_STARTED." }
     }
 }

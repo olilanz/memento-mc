@@ -5,7 +5,7 @@ import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
 
 /**
- * Immutable influence snapshot owned by [StoneTopology].
+ * Immutable influence snapshot owned by [StoneAuthority].
  *
  * This is a derived, deterministic view rebuilt whenever the stone set changes.
  *
@@ -13,7 +13,7 @@ import net.minecraft.world.World
  *
  * The topology is the sole authority for stone influence semantics, but multiple consumers
  * (renewal, visualization, pipelines) need *efficient* read access. This tree provides that
- * without duplicating logic outside [StoneTopology].
+ * without duplicating logic outside [StoneAuthority].
  *
  * ### What is stored
  *

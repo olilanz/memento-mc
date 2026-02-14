@@ -3,7 +3,7 @@ package ch.oliverlanz.memento.application
 import ch.oliverlanz.memento.domain.events.StoneLifecycleTrigger
 import ch.oliverlanz.memento.domain.stones.Lorestone
 import ch.oliverlanz.memento.domain.stones.Stone
-import ch.oliverlanz.memento.domain.stones.StoneTopology
+import ch.oliverlanz.memento.domain.stones.StoneAuthority
 import ch.oliverlanz.memento.domain.stones.Witherstone
 import net.minecraft.entity.attribute.EntityAttributes
 import net.minecraft.server.command.ServerCommandSource
@@ -21,7 +21,7 @@ import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
  *
  * Commands.kt defines the authoritative command grammar.
  * This file contains the execution logic and delegates to the domain layer
- * (StoneTopology + RenewalTracker).
+ * (StoneAuthority + RenewalTracker).
  */
 object CommandHandlers {
 
@@ -52,7 +52,7 @@ object CommandHandlers {
 
     fun list(kind: StoneKind?, source: ServerCommandSource): Int {
         return try {
-            val stones = StoneTopology.list()
+            val stones = StoneAuthority.list()
                 .filter { stone ->
                     when (kind) {
                         null -> true
@@ -81,7 +81,7 @@ object CommandHandlers {
 
     fun inspect(source: ServerCommandSource, name: String): Int {
         return try {
-            val stone = StoneTopology.get(name)
+            val stone = StoneAuthority.get(name)
             if (stone == null) {
                 source.sendError(Text.literal("No stone named '$name'."))
                 return 0
@@ -103,7 +103,7 @@ object CommandHandlers {
     fun visualize(source: ServerCommandSource, name: String): Int {
         MementoLog.info(MementoConcept.OPERATOR, "command=visualize name='{}' by={}", name, source.name)
 
-        val stone = StoneTopology.get(name)
+        val stone = StoneAuthority.get(name)
         if (stone == null) {
             source.sendError(Text.literal("No stone named '$name'."))
             return 0
@@ -152,7 +152,7 @@ object CommandHandlers {
         val pos = resolveTargetBlockOrFail(source) ?: return 0
 
                         try {
-        StoneTopology.addWitherstone(
+        StoneAuthority.addWitherstone(
                     name = name,
                     dimension = dim,
                     position = pos,
@@ -180,7 +180,7 @@ object CommandHandlers {
         val pos = resolveTargetBlockOrFail(source) ?: return 0
 
                         try {
-        StoneTopology.addLorestone(
+        StoneAuthority.addLorestone(
                     name = name,
                     dimension = dim,
                     position = pos,
@@ -201,13 +201,13 @@ object CommandHandlers {
     fun remove(source: ServerCommandSource, name: String): Int {
         MementoLog.info(MementoConcept.OPERATOR, "command=removeStone name='{}' by={}", name, source.name)
         return try {
-            val existing = StoneTopology.get(name)
+            val existing = StoneAuthority.get(name)
             if (existing == null) {
                 source.sendError(Text.literal("No stone named '$name'."))
                 return 0
             }
 
-            StoneTopology.remove(name)
+            StoneAuthority.remove(name)
 
             source.sendFeedback({ Text.literal("Removed ${existing.javaClass.simpleName.lowercase()} '$name'.").formatted(Formatting.YELLOW) }, false)
             1
@@ -222,7 +222,7 @@ object CommandHandlers {
         MementoLog.info(MementoConcept.OPERATOR, "command=alterRadius name='{}' radius={} by={}", name, value, source.name)
 
         return try {
-            val ok = StoneTopology.alterRadius(
+            val ok = StoneAuthority.alterRadius(
                 name = name,
                 radius = value,
                 trigger = StoneLifecycleTrigger.OP_COMMAND,
@@ -251,13 +251,13 @@ object CommandHandlers {
 
         return try {
             when (
-                StoneTopology.alterDaysToMaturity(
+                StoneAuthority.alterDaysToMaturity(
                     name = name,
                     daysToMaturity = value,
                     trigger = StoneLifecycleTrigger.OP_COMMAND,
                 )
             ) {
-                StoneTopology.AlterDaysResult.OK -> {
+                StoneAuthority.AlterDaysResult.OK -> {
                     source.sendFeedback(
                         { Text.literal("Updated daysToMaturity for '$name' to $value.").formatted(Formatting.GREEN) },
                         false
@@ -265,17 +265,17 @@ object CommandHandlers {
                     1
                 }
 
-                StoneTopology.AlterDaysResult.NOT_FOUND -> {
+                StoneAuthority.AlterDaysResult.NOT_FOUND -> {
                     source.sendError(Text.literal("No stone named '$name'."))
                     0
                 }
 
-                StoneTopology.AlterDaysResult.NOT_SUPPORTED -> {
+                StoneAuthority.AlterDaysResult.NOT_SUPPORTED -> {
                     source.sendError(Text.literal("Stone '$name' does not support daysToMaturity (Lorestone)."))
                     0
                 }
 
-                StoneTopology.AlterDaysResult.ALREADY_CONSUMED -> {
+                StoneAuthority.AlterDaysResult.ALREADY_CONSUMED -> {
                     source.sendError(Text.literal("Stone '$name' is already consumed."))
                     0
                 }

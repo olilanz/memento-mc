@@ -29,7 +29,7 @@ enum class StoneLifecycleTrigger {
 }
 
 /**
- * Canonical structured event emitted by StoneTopology.
+ * Canonical structured event emitted by StoneAuthority.
  *
  * Single event type only: lifecycle state transitions.
  * Domain code does not log; logging is attached by subscribers.

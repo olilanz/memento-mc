@@ -9,7 +9,7 @@ import kotlin.reflect.KClass
  * Read-only projection surface for stone influence at chunk granularity.
  *
  * Authority boundary:
- * - Influence semantics and dominance rules remain owned by [StoneTopology].
+ * - Influence semantics and dominance rules remain owned by [StoneAuthority].
  * - This service does not mutate stone state and does not combine with factual world-map data.
  */
 object StoneMapService {
@@ -17,10 +17,10 @@ object StoneMapService {
     /**
      * Returns the influenced chunks for a specific stone identity in its own dimension.
      *
-     * This is a read-only projection of [StoneTopology.influenceSnapshot].
+     * This is a read-only projection of [StoneAuthority.influenceSnapshot].
      */
     fun influencedChunks(stone: StoneView): Set<ChunkPos> {
-        return StoneTopology
+        return StoneAuthority
             .influenceSnapshot()
             .dimensions[stone.dimension]
             ?.byStone
@@ -31,12 +31,12 @@ object StoneMapService {
     /**
      * Returns the dominant stone kind per influenced chunk for the given dimension.
      *
-     * This is a read-only projection of [StoneTopology.influenceSnapshot].
+     * This is a read-only projection of [StoneAuthority.influenceSnapshot].
      */
     fun dominantByChunk(
         dimension: RegistryKey<World>
     ): Map<ChunkPos, KClass<out Stone>> {
-        return StoneTopology
+        return StoneAuthority
             .influenceSnapshot()
             .dimensions[dimension]
             ?.dominantByChunk

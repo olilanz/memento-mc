@@ -10,11 +10,11 @@ import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import net.minecraft.server.MinecraftServer
 
 /**
- * Adapter hooks for wiring StoneTopology into the mod runtime.
+ * Adapter hooks for wiring StoneAuthority into the mod runtime.
  *
  * Keeps the integration surface small and avoids entangling legacy and shadow implementations.
  */
-object StoneTopologyHooks {
+object StoneAuthorityHooks {
     private var loggingAttached = false
     private var serverRef: MinecraftServer? = null
 
@@ -25,8 +25,8 @@ object StoneTopologyHooks {
         serverRef = server
 
         MementoLog.info(MementoConcept.STONE, "attach trigger=SERVER_START")
-        StoneTopology.attach(server)
-        StoneTopology.evaluate(StoneLifecycleTrigger.SERVER_START)
+        StoneAuthority.attach(server)
+        StoneAuthority.evaluate(StoneLifecycleTrigger.SERVER_START)
         logLoadedSnapshot()
     }
 
@@ -37,17 +37,17 @@ object StoneTopologyHooks {
         }
 
         serverRef = null
-        StoneTopology.detach()
+        StoneAuthority.detach()
     }
 
     fun onNightlyCheckpoint(days: Int) {
         MementoLog.info(MementoConcept.STONE, "maturity check trigger=NIGHTLY_TICK days={}", days)
-        StoneTopology.advanceDays(days, StoneLifecycleTrigger.NIGHTLY_TICK)
+        StoneAuthority.advanceDays(days, StoneLifecycleTrigger.NIGHTLY_TICK)
     }
 
     fun onAdminTimeAdjustment() {
         MementoLog.info(MementoConcept.STONE, "maturity check trigger=OP_COMMAND")
-        StoneTopology.evaluate(StoneLifecycleTrigger.OP_COMMAND)
+        StoneAuthority.evaluate(StoneLifecycleTrigger.OP_COMMAND)
     }
 
     private fun attachLoggingOnce() {
@@ -57,7 +57,7 @@ object StoneTopologyHooks {
     }
 
     private fun logLoadedSnapshot() {
-        val stones = StoneTopology.list()
+        val stones = StoneAuthority.list()
         MementoLog.info(MementoConcept.STONE, "loaded count={}", stones.size)
 
         for (s in stones) {

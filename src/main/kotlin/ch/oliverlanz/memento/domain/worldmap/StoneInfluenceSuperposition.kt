@@ -16,7 +16,7 @@ import kotlin.reflect.KClass
  *
  * Slice 0.9.5 semantics:
  * - Discovery is completed before this stage runs.
- * - Dominance rules are owned by [StoneTopology].
+ * - Dominance rules are owned by [StoneAuthority].
  * - The output is annotated with the convenience flags
  *   [ChunkMementoView.hasLorestoneInfluence] and [ChunkMementoView.hasWitherstoneInfluence].
  */

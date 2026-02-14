@@ -11,12 +11,18 @@ import ch.oliverlanz.memento.infrastructure.observability.MementoLog
  */
 object RenewalTrackerLogging {
 
+    private data class RenewalInfoMarker(
+        val state: RenewalBatchState,
+        val chunkCount: Int,
+    )
+
     private fun triggerLabel(trigger: RenewalTrigger): String = when (trigger) {
         RenewalTrigger.INITIAL_SNAPSHOT -> "STARTUP"
         else -> trigger.name
     }
 
     private var attached = false
+    private val lastLifecycleInfoByBatch = linkedMapOf<String, RenewalInfoMarker>()
 
     fun attachOnce() {
         if (attached) return
@@ -28,6 +34,7 @@ object RenewalTrackerLogging {
         if (!attached) return
         RenewalTracker.unsubscribe(::logEvent)
         attached = false
+        lastLifecycleInfoByBatch.clear()
     }
 
     private fun logEvent(e: RenewalEvent) {
@@ -48,7 +55,9 @@ object RenewalTrackerLogging {
                 MementoLog.debug(MementoConcept.RENEWAL, "batch='{}' {} trigger={}",
                     e.batchName,
                     if (e.trigger == RenewalTrigger.MANUAL) "definition removed" else "definition replaced",
-                    triggerLabel(e.trigger))
+                    triggerLabel(e.trigger)).also {
+                    lastLifecycleInfoByBatch.remove(e.batchName)
+                }
 
             is ChunkObserved ->
                 MementoLog.debug(MementoConcept.RENEWAL, "batch='{}' chunk=({}, {}) observed state={} trigger={}",
@@ -64,36 +73,52 @@ object RenewalTrackerLogging {
 
             is BatchCompleted ->
                 MementoLog.info(MementoConcept.RENEWAL, "renewal completed stone='{}' dim={} trigger={}",
-                    e.batchName, e.dimension.value, e.trigger.name)
+                    e.batchName, e.dimension.value, e.trigger.name).also {
+                    lastLifecycleInfoByBatch.remove(e.batchName)
+                }
 
             is BatchWaitingForRenewal ->
                 MementoLog.debug(MementoConcept.RENEWAL, "batch='{}' waiting for renewal chunks={}",
                     e.batchName, e.chunks.size)
 
-                        is RenewalBatchLifecycleTransition -> {
+            is RenewalBatchLifecycleTransition -> {
                 MementoLog.debug(MementoConcept.RENEWAL,
                     "batch='{}' lifecycle {} -> {} chunks={}",
                     e.batch.name, e.from, e.to, e.batch.chunks.size)
 
-                // INFO-level domain narrative: explain why renewal might appear stalled.
-                when (e.to) {
-                    RenewalBatchState.WAITING_FOR_UNLOAD ->
-                        MementoLog.info(MementoConcept.RENEWAL,
-                            "stone='{}' waiting for chunks to unload before renewal dim='{}'",
-                            e.batch.name,
-                            e.batch.dimension.value.toString(),
-                        )
+                // INFO-level domain narrative: explain state in operator-readable form.
+                val marker = RenewalInfoMarker(
+                    state = e.to,
+                    chunkCount = e.batch.chunks.size,
+                )
+                if (lastLifecycleInfoByBatch[e.batch.name] == marker) return
 
-                    RenewalBatchState.WAITING_FOR_RENEWAL ->
+                when (e.to) {
+                    RenewalBatchState.WAITING_FOR_UNLOAD -> {
+                        lastLifecycleInfoByBatch[e.batch.name] = marker
                         MementoLog.info(MementoConcept.RENEWAL,
-                            "stone='{}' ready for renewal execution dim='{}' chunks={}",
+                            "renewal pending unload stone='{}' dim='{}' chunks={} trigger={}",
                             e.batch.name,
                             e.batch.dimension.value.toString(),
                             e.batch.chunks.size,
+                            triggerLabel(e.trigger),
                         )
+                    }
+
+                    RenewalBatchState.WAITING_FOR_RENEWAL -> {
+                        lastLifecycleInfoByBatch[e.batch.name] = marker
+                        MementoLog.info(MementoConcept.RENEWAL,
+                            "renewal armed stone='{}' dim='{}' chunks={} trigger={} (awaiting chunk-load evidence)",
+                            e.batch.name,
+                            e.batch.dimension.value.toString(),
+                            e.batch.chunks.size,
+                            triggerLabel(e.trigger),
+                        )
+                    }
 
                     else -> Unit
                 }
-            }}
+            }
+        }
     }
 }
