@@ -139,35 +139,24 @@ abstract class EffectBase(
         p.stoneBlock.verticalSpan = 0..16
         p.stoneBlock.sampler = StoneBlockSampler(stone)
         p.stoneBlock.emissionsPerGameHour = 80
-        p.stoneBlock.system = ParticleSystemPrototype(
-            particle = net.minecraft.particle.ParticleTypes.HAPPY_VILLAGER,
-            count = 10,
-            spreadX = 0.30,
-            spreadY = 0.60,
-            spreadZ = 0.30,
-            speed = 0.02,
-            baseYOffset = 1.2,
-        )
+        p.stoneBlock.system = lorestoneParticles()
 
         // Stone chunk defaults
         p.stoneChunk.verticalSpan = 0..0
         p.stoneChunk.sampler = SingleChunkSurfaceSampler(stone)
         p.stoneChunk.emissionsPerGameHour = 200
-        p.stoneChunk.system = ParticleSystemPrototype(
-            particle = net.minecraft.particle.ParticleTypes.END_ROD,
-            count = 6,
-            spreadX = 0.30,
-            spreadY = 0.10,
-            spreadZ = 0.30,
-            speed = 0.01,
-            baseYOffset = 1.0,
-        )
+        p.stoneChunk.system = anchorParticles()
 
         // Extra lanes are opt-in.
         p.influenceArea.sampler = null
         p.influenceArea.emissionsPerGameHour = 0
+        p.influenceArea.dominantLoreSystem = lorestoneParticles()
+        p.influenceArea.dominantWitherSystem = witherstoneParticles()
+
         p.influenceOutline.sampler = null
         p.influenceOutline.emissionsPerGameHour = 0
+        p.influenceOutline.dominantLoreSystem = lorestoneParticles()
+        p.influenceOutline.dominantWitherSystem = witherstoneParticles()
     }
 
     /* ---------- Lane materialization ---------- */
@@ -254,89 +243,34 @@ abstract class EffectBase(
     private fun dominantKindAt(pos: BlockPos) =
         StoneMapService.dominantByChunk(stone.dimension)[ChunkPos(pos)]
 
-    protected fun endRodSystem(
-        count: Int,
-        spreadX: Double,
-        spreadY: Double,
-        spreadZ: Double,
-        speed: Double,
-        baseYOffset: Double,
-    ): ParticleSystemPrototype = ParticleSystemPrototype(
+    protected fun anchorParticles(): ParticleSystemPrototype = ParticleSystemPrototype(
         particle = net.minecraft.particle.ParticleTypes.END_ROD,
-        count = count,
-        spreadX = spreadX,
-        spreadY = spreadY,
-        spreadZ = spreadZ,
-        speed = speed,
-        baseYOffset = baseYOffset,
+        count = 12,
+        spreadX = 0.45,
+        spreadY = 0.15,
+        spreadZ = 0.45,
+        speed = 0.01,
+        baseYOffset = 1.0,
     )
 
-    protected fun happyVillagerSystem(
-        count: Int,
-        spreadX: Double,
-        spreadY: Double,
-        spreadZ: Double,
-        speed: Double,
-        baseYOffset: Double,
-    ): ParticleSystemPrototype = ParticleSystemPrototype(
+    protected fun lorestoneParticles(): ParticleSystemPrototype = ParticleSystemPrototype(
         particle = net.minecraft.particle.ParticleTypes.HAPPY_VILLAGER,
-        count = count,
-        spreadX = spreadX,
-        spreadY = spreadY,
-        spreadZ = spreadZ,
-        speed = speed,
-        baseYOffset = baseYOffset,
+        count = 10,
+        spreadX = 0.375,
+        spreadY = 0.12,
+        spreadZ = 0.375,
+        speed = 0.01,
+        baseYOffset = 1.0,
     )
 
-    protected fun soulFireFlameSystem(
-        count: Int,
-        spreadX: Double,
-        spreadY: Double,
-        spreadZ: Double,
-        speed: Double,
-        baseYOffset: Double,
-    ): ParticleSystemPrototype = ParticleSystemPrototype(
+    protected fun witherstoneParticles(): ParticleSystemPrototype = ParticleSystemPrototype(
         particle = net.minecraft.particle.ParticleTypes.SOUL_FIRE_FLAME,
-        count = count,
-        spreadX = spreadX,
-        spreadY = spreadY,
-        spreadZ = spreadZ,
-        speed = speed,
-        baseYOffset = baseYOffset,
-    )
-
-    protected fun witchSystem(
-        count: Int,
-        spreadX: Double,
-        spreadY: Double,
-        spreadZ: Double,
-        speed: Double,
-        baseYOffset: Double,
-    ): ParticleSystemPrototype = ParticleSystemPrototype(
-        particle = net.minecraft.particle.ParticleTypes.WITCH,
-        count = count,
-        spreadX = spreadX,
-        spreadY = spreadY,
-        spreadZ = spreadZ,
-        speed = speed,
-        baseYOffset = baseYOffset,
-    )
-
-    protected fun campfireSmokeSystem(
-        count: Int,
-        spreadX: Double,
-        spreadY: Double,
-        spreadZ: Double,
-        speed: Double,
-        baseYOffset: Double,
-    ): ParticleSystemPrototype = ParticleSystemPrototype(
-        particle = net.minecraft.particle.ParticleTypes.CAMPFIRE_COSY_SMOKE,
-        count = count,
-        spreadX = spreadX,
-        spreadY = spreadY,
-        spreadZ = spreadZ,
-        speed = speed,
-        baseYOffset = baseYOffset,
+        count = 10,
+        spreadX = 0.375,
+        spreadY = 0.12,
+        spreadZ = 0.375,
+        speed = 0.01,
+        baseYOffset = 1.0,
     )
 
     private fun occurrencesForRate(

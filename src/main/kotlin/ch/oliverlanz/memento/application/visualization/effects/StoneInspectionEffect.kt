@@ -13,24 +13,17 @@ class StoneInspectionEffect(stone: StoneView) : EffectBase(stone) {
 
         profile.stoneChunk.emissionsPerGameHour = 1760
         profile.stoneChunk.verticalSpan = 0..3
-        profile.stoneChunk.system = endRodSystem(12, 0.45, 0.15, 0.45, 0.01, 1.0)
 
         profile.influenceArea.sampler = InfluenceAreaSurfaceSampler(stone)
         profile.influenceArea.emissionsPerGameHour = 4000
         profile.influenceArea.verticalSpan = 0..2
         profile.influenceArea.materialization = SamplerMaterializationConfig(detail = 0.35)
         profile.influenceArea.dominanceMode = EffectProfile.DominanceMode.COLOR_BY_DOMINANT
-        profile.influenceArea.system = endRodSystem(10, 0.375, 0.12, 0.375, 0.01, 1.0)
-        profile.influenceArea.dominantLoreSystem = happyVillagerSystem(10, 0.375, 0.12, 0.375, 0.01, 1.0)
-        profile.influenceArea.dominantWitherSystem = soulFireFlameSystem(10, 0.375, 0.12, 0.375, 0.01, 1.0)
 
         profile.influenceOutline.sampler = InfluenceOutlineSurfaceSampler(stone, thicknessBlocks = 4)
         profile.influenceOutline.emissionsPerGameHour = 2080
         profile.influenceOutline.verticalSpan = 0..2
         profile.influenceOutline.materialization = SamplerMaterializationConfig(detail = 0.50)
         profile.influenceOutline.dominanceMode = EffectProfile.DominanceMode.COLOR_BY_DOMINANT
-        profile.influenceOutline.system = witchSystem(10, 0.30, 0.075, 0.30, 0.01, 1.0)
-        profile.influenceOutline.dominantLoreSystem = happyVillagerSystem(10, 0.30, 0.075, 0.30, 0.01, 1.0)
-        profile.influenceOutline.dominantWitherSystem = soulFireFlameSystem(10, 0.30, 0.075, 0.30, 0.01, 1.0)
     }
 }
