@@ -1,10 +1,19 @@
 package ch.oliverlanz.memento.application
 
+import com.mojang.brigadier.context.CommandContext
+import com.mojang.brigadier.suggestion.Suggestions
+import com.mojang.brigadier.suggestion.SuggestionsBuilder
+import java.util.concurrent.CompletableFuture
+import ch.oliverlanz.memento.domain.events.StoneDomainEvents
+import ch.oliverlanz.memento.domain.events.StoneLifecycleState
+import ch.oliverlanz.memento.domain.events.StoneLifecycleTransition
 import ch.oliverlanz.memento.domain.events.StoneLifecycleTrigger
 import ch.oliverlanz.memento.domain.stones.Lorestone
+import ch.oliverlanz.memento.domain.stones.LorestoneView
 import ch.oliverlanz.memento.domain.stones.Stone
 import ch.oliverlanz.memento.domain.stones.StoneAuthority
 import ch.oliverlanz.memento.domain.stones.Witherstone
+import ch.oliverlanz.memento.domain.stones.WitherstoneView
 import net.minecraft.entity.attribute.EntityAttributes
 import net.minecraft.server.command.ServerCommandSource
 import net.minecraft.text.Text
@@ -24,6 +33,18 @@ import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
  * (StoneAuthority + RenewalTracker).
  */
 object CommandHandlers {
+
+    private enum class SuggestedStoneKind {
+        ANY,
+        WITHERSTONE,
+        LORESTONE,
+    }
+
+    @Volatile
+    private var suggestionIndexAttached: Boolean = false
+
+    @Volatile
+    private var suggestedKindsByName: Map<String, SuggestedStoneKind> = emptyMap()
 
 
     @Volatile
@@ -48,7 +69,35 @@ object CommandHandlers {
         worldScanner = null
     }
 
+    fun attachStoneNameSuggestions() {
+        if (suggestionIndexAttached) return
+        StoneDomainEvents.subscribeToLifecycleTransitions(::onStoneLifecycleTransitionForSuggestions)
+        suggestionIndexAttached = true
+    }
+
+    fun detachStoneNameSuggestions() {
+        if (!suggestionIndexAttached) return
+        StoneDomainEvents.unsubscribeFromLifecycleTransitions(::onStoneLifecycleTransitionForSuggestions)
+        suggestedKindsByName = emptyMap()
+        suggestionIndexAttached = false
+    }
+
     enum class StoneKind { WITHERSTONE, LORESTONE }
+
+    fun suggestAnyStoneName(
+        context: CommandContext<ServerCommandSource>,
+        builder: SuggestionsBuilder,
+    ): CompletableFuture<Suggestions> = suggestNames(SuggestedStoneKind.ANY, builder)
+
+    fun suggestWitherstoneName(
+        context: CommandContext<ServerCommandSource>,
+        builder: SuggestionsBuilder,
+    ): CompletableFuture<Suggestions> = suggestNames(SuggestedStoneKind.WITHERSTONE, builder)
+
+    fun suggestLorestoneName(
+        context: CommandContext<ServerCommandSource>,
+        builder: SuggestionsBuilder,
+    ): CompletableFuture<Suggestions> = suggestNames(SuggestedStoneKind.LORESTONE, builder)
 
     fun list(kind: StoneKind?, source: ServerCommandSource): Int {
         return try {
@@ -83,6 +132,7 @@ object CommandHandlers {
         return try {
             val stone = StoneAuthority.get(name)
             if (stone == null) {
+                warnStaleNameSelection(source, name, "inspect")
                 source.sendError(Text.literal("No stone named '$name'."))
                 return 0
             }
@@ -105,6 +155,7 @@ object CommandHandlers {
 
         val stone = StoneAuthority.get(name)
         if (stone == null) {
+            warnStaleNameSelection(source, name, "visualize")
             source.sendError(Text.literal("No stone named '$name'."))
             return 0
         }
@@ -235,6 +286,7 @@ object CommandHandlers {
         return try {
             val existing = StoneAuthority.get(name)
             if (existing == null) {
+                warnStaleNameSelection(source, name, "remove")
                 source.sendError(Text.literal("No stone named '$name'."))
                 return 0
             }
@@ -261,6 +313,7 @@ object CommandHandlers {
             )
 
             if (!ok) {
+                warnStaleNameSelection(source, name, "alter radius")
                 source.sendError(Text.literal("No stone named '$name'."))
                 0
             } else {
@@ -298,6 +351,7 @@ object CommandHandlers {
                 }
 
                 StoneAuthority.AlterDaysResult.NOT_FOUND -> {
+                    warnStaleNameSelection(source, name, "alter daysToMaturity")
                     source.sendError(Text.literal("No stone named '$name'."))
                     0
                 }
@@ -362,4 +416,48 @@ object CommandHandlers {
                 "radius: ${stone.radius}",
             )
         }
+
+    private fun onStoneLifecycleTransitionForSuggestions(event: StoneLifecycleTransition) {
+        val next = linkedMapOf<String, SuggestedStoneKind>()
+        next.putAll(suggestedKindsByName)
+
+        when (event.to) {
+            StoneLifecycleState.CONSUMED -> next.remove(event.stone.name)
+            else -> {
+                val kind = when (event.stone) {
+                    is WitherstoneView -> SuggestedStoneKind.WITHERSTONE
+                    is LorestoneView -> SuggestedStoneKind.LORESTONE
+                    else -> SuggestedStoneKind.ANY
+                }
+                next[event.stone.name] = kind
+            }
+        }
+
+        suggestedKindsByName = next.toMap()
+    }
+
+    private fun suggestNames(
+        requiredKind: SuggestedStoneKind,
+        builder: SuggestionsBuilder,
+    ): CompletableFuture<Suggestions> {
+        val names = when (requiredKind) {
+            SuggestedStoneKind.ANY -> suggestedKindsByName.keys
+            SuggestedStoneKind.WITHERSTONE -> suggestedKindsByName.filterValues { it == SuggestedStoneKind.WITHERSTONE }.keys
+            SuggestedStoneKind.LORESTONE -> suggestedKindsByName.filterValues { it == SuggestedStoneKind.LORESTONE }.keys
+        }
+
+        names
+            .asSequence()
+            .sorted()
+            .forEach { builder.suggest(it) }
+
+        return builder.buildFuture()
+    }
+
+    private fun warnStaleNameSelection(source: ServerCommandSource, name: String, command: String) {
+        source.sendFeedback(
+            { Text.literal("Suggestion stale for '$name' during $command. Try tab completion again.").formatted(Formatting.GRAY) },
+            false
+        )
+    }
 }

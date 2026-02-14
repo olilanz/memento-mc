@@ -276,6 +276,9 @@ The following properties must remain true:
 * All domain interactions and mutations must execute on the server tick thread
 * Cooperative time-slicing is mandatory for tick-thread domain work: bounded per-tick processing, no monopolizing loops
 * Stone authority owns stone placement lifecycle and persistence
+* Stone bootstrap uses one authoritative entry pathway: persisted stones must enter lifecycle through the same StoneAuthority mutation-transition semantics as runtime additions, never through a separate silent startup insertion path
+* Startup order is explicit and observable in server initialization: runtime subscribers/consumers must be wired before persisted-stone processing begins
+* Persisted-stone processing must be a distinct, identifiable bootstrap step in `Memento` lifecycle wiring and must not be hidden inside mixed wiring helpers
 * StoneMapService is the sole dominant-stone projection authority
 * Renewal and overlays consume StoneMapService for dominance lookup
 * Scanner and Driver publish boundary-safe metadata facts, not chunk runtime objects

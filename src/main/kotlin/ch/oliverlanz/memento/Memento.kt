@@ -16,6 +16,8 @@ import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalChunkObservationBridge
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerLogging
+import ch.oliverlanz.memento.domain.events.StoneLifecycleTrigger
+import ch.oliverlanz.memento.domain.stones.StoneAuthority
 import ch.oliverlanz.memento.domain.stones.StoneAuthorityWiring
 import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
 import ch.oliverlanz.memento.infrastructure.pulse.PulseCadence
@@ -155,7 +157,21 @@ object Memento : ModInitializer {
             RenewalTracker.subscribe(renewalEventListener)
 
             WitherstoneRenewalBridge.attach()
+            CommandHandlers.attachStoneNameSuggestions()
             StoneAuthorityWiring.onServerStarted(server)
+
+            // Explicit startup stone lifecycle bootstrap:
+            // 1) attach authority runtime, 2) process persisted stones through authoritative
+            // mutation/transition pathway, 3) evaluate startup lifecycle progression.
+            MementoLog.info(MementoConcept.STONE, "startup stone bootstrap phase=attach")
+            StoneAuthority.attach(server)
+
+            MementoLog.info(MementoConcept.STONE, "startup stone bootstrap phase=process_persisted")
+            StoneAuthority.processPersistedStones(trigger = StoneLifecycleTrigger.SERVER_START)
+
+            MementoLog.info(MementoConcept.STONE, "startup stone bootstrap phase=evaluate")
+            StoneAuthority.evaluate(StoneLifecycleTrigger.SERVER_START)
+
             StoneMaturityTimeBridge.attach()
             gameTimeTracker.attach(server)
         }
@@ -185,6 +201,7 @@ object Memento : ModInitializer {
 
             StoneMaturityTimeBridge.detach()
             WitherstoneRenewalBridge.detach()
+            CommandHandlers.detachStoneNameSuggestions()
             StoneAuthorityWiring.onServerStopping()
 
             CommandHandlers.detachVisualizationEngine()
