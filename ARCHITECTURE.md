@@ -273,6 +273,8 @@ The following properties must remain true:
 * Piggyback unsolicited loads
 * WorldMap is authoritative memory
 * WorldMapService is the sole world map lifecycle and mutation authority
+* All domain interactions and mutations must execute on the server tick thread
+* Cooperative time-slicing is mandatory for tick-thread domain work: bounded per-tick processing, no monopolizing loops
 * Stone authority owns stone placement lifecycle and persistence
 * StoneMapService is the sole dominant-stone projection authority
 * Renewal and overlays consume StoneMapService for dominance lookup

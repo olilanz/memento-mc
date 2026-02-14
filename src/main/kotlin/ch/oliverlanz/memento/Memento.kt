@@ -55,11 +55,10 @@ object Memento : ModInitializer {
 
     private val onHighPulse: (PulseClock) -> Unit = {
         gameTimeTracker.tick()
+        worldScanner?.tick()
     }
 
     private val onMediumPulse: (PulseClock) -> Unit = {
-        worldMapService?.tick()
-        worldScanner?.tick()
     }
 
     private val onLowPulse: (PulseClock) -> Unit = {
