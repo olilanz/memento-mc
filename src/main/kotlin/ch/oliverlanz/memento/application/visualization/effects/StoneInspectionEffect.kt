@@ -11,25 +11,26 @@ class StoneInspectionEffect(stone: StoneView) : EffectBase(stone) {
     override fun onConfigure(profile: EffectProfile) {
         profile.lifetime = GameHours(0.15)  // Inspection: short-lived and high signal.
 
-        profile.stoneChunk.emissionsPerGameHour = 220
-        profile.stoneChunk.verticalSpan = 0..2
+        profile.stoneChunk.emissionsPerGameHour = 440
+        profile.stoneChunk.verticalSpan = 0..3
+        profile.stoneChunk.system = endRodSystem(12, 0.45, 0.15, 0.45, 0.01, 1.0)
 
         profile.influenceArea.sampler = InfluenceAreaSurfaceSampler(stone)
-        profile.influenceArea.emissionsPerGameHour = 500
-        profile.influenceArea.verticalSpan = 0..1
+        profile.influenceArea.emissionsPerGameHour = 1000
+        profile.influenceArea.verticalSpan = 0..2
         profile.influenceArea.materialization = SamplerMaterializationConfig(detail = 0.35)
         profile.influenceArea.dominanceMode = EffectProfile.DominanceMode.COLOR_BY_DOMINANT
-        profile.influenceArea.system = endRodSystem(5, 0.25, 0.08, 0.25, 0.01, 1.0)
-        profile.influenceArea.dominantLoreSystem = happyVillagerSystem(5, 0.25, 0.08, 0.25, 0.01, 1.0)
-        profile.influenceArea.dominantWitherSystem = soulFireFlameSystem(5, 0.25, 0.08, 0.25, 0.01, 1.0)
+        profile.influenceArea.system = endRodSystem(10, 0.375, 0.12, 0.375, 0.01, 1.0)
+        profile.influenceArea.dominantLoreSystem = happyVillagerSystem(10, 0.375, 0.12, 0.375, 0.01, 1.0)
+        profile.influenceArea.dominantWitherSystem = soulFireFlameSystem(10, 0.375, 0.12, 0.375, 0.01, 1.0)
 
         profile.influenceOutline.sampler = InfluenceOutlineSurfaceSampler(stone, thicknessBlocks = 4)
-        profile.influenceOutline.emissionsPerGameHour = 260
-        profile.influenceOutline.verticalSpan = 0..1
+        profile.influenceOutline.emissionsPerGameHour = 520
+        profile.influenceOutline.verticalSpan = 0..2
         profile.influenceOutline.materialization = SamplerMaterializationConfig(detail = 0.50)
         profile.influenceOutline.dominanceMode = EffectProfile.DominanceMode.COLOR_BY_DOMINANT
-        profile.influenceOutline.system = witchSystem(5, 0.20, 0.05, 0.20, 0.01, 1.0)
-        profile.influenceOutline.dominantLoreSystem = happyVillagerSystem(5, 0.20, 0.05, 0.20, 0.01, 1.0)
-        profile.influenceOutline.dominantWitherSystem = soulFireFlameSystem(5, 0.20, 0.05, 0.20, 0.01, 1.0)
+        profile.influenceOutline.system = witchSystem(10, 0.30, 0.075, 0.30, 0.01, 1.0)
+        profile.influenceOutline.dominantLoreSystem = happyVillagerSystem(10, 0.30, 0.075, 0.30, 0.01, 1.0)
+        profile.influenceOutline.dominantWitherSystem = soulFireFlameSystem(10, 0.30, 0.075, 0.30, 0.01, 1.0)
     }
 }
