@@ -64,6 +64,7 @@ object Memento : ModInitializer {
 
     private val onLowPulse: (PulseClock) -> Unit = {
         RenewalRegenerationBridge.tickThreadProcess()
+        chunkLoadDriver?.logStateOnLowPulse()
     }
 
     private val onUltraLowPulse: (PulseClock) -> Unit = {

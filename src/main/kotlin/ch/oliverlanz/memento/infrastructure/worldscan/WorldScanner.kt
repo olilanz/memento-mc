@@ -31,7 +31,7 @@ import net.minecraft.util.math.ChunkPos
  * - Owns scan lifecycle and map convergence accounting.
  * - Owns file-primary scan startup and metadata ingestion into the map.
  * - Receives chunk availability via the ChunkLoadDriver's propagation callback for passive
- *   unsolicited enrichment.
+ *   ambient enrichment.
  *
  * This class implements [ChunkAvailabilityListener] (driver pushes availability).
  */
@@ -62,9 +62,6 @@ class WorldScanner : ChunkAvailabilityListener {
 
     /** Observability only. */
     private var plannedChunks: Int = 0
-
-    /** Active-scan heartbeat cadence guard (absolute world tick). */
-    private var lastHeartbeatTick: Long = 0L
 
     /** Scanner progress sample used to derive heartbeat delta. */
     private var lastHeartbeatScanned: Int = 0
@@ -107,8 +104,7 @@ class WorldScanner : ChunkAvailabilityListener {
 
         if (!activeScan.get()) return
         val m = mapSnapshot() ?: return
-        val tickNow = server?.overworld?.time ?: 0L
-        maybeEmitActiveHeartbeat(tickNow, m)
+        maybeEmitActiveHeartbeat(m)
         maybeFinalizeActiveScan(m)
     }
 
@@ -145,7 +141,6 @@ class WorldScanner : ChunkAvailabilityListener {
         pendingFileFacts.clear()
         consumer = null
         plannedChunks = 0
-        lastHeartbeatTick = 0L
         lastHeartbeatScanned = 0
         completionEmittedForCurrentScan = false
         listeners.clear()
@@ -210,7 +205,6 @@ class WorldScanner : ChunkAvailabilityListener {
         plannedChunks = scanMap.totalChunks()
         completionEmittedForCurrentScan = false
         val tickNow = srv.overworld.time
-        lastHeartbeatTick = tickNow
         lastHeartbeatScanned = scanMap.scannedChunks()
 
         // If already complete, emit completion immediately without entering active scan mode.
@@ -271,14 +265,7 @@ class WorldScanner : ChunkAvailabilityListener {
         }
     }
 
-    private fun maybeEmitActiveHeartbeat(tickNow: Long, map: WorldMementoMap) {
-        if (tickNow != 0L &&
-                        (tickNow - lastHeartbeatTick) <
-                                MementoConstants.MEMENTO_SCAN_HEARTBEAT_EVERY_TICKS
-        ) {
-            return
-        }
-
+    private fun maybeEmitActiveHeartbeat(map: WorldMementoMap) {
         val scanned = map.scannedChunks()
         val deltaScanned = scanned - lastHeartbeatScanned
         val progressPct =
@@ -294,8 +281,6 @@ class WorldScanner : ChunkAvailabilityListener {
                 deltaScanned,
                 0,
         )
-
-        lastHeartbeatTick = tickNow
         lastHeartbeatScanned = scanned
     }
 

@@ -25,10 +25,10 @@ import net.minecraft.world.chunk.WorldChunk
  * - The engine decides *when* chunks load and whether they ever reach a stable FULLY_LOADED state.
  *
  * Pressure balancing:
- * - The DRIVER arbitrates pressure across two origins: 1) renewal desire 2) unsolicited engine
- *   loads (external pressure)
- * - Unsolicited pressure is tracked for observability, but ticket issuance for renewal demand is
- *   bounded only by existing capacity and ticket caps.
+ * - The DRIVER arbitrates pressure across two origins: 1) planned renewal demand 2) ambient
+ *   engine loads.
+ * - Ambient observations are tracked for lifecycle telemetry, while ticket issuance for planned
+ *   demand remains bounded by explicit capacity and ticket caps.
  *
  * Outcomes:
  * - When a chunk becomes safely accessible on the tick thread, the DRIVER propagates it.
@@ -66,13 +66,6 @@ class ChunkLoadDriver {
     private var server: MinecraftServer? = null
 
     @Volatile private var tickCounter: Long = 0
-    private var lastStateLogTick: Long = 0
-
-    /** Last tick where a purely unsolicited engine chunk load was observed. */
-    @Volatile private var lastUnsolicitedLoadObservedTick: Long = -1
-
-    /** Cached state to emit a single log line when ambient pressure engages or releases. */
-    private var wasAmbientPressureActive: Boolean = false
 
     // Register is the sole bookkeeping structure for chunk load lifecycle.
     private val register = ChunkLoadRegister()
@@ -96,7 +89,6 @@ class ChunkLoadDriver {
         activeInstance = this
 
         tickCounter = 0
-        lastStateLogTick = 0
         completedPendingPruneExpiredCount = 0
 
         register.clear()
@@ -170,8 +162,6 @@ class ChunkLoadDriver {
 
         // 6) Forward unload events (tick thread).
         forwardPendingUnloads(s)
-
-        logState()
     }
 
     /* ---------------------------------------------------------------------
@@ -181,22 +171,11 @@ class ChunkLoadDriver {
     private fun onEngineChunkLoaded(world: ServerWorld, chunk: WorldChunk) {
         val ref = ChunkRef(world.registryKey, chunk.pos)
         // Record the observation into the register. No propagation here.
-        // We capture whether an entry existed before this callback so we can attribute pressure
-        // only to *new* external disturbances (and not keep refreshing the back-off window due
-        // to engine ripples around already-adopted unsolicited entries).
-        val existedBefore = register.containsEntry(ref)
-        val obs = register.recordEngineLoadObserved(ref, nowTick = tickCounter)
-        // Pressure attribution:
-        // The engine may load neighboring chunks as a side effect of driver demand (scanner or
-        // renewal). Such spillover must not be counted as external pressure.
-        val spilloverFromSolicitedDemand = isAdjacentToSolicitedEntry(ref)
-        if (obs.isUnsolicited && !spilloverFromSolicitedDemand && !existedBefore) {
-            lastUnsolicitedLoadObservedTick = tickCounter
-        }
+        register.recordEngineLoadObserved(ref, nowTick = tickCounter)
 
-        // IMPORTANT: do not ticket unsolicited engine loads.
+        // IMPORTANT: do not ticket ambient engine loads.
         // Ticketing externally observed loads can amplify engine spillover and cause uncontrolled
-        // world growth. Unsolicited observations are tracked best-effort and may expire without
+        // world growth. Ambient observations are tracked best-effort and may expire without
         // ever reaching FULLY_LOADED.
     }
 
@@ -259,12 +238,12 @@ class ChunkLoadDriver {
         if (result.expiredEntries.isNotEmpty()) {
             MementoLog.debug(
                     MementoConcept.DRIVER,
-                    "expiry batch ticket-issued count={} ticketsRemoved={} source(scanner={} renewal={} unsolicited={}) ticketStatus(ticketed={} unticketed={})",
+                    "expiry batch ticket-issued count={} ticketsRemoved={} source(scanner={} renewal={} ambient={}) ticketStatus(ticketed={} unticketed={})",
                     result.expiredEntries.size,
                     result.ticketsToRemove.size,
                     result.telemetry.source.scanner,
                     result.telemetry.source.renewal,
-                    result.telemetry.source.unsolicited,
+                    result.telemetry.source.ambient,
                     result.telemetry.ticketStatus.ticketed,
                     result.telemetry.ticketStatus.unticketed,
             )
@@ -272,12 +251,12 @@ class ChunkLoadDriver {
             if (result.telemetry.source.renewal > 0) {
                 MementoLog.info(
                         MementoConcept.RENEWAL,
-                        "renewal lifecycle expiry summary phase=ticket-issued count={} ticketsRemoved={} source(scanner={} renewal={} unsolicited={}) ticketStatus(ticketed={} unticketed={})",
+                        "renewal lifecycle expiry summary phase=ticket-issued count={} ticketsRemoved={} source(scanner={} renewal={} ambient={}) ticketStatus(ticketed={} unticketed={})",
                         result.telemetry.source.renewal,
                         result.ticketsToRemove.size,
                         result.telemetry.source.scanner,
                         result.telemetry.source.renewal,
-                        result.telemetry.source.unsolicited,
+                        result.telemetry.source.ambient,
                         result.telemetry.ticketStatus.ticketed,
                         result.telemetry.ticketStatus.unticketed,
                 )
@@ -319,12 +298,12 @@ class ChunkLoadDriver {
         if (result.expiredEntries.isNotEmpty()) {
             MementoLog.debug(
                     MementoConcept.DRIVER,
-                    "expiry batch awaiting-full-load count={} ticketsRemoved={} source(scanner={} renewal={} unsolicited={}) ticketStatus(ticketed={} unticketed={})",
+                    "expiry batch awaiting-full-load count={} ticketsRemoved={} source(scanner={} renewal={} ambient={}) ticketStatus(ticketed={} unticketed={})",
                     result.expiredEntries.size,
                     result.ticketsToRemove.size,
                     result.telemetry.source.scanner,
                     result.telemetry.source.renewal,
-                    result.telemetry.source.unsolicited,
+                    result.telemetry.source.ambient,
                     result.telemetry.ticketStatus.ticketed,
                     result.telemetry.ticketStatus.unticketed,
             )
@@ -332,12 +311,12 @@ class ChunkLoadDriver {
             if (result.telemetry.source.renewal > 0) {
                 MementoLog.info(
                         MementoConcept.RENEWAL,
-                        "renewal lifecycle expiry summary phase=awaiting-full-load count={} ticketsRemoved={} source(scanner={} renewal={} unsolicited={}) ticketStatus(ticketed={} unticketed={})",
+                        "renewal lifecycle expiry summary phase=awaiting-full-load count={} ticketsRemoved={} source(scanner={} renewal={} ambient={}) ticketStatus(ticketed={} unticketed={})",
                         result.telemetry.source.renewal,
                         result.ticketsToRemove.size,
                         result.telemetry.source.scanner,
                         result.telemetry.source.renewal,
-                        result.telemetry.source.unsolicited,
+                        result.telemetry.source.ambient,
                         result.telemetry.ticketStatus.ticketed,
                         result.telemetry.ticketStatus.unticketed,
                 )
@@ -436,7 +415,7 @@ class ChunkLoadDriver {
             val source =
                     if (desiredSources.contains(ChunkLoadRegister.RequestSource.RENEWAL))
                             ChunkScanProvenance.ENGINE_FALLBACK
-                    else ChunkScanProvenance.ENGINE_UNSOLICITED
+                    else ChunkScanProvenance.ENGINE_AMBIENT
             val fact =
                     ChunkMetadataFact(
                             key =
@@ -491,39 +470,15 @@ class ChunkLoadDriver {
      * ------------------------------------------------------------------ */
 
     private fun issueTicketsUpToCap(server: MinecraftServer) {
-        // Capacity is reserved for *solicited* driver work (scanner/renewal). Unsolicited engine
+        // Capacity is reserved for *planned* driver work (scanner/renewal). Ambient engine
         // observations must not consume the driver's ticket budget, otherwise external noise can
         // stall scanning.
-        val activeSolicited = register.countActiveSolicitedEntries()
+        val activePlanned = register.countActivePlannedEntries()
         val ticketCount = register.allEntriesSnapshot().count { it.ticketName != null }
-        val capacityByEntries = MementoConstants.CHUNK_LOAD_MAX_OUTSTANDING_TICKETS - activeSolicited
+        val capacityByEntries = MementoConstants.CHUNK_LOAD_MAX_OUTSTANDING_TICKETS - activePlanned
         val capacityByTickets = MementoConstants.CHUNK_LOAD_MAX_OUTSTANDING_TICKETS - ticketCount
         val capacity = minOf(capacityByEntries, capacityByTickets)
         if (capacity <= 0) return
-
-        val ambientPressureActive =
-                (lastUnsolicitedLoadObservedTick >= 0 &&
-                        (tickCounter - lastUnsolicitedLoadObservedTick) <=
-                                MementoConstants.CHUNK_LOAD_UNSOLICITED_PRESSURE_WINDOW_TICKS)
-
-        if (ambientPressureActive != wasAmbientPressureActive) {
-            wasAmbientPressureActive = ambientPressureActive
-            if (ambientPressureActive) {
-                MementoLog.info(
-                        MementoConcept.DRIVER,
-                        "Driver ambient pressure engaged (ambient chunk activity detected). outstandingTickets={} desired={}.",
-                        ticketCount,
-                        register.allEntriesSnapshot().count { it.desiredBy.isNotEmpty() },
-                )
-            } else {
-                MementoLog.info(
-                        MementoConcept.DRIVER,
-                        "Driver ambient pressure released. outstandingTickets={} desired={}",
-                        ticketCount,
-                        register.allEntriesSnapshot().count { it.desiredBy.isNotEmpty() },
-                )
-            }
-        }
 
         // Issue tickets in a single pass.
         // Policy:
@@ -591,34 +546,31 @@ class ChunkLoadDriver {
      * Observability
      * ------------------------------------------------------------------ */
 
-    private fun logState() {
-        if ((tickCounter - lastStateLogTick) < MementoConstants.CHUNK_LOAD_STATE_LOG_EVERY_TICKS)
-                return
-        lastStateLogTick = tickCounter
+    fun logStateOnLowPulse() {
+        if (!hasObservableWorkInProgress()) return
 
+        logState()
+    }
+
+    private fun hasObservableWorkInProgress(): Boolean {
+        val s = register.stateSnapshot()
+        val activePlanned = register.countActivePlannedEntries()
+        return activePlanned > 0 || s.ticketIssued > 0 || s.awaitingFullLoad > 0
+    }
+
+    private fun logState() {
         val s = register.stateSnapshot()
         val ticketCount = register.allEntriesSnapshot().count { it.ticketName != null }
         val desiredCount = register.allEntriesSnapshot().count { it.desiredBy.isNotEmpty() }
-        val ambientPressureActive =
-                (lastUnsolicitedLoadObservedTick >= 0 &&
-                        (tickCounter - lastUnsolicitedLoadObservedTick) <=
-                                MementoConstants.CHUNK_LOAD_UNSOLICITED_PRESSURE_WINDOW_TICKS)
-        val quietFor =
-                if (lastUnsolicitedLoadObservedTick >= 0)
-                        (tickCounter - lastUnsolicitedLoadObservedTick)
-                else -1
 
         MementoLog.trace(
                 MementoConcept.DRIVER,
-                "tick={} entries={} demand(desired={} queue={}) pressure(tickets={} backOff={} lastUnsolicitedTick={} quietForTicks={}) pipeline(requested={} loadAbsenceVerified={} ticketed={} observed={} awaitingFullLoad={} observedUntracked={} fullyLoaded={} propagationQueue={} propagating={} completedPendingPrune={} expiredPendingPrune={})",
+                "tick={} entries={} demand(desired={} queue={}) pressure(tickets={}) pipeline(requested={} loadAbsenceVerified={} ticketed={} observed={} awaitingFullLoad={} observedUntracked={} fullyLoaded={} propagationQueue={} propagating={} completedPendingPrune={} expiredPendingPrune={})",
                 tickCounter,
                 s.total,
                 desiredCount,
                 s.propagationQueue,
                 ticketCount,
-                ambientPressureActive,
-                lastUnsolicitedLoadObservedTick,
-                quietFor,
                 s.requested,
                 s.loadAbsenceVerified,
                 s.ticketIssued,
@@ -631,35 +583,6 @@ class ChunkLoadDriver {
                 s.completedPendingPrune,
                 completedPendingPruneExpiredCount,
         )
-    }
-
-    /**
-     * Returns true if this engine load is plausibly spillover from *solicited* driver demand.
-     *
-     * The driver expresses demand (scanner/renewal) for individual chunks. The engine may load
-     * neighboring chunks as a side effect of fulfilling that demand.
-     *
-     * These spillover loads are still causally induced by driver demand and must not be counted as
-     * external/unsolicited pressure (back-off signal).
-     *
-     * IMPORTANT:
-     * - We must not base this on "ticket present": tickets can be attached/released while the
-     *   engine is still delivering neighbor loads.
-     * - We must not base this on "entry exists": the register can also contain entries adopted
-     *   from unsolicited engine loads.
-     */
-    private fun isAdjacentToSolicitedEntry(ref: ChunkRef): Boolean {
-        if (register.hasSolicitedEntry(ref)) return true
-        val cx = ref.pos.x
-        val cz = ref.pos.z
-        for (dx in -1..1) {
-            for (dz in -1..1) {
-                if (dx == 0 && dz == 0) continue
-                val n = ChunkRef(ref.dimension, ChunkPos(cx + dx, cz + dz))
-                if (register.hasSolicitedEntry(n)) return true
-            }
-        }
-        return false
     }
 
     private fun renewalRequestedChunksSnapshot(): Set<ChunkRef> =
