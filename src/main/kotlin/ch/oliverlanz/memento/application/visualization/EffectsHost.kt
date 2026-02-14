@@ -1,7 +1,7 @@
 package ch.oliverlanz.memento.application.visualization
 
-import ch.oliverlanz.memento.application.time.GameClock
-import ch.oliverlanz.memento.application.time.GameClockEvents
+import ch.oliverlanz.memento.infrastructure.time.GameClock
+import ch.oliverlanz.memento.infrastructure.time.GameClockEvents
 import ch.oliverlanz.memento.application.visualization.effects.*
 import ch.oliverlanz.memento.domain.events.StoneDomainEvents
 import ch.oliverlanz.memento.domain.events.StoneLifecycleState

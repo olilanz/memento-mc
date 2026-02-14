@@ -8,7 +8,6 @@ import ch.oliverlanz.memento.application.renewal.RenewalInitialObserver
 import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge
 import ch.oliverlanz.memento.application.renewal.WitherstoneConsumptionBridge
 import ch.oliverlanz.memento.application.stone.StoneMaturityTimeBridge
-import ch.oliverlanz.memento.application.time.GameTimeTracker
 import ch.oliverlanz.memento.application.visualization.EffectsHost
 import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
 import ch.oliverlanz.memento.domain.worldmap.WorldMapService
@@ -23,6 +22,7 @@ import ch.oliverlanz.memento.infrastructure.pulse.PulseCadence
 import ch.oliverlanz.memento.infrastructure.pulse.PulseClock
 import ch.oliverlanz.memento.infrastructure.pulse.PulseEvents
 import ch.oliverlanz.memento.infrastructure.pulse.PulseGenerator
+import ch.oliverlanz.memento.infrastructure.time.GameTimeTracker
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanCsvExporter
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
 import ch.oliverlanz.memento.infrastructure.worldscan.TwoPassRegionFileMetadataProvider
@@ -56,10 +56,10 @@ object Memento : ModInitializer {
 
     private val onMediumPulse: (PulseClock) -> Unit = {
         worldMapService?.tick()
+        worldScanner?.tick()
     }
 
     private val onLowPulse: (PulseClock) -> Unit = {
-        worldScanner?.tick()
         RenewalRegenerationBridge.tickThreadProcess()
     }
 

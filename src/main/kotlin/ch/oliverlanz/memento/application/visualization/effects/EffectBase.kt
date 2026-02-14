@@ -1,9 +1,9 @@
 package ch.oliverlanz.memento.application.visualization.effects
 
-import ch.oliverlanz.memento.application.time.GameClock
-import ch.oliverlanz.memento.application.time.GameHours
-import ch.oliverlanz.memento.application.time.asGameTicks
-import ch.oliverlanz.memento.application.time.toGameHours
+import ch.oliverlanz.memento.infrastructure.time.GameClock
+import ch.oliverlanz.memento.infrastructure.time.GameHours
+import ch.oliverlanz.memento.infrastructure.time.asGameTicks
+import ch.oliverlanz.memento.infrastructure.time.toGameHours
 import ch.oliverlanz.memento.application.visualization.samplers.StoneBlockSampler
 import ch.oliverlanz.memento.domain.stones.StoneView
 import net.minecraft.particle.ParticleEffect
