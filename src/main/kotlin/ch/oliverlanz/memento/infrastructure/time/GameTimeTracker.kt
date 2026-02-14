@@ -29,9 +29,6 @@ class GameTimeTracker {
     /** Last observed absolute Memento day index (03:00 boundary). */
     private var lastMementoDayIndex: Long? = null
 
-    /** Pulse counter used to throttle high-frequency clock transport publication. */
-    private var transportPulseCounter: Long = 0L
-
     fun attach(server: MinecraftServer) {
         this.server = server
 
@@ -41,7 +38,6 @@ class GameTimeTracker {
 
         lastTimeOfDay = timeOfDay
         lastMementoDayIndex = mementoDayIndex
-        transportPulseCounter = 0L
 
         MementoLog.debug(
             MementoConcept.WORLD,
@@ -57,44 +53,36 @@ class GameTimeTracker {
         server = null
         lastTimeOfDay = null
         lastMementoDayIndex = null
-        transportPulseCounter = 0L
     }
 
     /**
      * Transport tick only (NO domain logic here).
      *
-     * - Publishes [GameClock] at a bounded transport cadence.
+     * - Publishes [GameClock] on each invocation.
      * - Publishes [GameDayAdvanced] only when Memento-day boundaries are crossed.
      */
     fun tick() {
         val s = server ?: return
         val overworld = s.overworld ?: return
 
-        transportPulseCounter += 1L
-
         val timeOfDay = overworld.timeOfDay
         val dayTime = timeOfDay % MementoConstants.OVERWORLD_DAY_TICKS
 
+        val prevTimeOfDay = lastTimeOfDay
+        val deltaTicks = if (prevTimeOfDay == null) 0L else max(0L, timeOfDay - prevTimeOfDay)
+
         val mementoDayIndex = computeMementoDayIndex(timeOfDay)
 
-        val publishPeriod = MementoConstants.GAME_CLOCK_PUBLISH_EVERY_HIGH_PULSES
-        val shouldPublishClock =
-            (publishPeriod <= 1L) || ((transportPulseCounter % publishPeriod) == 0L)
-
-        if (shouldPublishClock) {
-            val prevTimeOfDay = lastTimeOfDay
-            val deltaTicks = if (prevTimeOfDay == null) 0L else max(0L, timeOfDay - prevTimeOfDay)
-
-            GameClockEvents.publish(
-                GameClock(
-                    dayTime = dayTime,
-                    timeOfDay = timeOfDay,
-                    deltaTicks = deltaTicks,
-                    mementoDayIndex = mementoDayIndex
-                )
+        // High-frequency transport clock update.
+        GameClockEvents.publish(
+            GameClock(
+                dayTime = dayTime,
+                timeOfDay = timeOfDay,
+                deltaTicks = deltaTicks,
+                mementoDayIndex = mementoDayIndex
             )
-            lastTimeOfDay = timeOfDay
-        }
+        )
+        lastTimeOfDay = timeOfDay
 
         // Low-frequency semantic day advancement.
         val lastDay = lastMementoDayIndex

@@ -13,10 +13,10 @@ object MementoConstants {
      * ------------------------------------------------------------------ */
 
     /** Every server tick (pulse baseline cadence). */
-    const val PULSE_CADENCE_HIGH_TICKS: Long = 1L
+    const val PULSE_CADENCE_REALTIME_TICKS: Long = 1L
 
-    /** Clock transport publication cadence, expressed in HIGH pulses. */
-    const val GAME_CLOCK_PUBLISH_EVERY_HIGH_PULSES: Long = 2L
+    /** High cadence for smooth transport consumers (e.g. clock). */
+    const val PULSE_CADENCE_HIGH_TICKS: Long = 2L
 
     /** Medium cadence for bounded recurring work. */
     const val PULSE_CADENCE_MEDIUM_TICKS: Long = 10L
@@ -25,20 +25,21 @@ object MementoConstants {
     const val PULSE_CADENCE_LOW_TICKS: Long = 100L
 
     /** Very low cadence for heavy/rare maintenance work. */
-    const val PULSE_CADENCE_ULTRA_LOW_TICKS: Long = 1000L
+    const val PULSE_CADENCE_VERY_LOW_TICKS: Long = 1000L
 
-    /** Extreme low cadence for long-horizon maintenance operations. */
-    const val PULSE_CADENCE_EXTREME_LOW_TICKS: Long = 10000L
+    /** Ultra-low cadence for long-horizon maintenance operations. */
+    const val PULSE_CADENCE_ULTRA_LOW_TICKS: Long = 10000L
 
     /**
      * Cadence phase staggering offsets (must remain distinct).
      *
-     * Non-HIGH tiers are offset so they do not co-fire on the same server tick.
+     * Non-REALTIME tiers are offset so they do not co-fire on the same server tick.
      */
-    const val PULSE_PHASE_MEDIUM: Long = 1L
-    const val PULSE_PHASE_LOW: Long = 2L
-    const val PULSE_PHASE_ULTRA_LOW: Long = 3L
-    const val PULSE_PHASE_EXTREME_LOW: Long = 4L
+    const val PULSE_PHASE_HIGH: Long = 1L
+    const val PULSE_PHASE_MEDIUM: Long = 2L
+    const val PULSE_PHASE_LOW: Long = 3L
+    const val PULSE_PHASE_VERY_LOW: Long = 4L
+    const val PULSE_PHASE_ULTRA_LOW: Long = 5L
 
     /** Pulse observability log cadence (ticks). */
     const val PULSE_STATE_LOG_EVERY_TICKS: Long = 1000L

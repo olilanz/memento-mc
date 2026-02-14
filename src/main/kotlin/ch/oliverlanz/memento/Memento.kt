@@ -49,9 +49,12 @@ object Memento : ModInitializer {
     private var renewalChunkLoadProvider: RenewalChunkLoadProvider? = null
     private var chunkLoadDriver: ChunkLoadDriver? = null
 
+    private val onRealtimePulse: (PulseClock) -> Unit = {
+        chunkLoadDriver?.tick()
+    }
+
     private val onHighPulse: (PulseClock) -> Unit = {
         gameTimeTracker.tick()
-        chunkLoadDriver?.tick()
     }
 
     private val onMediumPulse: (PulseClock) -> Unit = {
@@ -94,11 +97,12 @@ object Memento : ModInitializer {
         ServerLifecycleEvents.SERVER_STARTED.register { server: MinecraftServer ->
 
             pulseGenerator.reset()
+            PulseEvents.subscribe(PulseCadence.REALTIME, onRealtimePulse)
             PulseEvents.subscribe(PulseCadence.HIGH, onHighPulse)
             PulseEvents.subscribe(PulseCadence.MEDIUM, onMediumPulse)
             PulseEvents.subscribe(PulseCadence.LOW, onLowPulse)
-            PulseEvents.subscribe(PulseCadence.ULTRA_LOW, onUltraLowPulse)
-            PulseEvents.subscribe(PulseCadence.EXTREME_LOW, onExtremeLowPulse)
+            PulseEvents.subscribe(PulseCadence.VERY_LOW, onUltraLowPulse)
+            PulseEvents.subscribe(PulseCadence.ULTRA_LOW, onExtremeLowPulse)
 
             worldMapService = WorldMapService().also { it.attach() }
 
@@ -158,11 +162,12 @@ object Memento : ModInitializer {
 
         ServerLifecycleEvents.SERVER_STOPPING.register {
 
-            PulseEvents.unsubscribe(PulseCadence.EXTREME_LOW, onExtremeLowPulse)
-            PulseEvents.unsubscribe(PulseCadence.ULTRA_LOW, onUltraLowPulse)
+            PulseEvents.unsubscribe(PulseCadence.ULTRA_LOW, onExtremeLowPulse)
+            PulseEvents.unsubscribe(PulseCadence.VERY_LOW, onUltraLowPulse)
             PulseEvents.unsubscribe(PulseCadence.LOW, onLowPulse)
             PulseEvents.unsubscribe(PulseCadence.MEDIUM, onMediumPulse)
             PulseEvents.unsubscribe(PulseCadence.HIGH, onHighPulse)
+            PulseEvents.unsubscribe(PulseCadence.REALTIME, onRealtimePulse)
 
             gameTimeTracker.detach()
             RenewalTracker.unsubscribe(renewalEventListener)
