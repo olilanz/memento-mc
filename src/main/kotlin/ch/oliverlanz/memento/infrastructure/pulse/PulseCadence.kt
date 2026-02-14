@@ -6,10 +6,10 @@ package ch.oliverlanz.memento.infrastructure.pulse
  * This enum is transport-only and does not encode semantic priorities.
  */
 enum class PulseCadence {
+    REALTIME,
     HIGH,
     MEDIUM,
     LOW,
+    VERY_LOW,
     ULTRA_LOW,
-    EXTREME_LOW,
 }
-

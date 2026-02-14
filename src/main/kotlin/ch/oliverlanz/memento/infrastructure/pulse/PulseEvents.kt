@@ -8,11 +8,12 @@ package ch.oliverlanz.memento.infrastructure.pulse
 object PulseEvents {
 
     private val listenersByCadence = linkedMapOf<PulseCadence, LinkedHashSet<(PulseClock) -> Unit>>(
+        PulseCadence.REALTIME to linkedSetOf(),
         PulseCadence.HIGH to linkedSetOf(),
         PulseCadence.MEDIUM to linkedSetOf(),
         PulseCadence.LOW to linkedSetOf(),
+        PulseCadence.VERY_LOW to linkedSetOf(),
         PulseCadence.ULTRA_LOW to linkedSetOf(),
-        PulseCadence.EXTREME_LOW to linkedSetOf(),
     )
 
     fun subscribe(cadence: PulseCadence, listener: (PulseClock) -> Unit) {
@@ -31,4 +32,3 @@ object PulseEvents {
     internal fun listenerCount(cadence: PulseCadence): Int =
         listenersByCadence.getValue(cadence).size
 }
-

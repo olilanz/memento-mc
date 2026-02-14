@@ -27,7 +27,14 @@ class PulseGenerator {
     fun onServerTick() {
         tick += 1L
 
-        emit(PulseCadence.HIGH)
+        emit(PulseCadence.REALTIME)
+
+        if (isDue(
+                period = MementoConstants.PULSE_CADENCE_HIGH_TICKS,
+                phase = MementoConstants.PULSE_PHASE_HIGH,
+            )) {
+            emit(PulseCadence.HIGH)
+        }
 
         if (isDue(
                 period = MementoConstants.PULSE_CADENCE_MEDIUM_TICKS,
@@ -44,17 +51,17 @@ class PulseGenerator {
         }
 
         if (isDue(
+                period = MementoConstants.PULSE_CADENCE_VERY_LOW_TICKS,
+                phase = MementoConstants.PULSE_PHASE_VERY_LOW,
+            )) {
+            emit(PulseCadence.VERY_LOW)
+        }
+
+        if (isDue(
                 period = MementoConstants.PULSE_CADENCE_ULTRA_LOW_TICKS,
                 phase = MementoConstants.PULSE_PHASE_ULTRA_LOW,
             )) {
             emit(PulseCadence.ULTRA_LOW)
-        }
-
-        if (isDue(
-                period = MementoConstants.PULSE_CADENCE_EXTREME_LOW_TICKS,
-                phase = MementoConstants.PULSE_PHASE_EXTREME_LOW,
-            )) {
-            emit(PulseCadence.EXTREME_LOW)
         }
 
         maybeLogState()
@@ -76,37 +83,44 @@ class PulseGenerator {
         lastStateLogTick = tick
         MementoLog.debug(
             MementoConcept.WORLD,
-            "pulse state tick={} listeners(high={} medium={} low={} ultraLow={} extremeLow={})",
+            "pulse state tick={} listeners(realtime={} high={} medium={} low={} veryLow={} ultraLow={})",
             tick,
+            PulseEvents.listenerCount(PulseCadence.REALTIME),
             PulseEvents.listenerCount(PulseCadence.HIGH),
             PulseEvents.listenerCount(PulseCadence.MEDIUM),
             PulseEvents.listenerCount(PulseCadence.LOW),
+            PulseEvents.listenerCount(PulseCadence.VERY_LOW),
             PulseEvents.listenerCount(PulseCadence.ULTRA_LOW),
-            PulseEvents.listenerCount(PulseCadence.EXTREME_LOW),
         )
     }
 
     private fun validateConfiguration() {
+        require(MementoConstants.PULSE_CADENCE_REALTIME_TICKS > 0L) { "PULSE_CADENCE_REALTIME_TICKS must be > 0" }
         require(MementoConstants.PULSE_CADENCE_HIGH_TICKS > 0L) { "PULSE_CADENCE_HIGH_TICKS must be > 0" }
         require(MementoConstants.PULSE_CADENCE_MEDIUM_TICKS > 0L) { "PULSE_CADENCE_MEDIUM_TICKS must be > 0" }
         require(MementoConstants.PULSE_CADENCE_LOW_TICKS > 0L) { "PULSE_CADENCE_LOW_TICKS must be > 0" }
+        require(MementoConstants.PULSE_CADENCE_VERY_LOW_TICKS > 0L) { "PULSE_CADENCE_VERY_LOW_TICKS must be > 0" }
         require(MementoConstants.PULSE_CADENCE_ULTRA_LOW_TICKS > 0L) { "PULSE_CADENCE_ULTRA_LOW_TICKS must be > 0" }
-        require(MementoConstants.PULSE_CADENCE_EXTREME_LOW_TICKS > 0L) { "PULSE_CADENCE_EXTREME_LOW_TICKS must be > 0" }
 
         // Phase staggering guardrails for nested cadences.
+        require(
+            MementoConstants.PULSE_PHASE_HIGH.mod(MementoConstants.PULSE_CADENCE_MEDIUM_TICKS) !=
+                MementoConstants.PULSE_PHASE_MEDIUM.mod(MementoConstants.PULSE_CADENCE_MEDIUM_TICKS)
+        ) { "HIGH and MEDIUM phases must be staggered" }
+
         require(
             MementoConstants.PULSE_PHASE_MEDIUM.mod(MementoConstants.PULSE_CADENCE_LOW_TICKS) !=
                 MementoConstants.PULSE_PHASE_LOW.mod(MementoConstants.PULSE_CADENCE_LOW_TICKS)
         ) { "MEDIUM and LOW phases must be staggered" }
 
         require(
-            MementoConstants.PULSE_PHASE_LOW.mod(MementoConstants.PULSE_CADENCE_ULTRA_LOW_TICKS) !=
-                MementoConstants.PULSE_PHASE_ULTRA_LOW.mod(MementoConstants.PULSE_CADENCE_ULTRA_LOW_TICKS)
-        ) { "LOW and ULTRA_LOW phases must be staggered" }
+            MementoConstants.PULSE_PHASE_LOW.mod(MementoConstants.PULSE_CADENCE_VERY_LOW_TICKS) !=
+                MementoConstants.PULSE_PHASE_VERY_LOW.mod(MementoConstants.PULSE_CADENCE_VERY_LOW_TICKS)
+        ) { "LOW and VERY_LOW phases must be staggered" }
 
         require(
-            MementoConstants.PULSE_PHASE_ULTRA_LOW.mod(MementoConstants.PULSE_CADENCE_EXTREME_LOW_TICKS) !=
-                MementoConstants.PULSE_PHASE_EXTREME_LOW.mod(MementoConstants.PULSE_CADENCE_EXTREME_LOW_TICKS)
-        ) { "ULTRA_LOW and EXTREME_LOW phases must be staggered" }
+            MementoConstants.PULSE_PHASE_VERY_LOW.mod(MementoConstants.PULSE_CADENCE_ULTRA_LOW_TICKS) !=
+                MementoConstants.PULSE_PHASE_ULTRA_LOW.mod(MementoConstants.PULSE_CADENCE_ULTRA_LOW_TICKS)
+        ) { "VERY_LOW and ULTRA_LOW phases must be staggered" }
     }
 }
