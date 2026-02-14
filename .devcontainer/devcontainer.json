@@ -7,7 +7,12 @@
       "extensions": [
         "vscjava.vscode-java-pack",
         "fwcd.kotlin",
-        "ms-azuretools.vscode-docker"
+        "ms-azuretools.vscode-docker",
+        "RooVeterinaryInc.roo-cline",
+        "vscjava.vscode-gradle",
+        "yzhang.markdown-all-in-one",
+        "bierner.markdown-mermaid",
+        "vscjava.vscode-maven"
       ]
     }
   },
