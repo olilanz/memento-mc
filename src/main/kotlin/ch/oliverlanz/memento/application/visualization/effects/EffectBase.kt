@@ -5,10 +5,15 @@ import ch.oliverlanz.memento.infrastructure.time.GameHours
 import ch.oliverlanz.memento.infrastructure.time.asGameTicks
 import ch.oliverlanz.memento.infrastructure.time.toGameHours
 import ch.oliverlanz.memento.application.visualization.samplers.StoneBlockSampler
+import ch.oliverlanz.memento.application.visualization.samplers.SingleChunkSurfaceSampler
 import ch.oliverlanz.memento.domain.stones.StoneView
+import ch.oliverlanz.memento.domain.stones.StoneMapService
+import ch.oliverlanz.memento.domain.stones.Lorestone
+import ch.oliverlanz.memento.domain.stones.Witherstone
 import net.minecraft.particle.ParticleEffect
 import net.minecraft.server.world.ServerWorld
 import net.minecraft.util.math.BlockPos
+import net.minecraft.util.math.ChunkPos
 import java.util.Random as JavaRandom
 import kotlin.math.floor
 import kotlin.random.Random
@@ -18,22 +23,31 @@ import kotlin.random.Random
  *
  * IMPORTANT (locked):
  * - Effects are driven by GameWatch via GameClock updates (not server ticks).
+ * - This class is a poor-man DSL runtime: subclasses declare lane policy, base executes it.
  * - Subclasses are declarative: override onConfigure(profile) only.
  * - Semantics (lifetime, rates, particles, samplers) live in EffectProfile.
- * - Mechanics (ticking, sampling caches, emission) live here.
+ * - Mechanics (ticking, one-time materialization, dominance-aware dispatch, emission) live here.
  *
  * IMPORTANT (locked emission model):
  * - Effects are ALWAYS rate-based (emissionsPerGameHour).
  * - lifetime (when configured) only gates *when to stop*, never emission logic.
  * - No totals, no "finite-vs-infinite" branching, no remaining-emissions math.
  *
- * IMPORTANT (locked anchor model):
- * - Anchor configuration is universal and owned by the base class.
- * - Subclasses do NOT configure anchor sampler or anchor emission rate.
+ * IMPORTANT (locked lane model):
+ * - Four fixed lanes: stone block, stone chunk, influence area, influence outline.
+ * - Lane samples are materialized once per effect instance and remain frozen for lifetime.
+ * - Samplers are geometry-only; dominance is interpreted only in this base class.
  */
 abstract class EffectBase(
     protected val stone: StoneView
 ) {
+
+    protected enum class LaneId {
+        STONE_BLOCK,
+        STONE_CHUNK,
+        INFLUENCE_AREA,
+        INFLUENCE_OUTLINE,
+    }
 
     data class ParticleSystemPrototype(
         val particle: ParticleEffect,
@@ -60,6 +74,8 @@ abstract class EffectBase(
     }
 
     private val rng = JavaRandom()
+    private val materializedByLane = linkedMapOf<LaneId, List<BlockPos>>()
+    private var materialized: Boolean = false
 
     /**
      * FINAL tick entry point. Subclasses must NOT override this.
@@ -81,8 +97,12 @@ abstract class EffectBase(
         }
 
         // Default pipelines (only active when configured)
-        runAnchorPlan(world, deltaGameHours)
-        runSurfacePlan(world, deltaGameHours)
+        ensureMaterialized(world)
+
+        runLanePlan(world, deltaGameHours, LaneId.STONE_BLOCK, profile.stoneBlock)
+        runLanePlan(world, deltaGameHours, LaneId.STONE_CHUNK, profile.stoneChunk)
+        runLanePlan(world, deltaGameHours, LaneId.INFLUENCE_AREA, profile.influenceArea)
+        runLanePlan(world, deltaGameHours, LaneId.INFLUENCE_OUTLINE, profile.influenceOutline)
 
         // Optional extension hook (not used in this slice)
         onTick(world, clock)
@@ -93,8 +113,7 @@ abstract class EffectBase(
     /**
      * Declarative configuration hook.
      *
-     * Subclasses should only override effect-specific deltas (most commonly surface sampler,
-     * lifetime and surface pacing, and occasionally particle prototype tweaks).
+     * Subclasses should only override effect-specific lane policy, lifetime, and tuning.
      */
     protected open fun onConfigure(profile: EffectProfile) = Unit
 
@@ -116,11 +135,11 @@ abstract class EffectBase(
      * effect instance (most commonly surface sampler, lifetime and surface emission rate).
      */
     private fun defaultProfile(): EffectProfile = EffectProfile().also { p ->
-        // Anchor defaults (shared across all effects)
-        p.anchorVerticalSpan = 0..16
-        p.anchorSampler = StoneBlockSampler(stone)
-        p.anchorEmissionsPerGameHour = 80
-        p.anchorSystem = ParticleSystemPrototype(
+        // Stone block defaults (identity/anchor lane)
+        p.stoneBlock.verticalSpan = 0..16
+        p.stoneBlock.sampler = StoneBlockSampler(stone)
+        p.stoneBlock.emissionsPerGameHour = 80
+        p.stoneBlock.system = ParticleSystemPrototype(
             particle = net.minecraft.particle.ParticleTypes.HAPPY_VILLAGER,
             count = 10,
             spreadX = 0.30,
@@ -130,11 +149,11 @@ abstract class EffectBase(
             baseYOffset = 1.2,
         )
 
-        // Surface defaults (shared baseline; subclasses may override particle/system details)
-        p.surfaceVerticalSpan = 0..0
-        p.surfaceSampler = null                     // Surface sampler intentionally left null by default.
-        p.surfaceEmissionsPerGameHour = 200         // Rate defaults live in the base (not 0).
-        p.surfaceSystem = ParticleSystemPrototype(
+        // Stone chunk defaults
+        p.stoneChunk.verticalSpan = 0..0
+        p.stoneChunk.sampler = SingleChunkSurfaceSampler(stone)
+        p.stoneChunk.emissionsPerGameHour = 200
+        p.stoneChunk.system = ParticleSystemPrototype(
             particle = net.minecraft.particle.ParticleTypes.END_ROD,
             count = 6,
             spreadX = 0.30,
@@ -143,59 +162,182 @@ abstract class EffectBase(
             speed = 0.01,
             baseYOffset = 1.0,
         )
+
+        // Extra lanes are opt-in.
+        p.influenceArea.sampler = null
+        p.influenceArea.emissionsPerGameHour = 0
+        p.influenceOutline.sampler = null
+        p.influenceOutline.emissionsPerGameHour = 0
+    }
+
+    /* ---------- Lane materialization ---------- */
+
+    private fun ensureMaterialized(world: ServerWorld) {
+        if (materialized) return
+        materializedByLane.clear()
+
+        materializedByLane[LaneId.STONE_BLOCK] = materializeLane(world, profile.stoneBlock)
+        materializedByLane[LaneId.STONE_CHUNK] = materializeLane(world, profile.stoneChunk)
+        materializedByLane[LaneId.INFLUENCE_AREA] = materializeLane(world, profile.influenceArea)
+        materializedByLane[LaneId.INFLUENCE_OUTLINE] = materializeLane(world, profile.influenceOutline)
+
+        materialized = true
+    }
+
+    private fun materializeLane(
+        world: ServerWorld,
+        lane: EffectProfile.LaneProfile,
+    ): List<BlockPos> {
+        val sampler = lane.sampler ?: return emptyList()
+        return sampler.materialize(world, rng, lane.materialization)
     }
 
     /* ---------- Plans ---------- */
 
-    private fun runAnchorPlan(world: ServerWorld, deltaGameHours: GameHours) {
-        val sampler = profile.anchorSampler ?: return
-        val system = profile.anchorSystem ?: return
+    private fun runLanePlan(
+        world: ServerWorld,
+        deltaGameHours: GameHours,
+        laneId: LaneId,
+        lane: EffectProfile.LaneProfile,
+    ) {
+        val candidates = materializedByLane[laneId].orEmpty()
+        if (candidates.isEmpty()) return
 
         var occurrences = occurrencesForRate(
-            emissionsPerGameHour = profile.anchorEmissionsPerGameHour,
+            emissionsPerGameHour = lane.emissionsPerGameHour,
             deltaGameHours = deltaGameHours
         )
 
-        // Anchor safeguard:
+        // Lane safeguard:
         // ensure visible spatial presence even at very low temporal rates.
-        if (occurrences <= 0 && profile.anchorEmissionsPerGameHour > 0) occurrences = 1
+        if (occurrences <= 0 && lane.emissionsPerGameHour > 0) occurrences = 1
         if (occurrences <= 0) return
 
         repeat(occurrences) {
-            val base = sampler.randomCandidate(world, rng) ?: return
+            val base = candidates[rng.nextInt(candidates.size)]
+            val system = chooseSystemFor(base, lane) ?: return@repeat
             emitParticleAt(
                 world = world,
                 pos = base,
                 system = system,
-                yOffsetSpread = profile.anchorVerticalSpan
+                yOffsetSpread = lane.verticalSpan
             )
         }
     }
 
-    private fun runSurfacePlan(world: ServerWorld, deltaGameHours: GameHours) {
-        val sampler = profile.surfaceSampler ?: return
-        val system = profile.surfaceSystem ?: return
+    private fun chooseSystemFor(
+        pos: BlockPos,
+        lane: EffectProfile.LaneProfile,
+    ): ParticleSystemPrototype? {
+        return when (lane.dominanceMode) {
+            EffectProfile.DominanceMode.IGNORE -> lane.system
 
-        var occurrences = occurrencesForRate(
-            emissionsPerGameHour = profile.surfaceEmissionsPerGameHour,
-            deltaGameHours = deltaGameHours
-        )
+            EffectProfile.DominanceMode.WITHER_ONLY -> {
+                val dominant = dominantKindAt(pos)
+                if (dominant == Witherstone::class) {
+                    lane.dominantWitherSystem ?: lane.system
+                } else {
+                    null
+                }
+            }
 
-        // Surface safeguard:
-        // ensure spatial presence even at very low temporal rates.
-        if (occurrences <= 0 && profile.surfaceEmissionsPerGameHour > 0) occurrences = 1
-        if (occurrences <= 0) return
-
-        repeat(occurrences) {
-            val base = sampler.randomCandidate(world, rng) ?: return
-            emitParticleAt(
-                world = world,
-                pos = base,
-                system = system,
-                yOffsetSpread = profile.surfaceVerticalSpan
-            )
+            EffectProfile.DominanceMode.COLOR_BY_DOMINANT -> {
+                when (dominantKindAt(pos)) {
+                    Lorestone::class -> lane.dominantLoreSystem ?: lane.system
+                    Witherstone::class -> lane.dominantWitherSystem ?: lane.system
+                    else -> lane.system
+                }
+            }
         }
     }
+
+    private fun dominantKindAt(pos: BlockPos) =
+        StoneMapService.dominantByChunk(stone.dimension)[ChunkPos(pos)]
+
+    protected fun endRodSystem(
+        count: Int,
+        spreadX: Double,
+        spreadY: Double,
+        spreadZ: Double,
+        speed: Double,
+        baseYOffset: Double,
+    ): ParticleSystemPrototype = ParticleSystemPrototype(
+        particle = net.minecraft.particle.ParticleTypes.END_ROD,
+        count = count,
+        spreadX = spreadX,
+        spreadY = spreadY,
+        spreadZ = spreadZ,
+        speed = speed,
+        baseYOffset = baseYOffset,
+    )
+
+    protected fun happyVillagerSystem(
+        count: Int,
+        spreadX: Double,
+        spreadY: Double,
+        spreadZ: Double,
+        speed: Double,
+        baseYOffset: Double,
+    ): ParticleSystemPrototype = ParticleSystemPrototype(
+        particle = net.minecraft.particle.ParticleTypes.HAPPY_VILLAGER,
+        count = count,
+        spreadX = spreadX,
+        spreadY = spreadY,
+        spreadZ = spreadZ,
+        speed = speed,
+        baseYOffset = baseYOffset,
+    )
+
+    protected fun soulFireFlameSystem(
+        count: Int,
+        spreadX: Double,
+        spreadY: Double,
+        spreadZ: Double,
+        speed: Double,
+        baseYOffset: Double,
+    ): ParticleSystemPrototype = ParticleSystemPrototype(
+        particle = net.minecraft.particle.ParticleTypes.SOUL_FIRE_FLAME,
+        count = count,
+        spreadX = spreadX,
+        spreadY = spreadY,
+        spreadZ = spreadZ,
+        speed = speed,
+        baseYOffset = baseYOffset,
+    )
+
+    protected fun witchSystem(
+        count: Int,
+        spreadX: Double,
+        spreadY: Double,
+        spreadZ: Double,
+        speed: Double,
+        baseYOffset: Double,
+    ): ParticleSystemPrototype = ParticleSystemPrototype(
+        particle = net.minecraft.particle.ParticleTypes.WITCH,
+        count = count,
+        spreadX = spreadX,
+        spreadY = spreadY,
+        spreadZ = spreadZ,
+        speed = speed,
+        baseYOffset = baseYOffset,
+    )
+
+    protected fun campfireSmokeSystem(
+        count: Int,
+        spreadX: Double,
+        spreadY: Double,
+        spreadZ: Double,
+        speed: Double,
+        baseYOffset: Double,
+    ): ParticleSystemPrototype = ParticleSystemPrototype(
+        particle = net.minecraft.particle.ParticleTypes.CAMPFIRE_COSY_SMOKE,
+        count = count,
+        spreadX = spreadX,
+        spreadY = spreadY,
+        spreadZ = spreadZ,
+        speed = speed,
+        baseYOffset = baseYOffset,
+    )
 
     private fun occurrencesForRate(
         emissionsPerGameHour: Int,
