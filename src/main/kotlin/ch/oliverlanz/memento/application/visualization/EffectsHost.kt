@@ -51,7 +51,7 @@ class EffectsHost(
 
     fun onRenewalEvent(event: RenewalBatchLifecycleTransition) {
         val stoneName = event.batch.name
-        val stone = StoneTopology.get(stoneName) as? WitherstoneView
+        val stone = StoneAuthority.get(stoneName) as? WitherstoneView
 
         if (stone == null) {
             removeAllEffectsForStone(stoneName)

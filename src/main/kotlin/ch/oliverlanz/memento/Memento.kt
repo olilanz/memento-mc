@@ -17,7 +17,7 @@ import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerLogging
-import ch.oliverlanz.memento.domain.stones.StoneTopologyHooks
+import ch.oliverlanz.memento.domain.stones.StoneAuthorityHooks
 import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanCsvExporter
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
@@ -117,7 +117,7 @@ object Memento : ModInitializer {
             RenewalTracker.subscribe(renewalEventListener)
 
             WitherstoneRenewalBridge.attach()
-            StoneTopologyHooks.onServerStarted(server)
+            StoneAuthorityHooks.onServerStarted(server)
             StoneMaturityTimeBridge.attach()
             gameTimeTracker.attach(server)
         }
@@ -140,7 +140,7 @@ object Memento : ModInitializer {
 
             StoneMaturityTimeBridge.detach()
             WitherstoneRenewalBridge.detach()
-            StoneTopologyHooks.onServerStopping()
+            StoneAuthorityHooks.onServerStopping()
 
             CommandHandlers.detachVisualizationEngine()
             CommandHandlers.detachWorldScanner()

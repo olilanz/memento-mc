@@ -135,7 +135,7 @@ This decoupling prevents concurrency bugs and makes progress observable and expl
 
 ## 5. Core components and responsibilities
 
-### Stone authority (current implementation name: `StoneTopology`)
+### Stone authority (`StoneAuthority`)
 
 Stone authority owns stone register lifecycle semantics:
 
@@ -290,9 +290,9 @@ Minecraft owns chunk lifecycle and scheduling.
 All stone influence resolution flows through StoneTopology.
 → Duplicate logic drifted and produced conflicting outcomes.
 
-### ADR‑014: Split stone lifecycle authority and stone influence projection authority
+### ADR‑014: Split stone lifecycle authority and stone influence projection authority (superseded by ADR‑015)
 
-Stone lifecycle ownership remains in stone authority (current implementation name: `StoneTopology`) for placement, removal, maturity transitions, and persistence.
+Stone lifecycle ownership remains in stone authority (implementation name at decision time: `StoneTopology`) for placement, removal, maturity transitions, and persistence.
 
 Dominant-stone projection at chunk granularity is owned solely by `StoneMapService`.
 
@@ -300,6 +300,12 @@ Renewal-side derivation consumes `StoneMapService` dominance and must not re-der
 
 Class renaming to `StoneAuthority` is deferred until functional parity validation is complete.
 → This split preserves lifecycle clarity while removing projection duplication risk across renewal and overlays.
+
+### ADR‑015: Naming alignment — lifecycle authority uses `StoneAuthority`
+
+After parity verification, the lifecycle authority naming was updated from `StoneTopology` to `StoneAuthority` across code references and integration hooks.
+
+This ADR changes naming only. Ownership boundaries, lifecycle behavior, dominance semantics, and renewal derivation rules remain unchanged.
 
 ### ADR‑005: One Witherstone → one RenewalBatch
 

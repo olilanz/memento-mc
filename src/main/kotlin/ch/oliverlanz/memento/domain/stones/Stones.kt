@@ -11,7 +11,7 @@ import net.minecraft.world.World
  * Domain events and cross-cutting concerns should depend on this interface hierarchy,
  * not on mutable concrete stone implementations.
  *
- * Concrete stones are owned and mutated exclusively by StoneTopology.
+ * Concrete stones are owned and mutated exclusively by StoneAuthority.
  */
 interface StoneView {
     val name: String
@@ -36,7 +36,7 @@ interface LorestoneView : StoneView
 /**
  * Base type for all new-generation (shadow) Memento stones.
  *
- * Stones are mutable entities owned by StoneTopology.
+ * Stones are mutable entities owned by StoneAuthority.
  * Identity is stable; selected attributes may evolve over time.
  */
 sealed class Stone protected constructor(
@@ -62,7 +62,7 @@ enum class WitherstoneState {
  * A Witherstone triggers proactive renewal once matured.
  *
  * Radius and daysToMaturity are initialized from constants,
- * but may be amended later by StoneTopology or admin actions.
+ * but may be amended later by StoneAuthority or admin actions.
  */
 class Witherstone(
     name: String,

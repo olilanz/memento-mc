@@ -20,7 +20,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 
-object StoneTopologyPersistence {
+object StoneAuthorityPersistence {
 
     private val gson = GsonBuilder().setPrettyPrinting().create()
 
@@ -99,7 +99,7 @@ object StoneTopologyPersistence {
             out
         } catch (t: Throwable) {
             MementoLog.warn(MementoConcept.STORAGE, "failed to load stones; starting empty", t)
-            MementoDebug.warn(server, "StoneTopology load failed, starting empty: ${t.message}")
+            MementoDebug.warn(server, "StoneAuthority load failed, starting empty: ${t.message}")
             emptyList()
         }
     }

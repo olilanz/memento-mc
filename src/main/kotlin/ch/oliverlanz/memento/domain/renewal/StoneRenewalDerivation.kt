@@ -3,7 +3,7 @@ package ch.oliverlanz.memento.domain.renewal
 import ch.oliverlanz.memento.domain.stones.Lorestone
 import ch.oliverlanz.memento.domain.stones.StoneMapService
 import ch.oliverlanz.memento.domain.stones.StoneSpatial
-import ch.oliverlanz.memento.domain.stones.StoneTopology
+import ch.oliverlanz.memento.domain.stones.StoneAuthority
 import ch.oliverlanz.memento.domain.stones.Witherstone
 import ch.oliverlanz.memento.domain.stones.WitherstoneState
 
@@ -11,7 +11,7 @@ import ch.oliverlanz.memento.domain.stones.WitherstoneState
  * Renewal-side derivation from stone lifecycle state + stone-map dominance projection.
  *
  * Ownership boundary:
- * - Stone lifecycle remains owned by [StoneTopology].
+ * - Stone lifecycle remains owned by [StoneAuthority].
  * - Dominance projection is consumed through [StoneMapService].
  * - Renewal batch definitions are owned by [RenewalTracker].
  */
@@ -20,7 +20,7 @@ object StoneRenewalDerivation {
     private val log = ch.oliverlanz.memento.infrastructure.observability.MementoLog
 
     fun ensureForMaturedWitherstone(stoneName: String, reason: String): Boolean {
-        val witherstone = StoneTopology.get(stoneName) as? Witherstone ?: return false
+        val witherstone = StoneAuthority.get(stoneName) as? Witherstone ?: return false
         if (witherstone.state != WitherstoneState.MATURED) return false
 
         ensureForWitherstone(witherstone, reason = reason)
@@ -28,7 +28,7 @@ object StoneRenewalDerivation {
     }
 
     fun ensureForAllMaturedWitherstones(reason: String): Int {
-        val matured = StoneTopology.list()
+        val matured = StoneAuthority.list()
             .asSequence()
             .mapNotNull { it as? Witherstone }
             .filter { it.state == WitherstoneState.MATURED }
@@ -42,7 +42,7 @@ object StoneRenewalDerivation {
     }
 
     fun ensureForMaturedWitherstonesAffectedByLorestone(lorestone: Lorestone, reason: String) {
-        val affected = StoneTopology.list()
+        val affected = StoneAuthority.list()
             .asSequence()
             .mapNotNull { it as? Witherstone }
             .filter { it.dimension == lorestone.dimension }
