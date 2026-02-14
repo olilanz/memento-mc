@@ -11,17 +11,7 @@ import net.minecraft.util.math.ChunkPos
  * This component is purely observational.
  * It does NOT tick, schedule, or perform renewal.
  */
-object RenewalTrackerHooks {
-
-    private var tracker: RenewalTracker? = null
-
-    fun attach(tracker: RenewalTracker) {
-        this.tracker = tracker
-    }
-
-    fun detach() {
-        this.tracker = null
-    }
+object RenewalChunkObservationBridge {
 
     fun onChunkLoaded(world: RegistryKey<World>, pos: ChunkPos) {
         // dimension intentionally ignored for now (single-world assumption)

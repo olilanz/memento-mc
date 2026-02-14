@@ -1,6 +1,6 @@
 package ch.oliverlanz.memento.application.stone
 
-import ch.oliverlanz.memento.domain.stones.StoneAuthorityHooks
+import ch.oliverlanz.memento.domain.stones.StoneAuthorityWiring
 import ch.oliverlanz.memento.MementoConstants
 import net.minecraft.server.MinecraftServer
 
@@ -51,7 +51,7 @@ class OverworldDayObserver {
         val deltaDays = (mementoDay - last).toInt()
         if (deltaDays > 0) {
             lastObservedMementoDay = mementoDay
-            StoneAuthorityHooks.onNightlyCheckpoint(deltaDays)
+            StoneAuthorityWiring.onNightlyCheckpoint(deltaDays)
         }
     }
 }

@@ -2,7 +2,7 @@ package ch.oliverlanz.memento.application.stone
 
 import ch.oliverlanz.memento.domain.events.GameDayAdvanced
 import ch.oliverlanz.memento.domain.events.GameTimeDomainEvents
-import ch.oliverlanz.memento.domain.stones.StoneAuthorityHooks
+import ch.oliverlanz.memento.domain.stones.StoneAuthorityWiring
 
 /**
  * Application bridge: drives stone maturity from semantic time events.
@@ -21,6 +21,6 @@ object StoneMaturityTimeBridge {
 
     private fun onDayAdvanced(event: GameDayAdvanced) {
         // Drive maturity progression using the same checkpoint semantics as before.
-        StoneAuthorityHooks.onNightlyCheckpoint(event.deltaDays)
+        StoneAuthorityWiring.onNightlyCheckpoint(event.deltaDays)
     }
 }
