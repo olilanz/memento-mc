@@ -196,7 +196,7 @@ internal class ChunkLoadRegister {
                     when (entry.telemetrySourceBucket()) {
                         RequestSource.SCANNER -> sourceCounts.scanner++
                         RequestSource.RENEWAL -> sourceCounts.renewal++
-                        RequestSource.UNSOLICITED -> sourceCounts.unsolicited++
+                        RequestSource.AMBIENT -> sourceCounts.ambient++
                     }
 
                     if (entry.ticketName != null) {
@@ -254,7 +254,7 @@ internal class ChunkLoadRegister {
                     when (entry.telemetrySourceBucket()) {
                         RequestSource.SCANNER -> sourceCounts.scanner++
                         RequestSource.RENEWAL -> sourceCounts.renewal++
-                        RequestSource.UNSOLICITED -> sourceCounts.unsolicited++
+                        RequestSource.AMBIENT -> sourceCounts.ambient++
                     }
 
                     if (entry.ticketName != null) {
@@ -295,11 +295,11 @@ internal class ChunkLoadRegister {
                 val existed = entries.containsKey(chunk)
                 val entry = entries.getOrPut(chunk) { Entry(chunk, firstSeenTick = nowTick) }
 
-                // If this is a purely unsolicited observation (no demand known yet), tag it for
+                // If this is a purely ambient observation (no demand known yet), tag it for
                 // observability.
-                val unsolicited = (!existed && entry.desiredBy.isEmpty())
-                if (unsolicited) {
-                    entry.requestedBy += RequestSource.UNSOLICITED
+                val ambient = (!existed && entry.desiredBy.isEmpty())
+                if (ambient) {
+                    entry.requestedBy += RequestSource.AMBIENT
                 }
 
                 val result = entry.recordEngineLoadObserved(nowTick)
@@ -313,7 +313,7 @@ internal class ChunkLoadRegister {
                     awaitingFullLoad.add(chunk)
                 }
 
-                EngineLoadObservation(result = result, isUnsolicited = unsolicited)
+                EngineLoadObservation(result = result, isAmbient = ambient)
             }
 
     /**
@@ -407,24 +407,24 @@ internal class ChunkLoadRegister {
     fun containsEntry(chunk: ChunkRef): Boolean = lock.withLock { entries.containsKey(chunk) }
 
     /**
-     * Counts lifecycle entries that originated from *solicited* driver demand (scanner/renewal)
+     * Counts lifecycle entries that originated from *planned* driver demand (scanner/renewal)
      * and are still active (i.e., not COMPLETED_PENDING_PRUNE).
      *
-     * IMPORTANT: Unsolicited observations may also create entries, but those must not consume
+     * IMPORTANT: Ambient observations may also create entries, but those must not consume
      * driver capacity for issuing new tickets.
      */
-    fun countActiveSolicitedEntries(): Int =
-            lock.withLock { entries.values.count { it.isSolicited() && !it.isCompletedPendingPrune() } }
+    fun countActivePlannedEntries(): Int =
+            lock.withLock { entries.values.count { it.isPlanned() && !it.isCompletedPendingPrune() } }
 
     /**
      * True if the driver currently tracks a lifecycle entry for [chunk] that originated from
      * driver demand (scanner or renewal).
      *
      * This is intentionally *not* equivalent to "entry exists": the register may also contain
-     * entries adopted from unsolicited engine loads.
-     */
-    fun hasSolicitedEntry(chunk: ChunkRef): Boolean =
-            lock.withLock { entries[chunk]?.isSolicited() == true }
+      * entries adopted from ambient engine loads.
+      */
+    fun hasPlannedEntry(chunk: ChunkRef): Boolean =
+            lock.withLock { entries[chunk]?.isPlanned() == true }
 
     /**
      * Takes up to [max] ticket candidates.
@@ -544,13 +544,13 @@ internal class ChunkLoadRegister {
 
     internal data class EngineLoadObservation(
             val result: EngineObservationResult,
-            val isUnsolicited: Boolean,
+            val isAmbient: Boolean,
     )
 
     internal enum class RequestSource {
         RENEWAL,
         SCANNER,
-        UNSOLICITED,
+        AMBIENT,
     }
 
     internal data class PruneResult(
@@ -576,7 +576,7 @@ internal class ChunkLoadRegister {
     internal data class ExpirySourceCountsView(
             val scanner: Int,
             val renewal: Int,
-            val unsolicited: Int,
+            val ambient: Int,
     )
 
     internal data class ExpiryTicketStatus(
@@ -587,13 +587,13 @@ internal class ChunkLoadRegister {
     private data class ExpirySourceCounts(
             var scanner: Int = 0,
             var renewal: Int = 0,
-            var unsolicited: Int = 0,
+            var ambient: Int = 0,
     ) {
         fun toView(): ExpirySourceCountsView =
                 ExpirySourceCountsView(
                         scanner = scanner,
                         renewal = renewal,
-                        unsolicited = unsolicited,
+                        ambient = ambient,
                 )
     }
 
@@ -696,10 +696,10 @@ data class StateInventory(
          * True if this entry has ever been requested by a driver demand provider (scanner or
          * renewal).
          *
-         * NOTE: The register may also contain entries adopted from unsolicited engine loads.
+         * NOTE: The register may also contain entries adopted from ambient engine loads.
          * Those must not be treated as driver-demand origins for pressure attribution.
          */
-        fun isSolicited(): Boolean =
+        fun isPlanned(): Boolean =
                 requestedBy.contains(RequestSource.RENEWAL) ||
                         requestedBy.contains(RequestSource.SCANNER)
 
@@ -707,13 +707,13 @@ data class StateInventory(
          * Telemetry source bucket for bounded expiry composition summaries.
          *
          * Precedence is explicit and deterministic so source counts form a partition:
-         * RENEWAL > SCANNER > UNSOLICITED.
+         * RENEWAL > SCANNER > AMBIENT.
          */
         fun telemetrySourceBucket(): RequestSource =
                 when {
                     requestedBy.contains(RequestSource.RENEWAL) -> RequestSource.RENEWAL
                     requestedBy.contains(RequestSource.SCANNER) -> RequestSource.SCANNER
-                    else -> RequestSource.UNSOLICITED
+                    else -> RequestSource.AMBIENT
                 }
 
         fun view(): EntryView =
