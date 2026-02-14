@@ -10,11 +10,11 @@ import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import net.minecraft.server.MinecraftServer
 
 /**
- * Adapter hooks for wiring StoneAuthority into the mod runtime.
+ * Adapter wiring for StoneAuthority integration into the mod runtime.
  *
  * Keeps the integration surface small and avoids entangling legacy and shadow implementations.
  */
-object StoneAuthorityHooks {
+object StoneAuthorityWiring {
     private var loggingAttached = false
     private var serverRef: MinecraftServer? = null
 

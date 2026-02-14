@@ -15,9 +15,9 @@ import ch.oliverlanz.memento.domain.worldmap.WorldMapService
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchLifecycleTransition
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
-import ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks
+import ch.oliverlanz.memento.domain.renewal.RenewalChunkObservationBridge
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerLogging
-import ch.oliverlanz.memento.domain.stones.StoneAuthorityHooks
+import ch.oliverlanz.memento.domain.stones.StoneAuthorityWiring
 import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanCsvExporter
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
@@ -83,14 +83,14 @@ object Memento : ModInitializer {
                 // Single fan-out point for chunk availability → domain renewal tracker
                 it.registerConsumer(object : ChunkAvailabilityListener {
                     override fun onChunkMetadata(world: ServerWorld, fact: ChunkMetadataFact) {
-                        RenewalTrackerHooks.onChunkLoaded(
+                        RenewalChunkObservationBridge.onChunkLoaded(
                             world.registryKey,
                             ChunkPos(fact.key.chunkX, fact.key.chunkZ)
                         )
                     }
 
                     override fun onChunkUnloaded(world: ServerWorld, pos: ChunkPos) {
-                        RenewalTrackerHooks.onChunkUnloaded(world.registryKey, pos)
+                        RenewalChunkObservationBridge.onChunkUnloaded(world.registryKey, pos)
                     }
                 })
             }
@@ -117,7 +117,7 @@ object Memento : ModInitializer {
             RenewalTracker.subscribe(renewalEventListener)
 
             WitherstoneRenewalBridge.attach()
-            StoneAuthorityHooks.onServerStarted(server)
+            StoneAuthorityWiring.onServerStarted(server)
             StoneMaturityTimeBridge.attach()
             gameTimeTracker.attach(server)
         }
@@ -140,7 +140,7 @@ object Memento : ModInitializer {
 
             StoneMaturityTimeBridge.detach()
             WitherstoneRenewalBridge.detach()
-            StoneAuthorityHooks.onServerStopping()
+            StoneAuthorityWiring.onServerStopping()
 
             CommandHandlers.detachVisualizationEngine()
             CommandHandlers.detachWorldScanner()
