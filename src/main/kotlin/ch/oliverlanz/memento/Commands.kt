@@ -158,28 +158,46 @@ object Commands {
                  * ALTER
                  * ====================== */
                 .then(literal("alter")
-                    .then(argument("name", StringArgumentType.word())
-                        .suggests(CommandHandlers::suggestAnyStoneName)
-                        .then(literal("radius")
-                            .then(argument("value", IntegerArgumentType.integer(0, 10))
-                                .executes { ctx ->
-                                    CommandHandlers.alterRadius(
-                                        ctx.source,
-                                        StringArgumentType.getString(ctx, "name"),
-                                        IntegerArgumentType.getInteger(ctx, "value")
-                                    )
-                                }
+                    .then(literal("witherstone")
+                        .then(argument("name", StringArgumentType.word())
+                            .suggests(CommandHandlers::suggestWitherstoneName)
+                            .then(literal("radius")
+                                .then(argument("value", IntegerArgumentType.integer(0, 10))
+                                    .executes { ctx ->
+                                        CommandHandlers.alterRadius(
+                                            ctx.source,
+                                            StringArgumentType.getString(ctx, "name"),
+                                            IntegerArgumentType.getInteger(ctx, "value")
+                                        )
+                                    }
+                                )
+                            )
+                            .then(literal("daysToMaturity")
+                                .then(argument("value", IntegerArgumentType.integer(0, 10))
+                                    .executes { ctx ->
+                                        CommandHandlers.alterDaysToMaturity(
+                                            ctx.source,
+                                            StringArgumentType.getString(ctx, "name"),
+                                            IntegerArgumentType.getInteger(ctx, "value")
+                                        )
+                                    }
+                                )
                             )
                         )
-                        .then(literal("daysToMaturity")
-                            .then(argument("value", IntegerArgumentType.integer(0, 10))
-                                .executes { ctx ->
-                                    CommandHandlers.alterDaysToMaturity(
-                                        ctx.source,
-                                        StringArgumentType.getString(ctx, "name"),
-                                        IntegerArgumentType.getInteger(ctx, "value")
-                                    )
-                                }
+                    )
+                    .then(literal("lorestone")
+                        .then(argument("name", StringArgumentType.word())
+                            .suggests(CommandHandlers::suggestLorestoneName)
+                            .then(literal("radius")
+                                .then(argument("value", IntegerArgumentType.integer(0, 10))
+                                    .executes { ctx ->
+                                        CommandHandlers.alterRadius(
+                                            ctx.source,
+                                            StringArgumentType.getString(ctx, "name"),
+                                            IntegerArgumentType.getInteger(ctx, "value")
+                                        )
+                                    }
+                                )
                             )
                         )
                     )
