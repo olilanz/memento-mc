@@ -190,15 +190,9 @@ object MementoConstants {
     const val MEMENTO_SCAN_CSV_FILE: String = "memento_world_snapshot.csv"
 
     /**
-     * Tracer-bullet throttling: maximum chunk slots processed per server tick while /memento scan
-     * is active.
-     */
-    const val MEMENTO_SCAN_CHUNK_SLOTS_PER_TICK: Int = 2
-
-    /**
      * Maximum number of externally ingested scan metadata facts applied per server tick.
      *
      * Bounded application keeps map mutation costs predictable while preserving eventual progress.
      */
-    const val MEMENTO_SCAN_METADATA_APPLIER_MAX_PER_TICK: Int = 32
+    const val MEMENTO_SCAN_METADATA_APPLIER_MAX_PER_TICK: Int = 128
 }
