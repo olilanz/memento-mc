@@ -49,6 +49,9 @@ object Commands {
                  * VISUALIZE
                  * ====================== */
                 .then(literal("visualize")
+                    .executes { ctx ->
+                        CommandHandlers.visualizeAll(ctx.source)
+                    }
                     .then(argument("name", StringArgumentType.word())
                         .executes { ctx ->
                             CommandHandlers.visualize(ctx.source, StringArgumentType.getString(ctx, "name"))

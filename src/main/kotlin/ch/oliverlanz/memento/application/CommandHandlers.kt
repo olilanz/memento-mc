@@ -126,6 +126,38 @@ object CommandHandlers {
         }
     }
 
+    fun visualizeAll(source: ServerCommandSource): Int {
+        MementoLog.info(MementoConcept.OPERATOR, "command=visualize all by={}", source.name)
+
+        val engine = effectsHost
+        if (engine == null) {
+            source.sendError(Text.literal("Visualization engine is not ready yet."))
+            return 0
+        }
+
+        return try {
+            val stones = StoneAuthority.list().sortedBy { it.name }
+            if (stones.isEmpty()) {
+                source.sendFeedback({ Text.literal("No stones registered.").formatted(Formatting.GRAY) }, false)
+                return 1
+            }
+
+            stones.forEach { stone ->
+                engine.visualizeStone(stone)
+            }
+
+            source.sendFeedback(
+                { Text.literal("Visualizing all ${stones.size} stones for a short time.").formatted(Formatting.YELLOW) },
+                false
+            )
+            1
+        } catch (e: Exception) {
+            MementoLog.error(MementoConcept.OPERATOR, "command=visualize all failed", e)
+            source.sendError(Text.literal("Memento: could not visualize stones (see server log)."))
+            0
+        }
+    }
+
     fun scan(source: ServerCommandSource): Int {
         MementoLog.info(MementoConcept.OPERATOR, "command=scan by={}", source.name)
 
