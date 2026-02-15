@@ -1,14 +1,11 @@
 package ch.oliverlanz.memento.application.visualization.effects
 
-import ch.oliverlanz.memento.application.visualization.effectplans.EffectPlan
-import ch.oliverlanz.memento.application.visualization.effectplans.RateEffectPlan
+import ch.oliverlanz.memento.application.visualization.effectplans.*
 import ch.oliverlanz.memento.infrastructure.time.GameClock
 import ch.oliverlanz.memento.infrastructure.time.GameHours
 import ch.oliverlanz.memento.infrastructure.time.asGameTicks
 import ch.oliverlanz.memento.infrastructure.time.toGameHours
-import ch.oliverlanz.memento.application.visualization.samplers.SamplerMaterializationConfig
-import ch.oliverlanz.memento.application.visualization.samplers.StoneBlockSampler
-import ch.oliverlanz.memento.application.visualization.samplers.SingleChunkSurfaceSampler
+import ch.oliverlanz.memento.application.visualization.samplers.*
 import ch.oliverlanz.memento.domain.stones.StoneView
 import ch.oliverlanz.memento.domain.stones.StoneMapService
 import ch.oliverlanz.memento.domain.stones.Lorestone
@@ -161,30 +158,30 @@ abstract class EffectBase(
         p.stoneBlock.verticalSpan = 0..16
         p.stoneBlock.sampler = StoneBlockSampler(stone)
         p.stoneBlock.materialization = SamplerMaterializationConfig()
-        p.stoneBlock.plan = RateEffectPlan(emissionsPerGameHour = 80)
-        p.stoneBlock.dominantLoreSystem = lorestoneParticles()
-        p.stoneBlock.dominantWitherSystem = witherstoneParticles()
+        p.stoneBlock.plan = RateEffectPlan(emissionsPerGameHour = 200)
+        p.stoneBlock.dominantLoreSystem = anchorParticles()
+        p.stoneBlock.dominantWitherSystem = anchorParticles()
 
         // Stone chunk lane defaults
-        p.stoneChunk.verticalSpan = 0..0
+        p.stoneChunk.verticalSpan = 2..3
         p.stoneChunk.sampler = SingleChunkSurfaceSampler(stone)
+        p.stoneChunk.plan = PulsatingEffectPlan(pulseEveryGameHours = 0.04, emissionsPerPulse = 143)
         p.stoneChunk.materialization = SamplerMaterializationConfig()
-        p.stoneChunk.plan = RateEffectPlan(emissionsPerGameHour = 200)
-        p.stoneChunk.dominantLoreSystem = anchorParticles()
-        p.stoneChunk.dominantWitherSystem = anchorParticles()
+        p.stoneChunk.dominantLoreSystem = lorestoneParticles()
+        p.stoneChunk.dominantWitherSystem = witherstoneParticles()
 
         // Influence area lane defaults
-        p.influenceArea.sampler = null
-        p.influenceArea.verticalSpan = 0..0
-        p.influenceArea.plan = RateEffectPlan(emissionsPerGameHour = 0)
+        p.influenceArea.verticalSpan = 1..1
+        p.influenceArea.sampler = InfluenceAreaSurfaceSampler(stone)
+        p.influenceArea.plan = PulsatingEffectPlan(pulseEveryGameHours = 0.04, emissionsPerPulse = 143)
         p.influenceArea.materialization = SamplerMaterializationConfig()
         p.influenceArea.dominantLoreSystem = lorestoneParticles()
         p.influenceArea.dominantWitherSystem = witherstoneParticles()
 
         // Influence outline lane defaults
-        p.influenceOutline.sampler = null
-        p.influenceOutline.verticalSpan = 0..0
-        p.influenceOutline.plan = RateEffectPlan(emissionsPerGameHour = 0)
+        p.influenceOutline.verticalSpan = 1..1
+        p.influenceOutline.sampler = InfluenceOutlineSurfaceSampler(stone, thicknessBlocks = 4)
+        p.influenceOutline.plan = RunningEffectPlan(speedChunksPerGameHour = 96.0, maxCursorSpacingBlocks = 6)
         p.influenceOutline.materialization = SamplerMaterializationConfig()
         p.influenceOutline.dominantLoreSystem = lorestoneParticles()
         p.influenceOutline.dominantWitherSystem = witherstoneParticles()
@@ -290,7 +287,7 @@ abstract class EffectBase(
     }
 
     protected fun anchorParticles(): ParticleSystemPrototype = ParticleSystemPrototype(
-        particle = net.minecraft.particle.ParticleTypes.END_ROD,
+        particle = net.minecraft.particle.ParticleTypes.HAPPY_VILLAGER,
         count = 12,
         spreadX = 0.45,
         spreadY = 0.15,
@@ -300,16 +297,6 @@ abstract class EffectBase(
     )
 
     protected fun lorestoneParticles(): ParticleSystemPrototype = ParticleSystemPrototype(
-        particle = net.minecraft.particle.ParticleTypes.HAPPY_VILLAGER,
-        count = 10,
-        spreadX = 0.375,
-        spreadY = 0.12,
-        spreadZ = 0.375,
-        speed = 0.01,
-        baseYOffset = 1.0,
-    )
-
-    protected fun witherstoneParticles(): ParticleSystemPrototype = ParticleSystemPrototype(
         particle = net.minecraft.particle.ParticleTypes.SOUL_FIRE_FLAME,
         count = 10,
         spreadX = 0.375,
@@ -319,7 +306,15 @@ abstract class EffectBase(
         baseYOffset = 1.0,
     )
 
-    /* ---------- Particle emission ---------- */
+    protected fun witherstoneParticles(): ParticleSystemPrototype = ParticleSystemPrototype(
+        particle = net.minecraft.particle.ParticleTypes.END_ROD,
+        count = 10,
+        spreadX = 0.375,
+        spreadY = 0.12,
+        spreadZ = 0.375,
+        speed = 0.01,
+        baseYOffset = 1.0,
+    )
 
     protected fun emitParticleAt(
         world: ServerWorld,

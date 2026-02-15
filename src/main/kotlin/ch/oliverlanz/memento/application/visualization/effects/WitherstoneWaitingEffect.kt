@@ -26,31 +26,17 @@ class WitherstoneWaitingEffect(stone: WitherstoneView) : EffectBase(stone) {
         profile.lifetime = null             // Waiting: infinite until externally terminated.
 
         // Stone block lane
-        profile.stoneBlock.verticalSpan = 0..24
-        profile.stoneBlock.plan = RateEffectPlan(emissionsPerGameHour = 64)
-        profile.stoneBlock.dominantLoreSystem = lorestoneParticles()
-        profile.stoneBlock.dominantWitherSystem = lorestoneParticles()
+        // use dfaults
 
         // Stone chunk lane
         profile.stoneChunk.sampler = null
 
         // Influence area lane
-        profile.influenceArea.sampler = InfluenceAreaSurfaceSampler(stone)
-        profile.influenceArea.verticalSpan = 1..1
-        profile.influenceArea.plan = PulsatingEffectPlan(
-            pulseEveryGameHours = 0.04,
-            emissionsPerPulse = 84,
-        )
+        profile.influenceArea.verticalSpan = 1..5
         profile.influenceArea.materialization = SamplerMaterializationConfig(detail = 0.30)
         profile.influenceArea.dominantLoreSystem = null
 
         // Influence outline lane
-        profile.influenceOutline.sampler = InfluenceOutlineSurfaceSampler(stone, thicknessBlocks = 4)
-        profile.influenceOutline.verticalSpan = 1..1
-        profile.influenceOutline.plan = RunningEffectPlan(
-            speedChunksPerGameHour = 96.0,
-            maxCursorSpacingBlocks = 10,
-        )
         profile.influenceOutline.materialization = SamplerMaterializationConfig(detail = 0.45)
         profile.influenceOutline.dominantLoreSystem = null
     }
