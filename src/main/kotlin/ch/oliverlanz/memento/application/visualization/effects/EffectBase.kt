@@ -63,8 +63,6 @@ abstract class EffectBase(
         val spreadY: Double,
         val spreadZ: Double,
         val speed: Double,
-        /** Base vertical offset above the sampled block (often y+1.0). */
-        val baseYOffset: Double,
     )
 
     private var alive: Boolean = true
@@ -161,28 +159,28 @@ abstract class EffectBase(
         p.lifetime = null
 
         // Anchor point lane defaults
-        p.anchorPoint.verticalSpan = 0..16
+        p.anchorPoint.verticalSpan = 1.0..10.0
         p.anchorPoint.sampler = AnchorPointSampler(stone)
-        p.anchorPoint.planFactory = { RateEffectPlan(emissionsPerGameHour = 400) }
+        p.anchorPoint.planFactory = { RateEffectPlan(emissionsPerGameHour = 500) }
         p.anchorPoint.dominantLoreSystem = anchorParticles()
         p.anchorPoint.dominantWitherSystem = anchorParticles()
 
         // Anchor chunk lane defaults
-        p.anchorChunk.verticalSpan = 2..3
+        p.anchorChunk.verticalSpan = 2.0..3.0
         p.anchorChunk.sampler = AnchorChunkSampler(stone)
         p.anchorChunk.planFactory = { PulsatingEffectPlan(pulseEveryGameHours = 0.02, emissionsPerPulse = 200) }
         p.anchorChunk.dominantLoreSystem = lorestoneParticles()
         p.anchorChunk.dominantWitherSystem = witherstoneParticles()
 
         // Influence area lane defaults
-        p.influenceArea.verticalSpan = 1..1
+        p.influenceArea.verticalSpan = 1.0..1.0
         p.influenceArea.sampler = InfluenceAreaSurfaceSampler(stone)
         p.influenceArea.planFactory = { PulsatingEffectPlan(pulseEveryGameHours = 0.02, emissionsPerPulse = 200) }
         p.influenceArea.dominantLoreSystem = lorestoneParticles()
         p.influenceArea.dominantWitherSystem = witherstoneParticles()
 
         // Influence outline lane defaults
-        p.influenceOutline.verticalSpan = 1..1
+        p.influenceOutline.verticalSpan = 1.0..1.0
         p.influenceOutline.sampler = InfluenceOutlineSurfaceSampler(stone)
         p.influenceOutline.planFactory = { RunningEffectPlan(speedChunksPerGameHour = 96.0, maxCursorSpacingBlocks = 10) }
         p.influenceOutline.dominantLoreSystem = lorestoneParticles()
@@ -290,7 +288,7 @@ abstract class EffectBase(
 
     private data class BoundEmissionToken(
         val particlePrototype: ParticleSystemPrototype,
-        val verticalSpread: IntRange,
+        val verticalSpread: ClosedFloatingPointRange<Double>,
     )
 
     private inner class LaneExecutionSurface(
@@ -314,7 +312,6 @@ abstract class EffectBase(
         spreadY = 0.2,
         spreadZ = 0.5,
         speed = 0.01,
-        baseYOffset = 1.0,
     )
 
     protected fun lorestoneParticles(): ParticleSystemPrototype = ParticleSystemPrototype(
@@ -324,7 +321,6 @@ abstract class EffectBase(
         spreadY = 0.15,
         spreadZ = 0.5,
         speed = 0.01,
-        baseYOffset = 1.0,
     )
 
     protected fun witherstoneParticles(): ParticleSystemPrototype = ParticleSystemPrototype(
@@ -334,24 +330,23 @@ abstract class EffectBase(
         spreadY = 0.15,
         spreadZ = 0.5,
         speed = 0.01,
-        baseYOffset = 1.0,
     )
 
     protected fun emitParticleAt(
         world: ServerWorld,
         pos: BlockPos,
         particlePrototype: ParticleSystemPrototype,
-        yOffsetSpread: IntRange,
+        yOffsetSpread: ClosedFloatingPointRange<Double>,
     ) {
         val spread = when {
-            yOffsetSpread.first == yOffsetSpread.last -> yOffsetSpread.first
-            else -> Random.nextInt(yOffsetSpread.first, yOffsetSpread.last + 1)
-        }.toDouble()
+            yOffsetSpread.start == yOffsetSpread.endInclusive -> yOffsetSpread.start
+            else -> Random.nextDouble(yOffsetSpread.start, yOffsetSpread.endInclusive)
+        }
 
         world.spawnParticles(
             particlePrototype.particle,
             pos.x + 0.5,
-            pos.y + particlePrototype.baseYOffset + spread,
+            pos.y + spread,
             pos.z + 0.5,
             particlePrototype.count,
             particlePrototype.spreadX,
