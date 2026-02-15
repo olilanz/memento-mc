@@ -25,28 +25,33 @@ class StoneInspectionEffect(stone: StoneView) : EffectBase(stone) {
         profile.lifetime = GameHours(0.15)  // Inspection: short-lived and high signal.
 
         // Stone block lane
-        // no override; base defaults
+        profile.stoneBlock.verticalSpan = 0..24
+        profile.stoneBlock.plan = RateEffectPlan(emissionsPerGameHour = 64)
+        profile.stoneBlock.dominantLoreSystem = lorestoneParticles()
+        profile.stoneBlock.dominantWitherSystem = lorestoneParticles()
 
         // Stone chunk lane
         profile.stoneChunk.plan = RateEffectPlan(emissionsPerGameHour = 1760)
-        profile.stoneChunk.verticalSpan = 0..3
+        profile.stoneChunk.verticalSpan = 2..2
+        profile.stoneChunk.dominantLoreSystem = lorestoneParticles()
+        profile.stoneChunk.dominantWitherSystem = witherstoneParticles()
 
         // Influence area lane
         profile.influenceArea.sampler = InfluenceAreaSurfaceSampler(stone)
         profile.influenceArea.plan = PulsatingEffectPlan(
-            pulseEveryGameHours = 0.02,
+            pulseEveryGameHours = 0.04,
             emissionsPerPulse = 80,
         )
-        profile.influenceArea.verticalSpan = 0..2
+        profile.influenceArea.verticalSpan = 1..1
         profile.influenceArea.materialization = SamplerMaterializationConfig(detail = 0.35)
 
         // Influence outline lane
         profile.influenceOutline.sampler = InfluenceOutlineSurfaceSampler(stone, thicknessBlocks = 4)
         profile.influenceOutline.plan = RunningEffectPlan(
             speedChunksPerGameHour = 120.0,
-            maxCursorSpacingBlocks = 8,
+            maxCursorSpacingBlocks = 10,
         )
-        profile.influenceOutline.verticalSpan = 0..2
+        profile.influenceOutline.verticalSpan = 1..1
         profile.influenceOutline.materialization = SamplerMaterializationConfig(detail = 0.50)
     }
 }
