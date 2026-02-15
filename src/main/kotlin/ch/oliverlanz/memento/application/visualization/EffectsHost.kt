@@ -46,7 +46,7 @@ class EffectsHost(
     /* ---------- Public semantic API ---------- */
 
     fun visualizeStone(stone: StoneView) {
-        add(stone, StoneInspectionEffect(stone))
+        add(stone, StoneVisualizeEffect(stone))
     }
 
     /* ---------- Domain event handling ---------- */

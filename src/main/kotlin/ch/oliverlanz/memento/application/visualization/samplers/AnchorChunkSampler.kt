@@ -11,7 +11,7 @@ import net.minecraft.world.Heightmap
  *
  * Uses MOTION_BLOCKING_NO_LEAVES to prefer ground over canopy and avoid floating visuals.
  */
-class SingleChunkSurfaceSampler(
+class AnchorChunkSampler(
     private val stone: StoneView,
 ) : StoneSampler {
 
