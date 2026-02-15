@@ -4,6 +4,7 @@ import ch.oliverlanz.memento.infrastructure.time.GameClock
 import ch.oliverlanz.memento.infrastructure.time.GameHours
 import ch.oliverlanz.memento.infrastructure.time.asGameTicks
 import ch.oliverlanz.memento.infrastructure.time.toGameHours
+import ch.oliverlanz.memento.application.visualization.samplers.SamplerMaterializationConfig
 import ch.oliverlanz.memento.application.visualization.samplers.StoneBlockSampler
 import ch.oliverlanz.memento.application.visualization.samplers.SingleChunkSurfaceSampler
 import ch.oliverlanz.memento.domain.stones.StoneView
@@ -135,26 +136,38 @@ abstract class EffectBase(
      * effect instance (most commonly surface sampler, lifetime and surface emission rate).
      */
     private fun defaultProfile(): EffectProfile = EffectProfile().also { p ->
-        // Stone block defaults (identity/anchor lane)
+        // Global defaults
+        p.lifetime = null
+
+        // Stone block lane defaults (identity/anchor lane)
         p.stoneBlock.verticalSpan = 0..16
         p.stoneBlock.sampler = StoneBlockSampler(stone)
+        p.stoneBlock.materialization = SamplerMaterializationConfig()
         p.stoneBlock.emissionsPerGameHour = 80
-        p.stoneBlock.system = lorestoneParticles()
+        p.stoneBlock.dominantLoreSystem = lorestoneParticles()
+        p.stoneBlock.dominantWitherSystem = witherstoneParticles()
 
-        // Stone chunk defaults
+        // Stone chunk lane defaults
         p.stoneChunk.verticalSpan = 0..0
         p.stoneChunk.sampler = SingleChunkSurfaceSampler(stone)
+        p.stoneChunk.materialization = SamplerMaterializationConfig()
         p.stoneChunk.emissionsPerGameHour = 200
-        p.stoneChunk.system = anchorParticles()
+        p.stoneChunk.dominantLoreSystem = anchorParticles()
+        p.stoneChunk.dominantWitherSystem = anchorParticles()
 
-        // Extra lanes are opt-in.
+        // Influence area lane defaults
         p.influenceArea.sampler = null
+        p.influenceArea.verticalSpan = 0..0
         p.influenceArea.emissionsPerGameHour = 0
+        p.influenceArea.materialization = SamplerMaterializationConfig()
         p.influenceArea.dominantLoreSystem = lorestoneParticles()
         p.influenceArea.dominantWitherSystem = witherstoneParticles()
 
+        // Influence outline lane defaults
         p.influenceOutline.sampler = null
+        p.influenceOutline.verticalSpan = 0..0
         p.influenceOutline.emissionsPerGameHour = 0
+        p.influenceOutline.materialization = SamplerMaterializationConfig()
         p.influenceOutline.dominantLoreSystem = lorestoneParticles()
         p.influenceOutline.dominantWitherSystem = witherstoneParticles()
     }
@@ -218,25 +231,10 @@ abstract class EffectBase(
         pos: BlockPos,
         lane: EffectProfile.LaneProfile,
     ): ParticleSystemPrototype? {
-        return when (lane.dominanceMode) {
-            EffectProfile.DominanceMode.IGNORE -> lane.system
-
-            EffectProfile.DominanceMode.WITHER_ONLY -> {
-                val dominant = dominantKindAt(pos)
-                if (dominant == Witherstone::class) {
-                    lane.dominantWitherSystem ?: lane.system
-                } else {
-                    null
-                }
-            }
-
-            EffectProfile.DominanceMode.COLOR_BY_DOMINANT -> {
-                when (dominantKindAt(pos)) {
-                    Lorestone::class -> lane.dominantLoreSystem ?: lane.system
-                    Witherstone::class -> lane.dominantWitherSystem ?: lane.system
-                    else -> lane.system
-                }
-            }
+        return when (dominantKindAt(pos)) {
+            Lorestone::class -> lane.dominantLoreSystem
+            Witherstone::class -> lane.dominantWitherSystem
+            else -> null
         }
     }
 

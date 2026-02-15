@@ -16,20 +16,11 @@ import ch.oliverlanz.memento.application.visualization.samplers.StoneSampler
  * - Emission pacing is always expressed as emissions per game hour.
  */
 class EffectProfile {
-
-    enum class DominanceMode {
-        IGNORE,
-        COLOR_BY_DOMINANT,
-        WITHER_ONLY,
-    }
-
     data class LaneProfile(
         var sampler: StoneSampler? = null,
-        var system: EffectBase.ParticleSystemPrototype? = null,
         var verticalSpan: IntRange = 0..0,
         var emissionsPerGameHour: Int = 0,
         var materialization: SamplerMaterializationConfig = SamplerMaterializationConfig(),
-        var dominanceMode: DominanceMode = DominanceMode.IGNORE,
         var dominantLoreSystem: EffectBase.ParticleSystemPrototype? = null,
         var dominantWitherSystem: EffectBase.ParticleSystemPrototype? = null,
     )
