@@ -11,16 +11,27 @@ data class PulsatingEffectPlan(
 
     private var samples: List<EffectPlan.BoundSample> = emptyList()
     private var elapsedGameHours: GameHours = GameHours(0.0)
+    private var emitInitialPulse: Boolean = false
 
     override fun updateSamples(context: EffectPlan.SampleUpdateContext) {
         samples = context.samples
         elapsedGameHours = GameHours(0.0)
+        emitInitialPulse = samples.isNotEmpty()
     }
 
     override fun tick(context: EffectPlan.TickContext) {
         if (pulseEveryGameHours <= 0.0 || emissionsPerPulse <= 0) return
-        if (context.deltaGameHours.value <= 0.0) return
         if (samples.isEmpty()) return
+
+        if (emitInitialPulse) {
+            repeat(emissionsPerPulse) {
+                val base = samples[context.random.nextInt(samples.size)]
+                context.executionSurface.emit(base)
+            }
+            emitInitialPulse = false
+        }
+
+        if (context.deltaGameHours.value <= 0.0) return
 
         val updated = GameHours(elapsedGameHours.value + context.deltaGameHours.value)
         val pulses = floor(updated.value / pulseEveryGameHours).toInt()

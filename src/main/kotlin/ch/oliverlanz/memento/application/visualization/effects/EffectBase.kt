@@ -163,28 +163,28 @@ abstract class EffectBase(
         // Anchor point lane defaults
         p.anchorPoint.verticalSpan = 0..16
         p.anchorPoint.sampler = AnchorPointSampler(stone)
-        p.anchorPoint.planFactory = { RateEffectPlan(emissionsPerGameHour = 200) }
+        p.anchorPoint.planFactory = { RateEffectPlan(emissionsPerGameHour = 400) }
         p.anchorPoint.dominantLoreSystem = anchorParticles()
         p.anchorPoint.dominantWitherSystem = anchorParticles()
 
         // Anchor chunk lane defaults
         p.anchorChunk.verticalSpan = 2..3
         p.anchorChunk.sampler = AnchorChunkSampler(stone)
-        p.anchorChunk.planFactory = { PulsatingEffectPlan(pulseEveryGameHours = 0.04, emissionsPerPulse = 143) }
+        p.anchorChunk.planFactory = { PulsatingEffectPlan(pulseEveryGameHours = 0.02, emissionsPerPulse = 200) }
         p.anchorChunk.dominantLoreSystem = lorestoneParticles()
         p.anchorChunk.dominantWitherSystem = witherstoneParticles()
 
         // Influence area lane defaults
         p.influenceArea.verticalSpan = 1..1
         p.influenceArea.sampler = InfluenceAreaSurfaceSampler(stone)
-        p.influenceArea.planFactory = { PulsatingEffectPlan(pulseEveryGameHours = 0.04, emissionsPerPulse = 143) }
+        p.influenceArea.planFactory = { PulsatingEffectPlan(pulseEveryGameHours = 0.02, emissionsPerPulse = 200) }
         p.influenceArea.dominantLoreSystem = lorestoneParticles()
         p.influenceArea.dominantWitherSystem = witherstoneParticles()
 
         // Influence outline lane defaults
         p.influenceOutline.verticalSpan = 1..1
-        p.influenceOutline.sampler = InfluenceOutlineSurfaceSampler(stone, thicknessBlocks = 4)
-        p.influenceOutline.planFactory = { RunningEffectPlan(speedChunksPerGameHour = 96.0, maxCursorSpacingBlocks = 6) }
+        p.influenceOutline.sampler = InfluenceOutlineSurfaceSampler(stone)
+        p.influenceOutline.planFactory = { RunningEffectPlan(speedChunksPerGameHour = 96.0, maxCursorSpacingBlocks = 10) }
         p.influenceOutline.dominantLoreSystem = lorestoneParticles()
         p.influenceOutline.dominantWitherSystem = witherstoneParticles()
     }
@@ -310,29 +310,29 @@ abstract class EffectBase(
     protected fun anchorParticles(): ParticleSystemPrototype = ParticleSystemPrototype(
         particle = net.minecraft.particle.ParticleTypes.HAPPY_VILLAGER,
         count = 12,
-        spreadX = 0.45,
-        spreadY = 0.15,
-        spreadZ = 0.45,
+        spreadX = 0.5,
+        spreadY = 0.2,
+        spreadZ = 0.5,
         speed = 0.01,
         baseYOffset = 1.0,
     )
 
     protected fun lorestoneParticles(): ParticleSystemPrototype = ParticleSystemPrototype(
         particle = net.minecraft.particle.ParticleTypes.SOUL_FIRE_FLAME,
-        count = 10,
-        spreadX = 0.375,
-        spreadY = 0.12,
-        spreadZ = 0.375,
+        count = 6,
+        spreadX = 0.5,
+        spreadY = 0.15,
+        spreadZ = 0.5,
         speed = 0.01,
         baseYOffset = 1.0,
     )
 
     protected fun witherstoneParticles(): ParticleSystemPrototype = ParticleSystemPrototype(
         particle = net.minecraft.particle.ParticleTypes.END_ROD,
-        count = 10,
-        spreadX = 0.375,
-        spreadY = 0.12,
-        spreadZ = 0.375,
+        count = 6,
+        spreadX = 0.5,
+        spreadY = 0.15,
+        spreadZ = 0.5,
         speed = 0.01,
         baseYOffset = 1.0,
     )
