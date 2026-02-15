@@ -159,28 +159,28 @@ abstract class EffectBase(
         p.lifetime = null
 
         // Anchor point lane defaults
-        p.anchorPoint.verticalSpan = 1.0..10.0
+        p.anchorPoint.verticalSpan = 0.0..10.0
         p.anchorPoint.sampler = AnchorPointSampler(stone)
         p.anchorPoint.planFactory = { RateEffectPlan(emissionsPerGameHour = 500) }
         p.anchorPoint.dominantLoreSystem = anchorParticles()
         p.anchorPoint.dominantWitherSystem = anchorParticles()
 
         // Anchor chunk lane defaults
-        p.anchorChunk.verticalSpan = 2.0..3.0
+        p.anchorChunk.verticalSpan = 0.5..2.5
         p.anchorChunk.sampler = AnchorChunkSampler(stone)
         p.anchorChunk.planFactory = { PulsatingEffectPlan(pulseEveryGameHours = 0.02, emissionsPerPulse = 200) }
         p.anchorChunk.dominantLoreSystem = lorestoneParticles()
         p.anchorChunk.dominantWitherSystem = witherstoneParticles()
 
         // Influence area lane defaults
-        p.influenceArea.verticalSpan = 1.0..1.0
+        p.influenceArea.verticalSpan = 0.0..0.5
         p.influenceArea.sampler = InfluenceAreaSurfaceSampler(stone)
         p.influenceArea.planFactory = { PulsatingEffectPlan(pulseEveryGameHours = 0.02, emissionsPerPulse = 200) }
         p.influenceArea.dominantLoreSystem = lorestoneParticles()
         p.influenceArea.dominantWitherSystem = witherstoneParticles()
 
         // Influence outline lane defaults
-        p.influenceOutline.verticalSpan = 1.0..1.0
+        p.influenceOutline.verticalSpan = 10.0..10.0
         p.influenceOutline.sampler = InfluenceOutlineSurfaceSampler(stone)
         p.influenceOutline.planFactory = { RunningEffectPlan(speedChunksPerGameHour = 96.0, maxCursorSpacingBlocks = 10) }
         p.influenceOutline.dominantLoreSystem = lorestoneParticles()
@@ -346,7 +346,7 @@ abstract class EffectBase(
         world.spawnParticles(
             particlePrototype.particle,
             pos.x + 0.5,
-            pos.y + spread,
+            pos.y + 0.5 + spread,
             pos.z + 0.5,
             particlePrototype.count,
             particlePrototype.spreadX,
