@@ -1,9 +1,7 @@
 package ch.oliverlanz.memento.application.visualization.effects
 
 import ch.oliverlanz.memento.application.visualization.effectplans.EffectPlan
-import ch.oliverlanz.memento.application.visualization.effectplans.PulsatingEffectPlan
 import ch.oliverlanz.memento.application.visualization.effectplans.RateEffectPlan
-import ch.oliverlanz.memento.application.visualization.effectplans.RunningEffectPlan
 import ch.oliverlanz.memento.infrastructure.time.GameClock
 import ch.oliverlanz.memento.infrastructure.time.GameHours
 import ch.oliverlanz.memento.infrastructure.time.asGameTicks
@@ -85,8 +83,7 @@ abstract class EffectBase(
     }
 
     private val rng = JavaRandom()
-    private val materializedByLane = linkedMapOf<LaneId, List<BlockPos>>()
-    private var materialized: Boolean = false
+    private val initializedPlans = linkedSetOf<LaneId>()
 
     /**
      * FINAL tick entry point. Subclasses must NOT override this.
@@ -106,9 +103,6 @@ abstract class EffectBase(
                 return false
             }
         }
-
-        // Default pipelines (only active when configured)
-        ensureMaterialized(world)
 
         runLaneEffect(world, deltaGameHours, LaneId.STONE_BLOCK, profile.stoneBlock)
         runLaneEffect(world, deltaGameHours, LaneId.STONE_CHUNK, profile.stoneChunk)
@@ -182,20 +176,6 @@ abstract class EffectBase(
         p.influenceOutline.dominantWitherSystem = witherstoneParticles()
     }
 
-    /* ---------- Lane materialization ---------- */
-
-    private fun ensureMaterialized(world: ServerWorld) {
-        if (materialized) return
-        materializedByLane.clear()
-
-        materializedByLane[LaneId.STONE_BLOCK] = materializeLane(world, profile.stoneBlock)
-        materializedByLane[LaneId.STONE_CHUNK] = materializeLane(world, profile.stoneChunk)
-        materializedByLane[LaneId.INFLUENCE_AREA] = materializeLane(world, profile.influenceArea)
-        materializedByLane[LaneId.INFLUENCE_OUTLINE] = materializeLane(world, profile.influenceOutline)
-
-        materialized = true
-    }
-
     private fun materializeLane(
         world: ServerWorld,
         lane: EffectProfile.LaneProfile,
@@ -212,12 +192,11 @@ abstract class EffectBase(
         laneId: LaneId,
         lane: EffectProfile.LaneProfile,
     ) {
-        val candidates = materializedByLane[laneId].orEmpty()
-        if (candidates.isEmpty()) return
+        initializeLanePlanIfNeeded(world, laneId, lane)
+
         lane.plan.tick(
-            EffectPlan.ExecutionContext(
+            EffectPlan.TickContext(
                 deltaGameHours = deltaGameHours,
-                candidates = candidates,
                 random = rng,
                 emit = { pos ->
                     val system = chooseSystemFor(pos, lane)
@@ -232,6 +211,22 @@ abstract class EffectBase(
                 },
             )
         )
+    }
+
+    private fun initializeLanePlanIfNeeded(
+        world: ServerWorld,
+        laneId: LaneId,
+        lane: EffectProfile.LaneProfile,
+    ) {
+        if (laneId in initializedPlans) return
+
+        lane.plan.initialize(
+            EffectPlan.InitializeContext(
+                samples = materializeLane(world, lane),
+                random = rng,
+            )
+        )
+        initializedPlans.add(laneId)
     }
 
     private fun chooseSystemFor(
