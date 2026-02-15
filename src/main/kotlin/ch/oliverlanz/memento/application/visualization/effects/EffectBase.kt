@@ -71,6 +71,7 @@ abstract class EffectBase(
 
     private var alive: Boolean = true
     private var elapsedGameHours: GameHours = GameHours(0.0)
+    private var samplesDirty: Boolean = true
 
     /**
      * Lazily configured profile.
@@ -83,7 +84,6 @@ abstract class EffectBase(
     }
 
     private val rng = JavaRandom()
-    private val initializedPlans = linkedSetOf<LaneId>()
 
     /**
      * FINAL tick entry point. Subclasses must NOT override this.
@@ -102,6 +102,10 @@ abstract class EffectBase(
                 alive = false
                 return false
             }
+        }
+
+        if (samplesDirty) {
+            rebindAllLaneSamples(world)
         }
 
         runLaneEffect(world, deltaGameHours, LaneId.STONE_BLOCK, profile.stoneBlock)
@@ -131,6 +135,16 @@ abstract class EffectBase(
 
     protected fun terminate() {
         alive = false
+    }
+
+    /** Mark this effect's bound sample/system set dirty for next tick refresh. */
+    fun markSamplesDirty() {
+        samplesDirty = true
+    }
+
+    /** Force immediate sample/system refresh when a world context is available. */
+    fun refreshSamples(world: ServerWorld) {
+        rebindAllLaneSamples(world)
     }
 
     /**
@@ -192,41 +206,54 @@ abstract class EffectBase(
         laneId: LaneId,
         lane: EffectProfile.LaneProfile,
     ) {
-        initializeLanePlanIfNeeded(world, laneId, lane)
-
         lane.plan.tick(
             EffectPlan.TickContext(
                 deltaGameHours = deltaGameHours,
                 random = rng,
-                emit = { pos ->
-                    val system = chooseSystemFor(pos, lane)
-                    if (system != null) {
-                        emitParticleAt(
-                            world = world,
-                            pos = pos,
-                            system = system,
-                            yOffsetSpread = lane.verticalSpan,
-                        )
-                    }
-                },
+                executionSurface = LaneExecutionSurface(world),
             )
         )
     }
 
-    private fun initializeLanePlanIfNeeded(
+    private fun rebindLaneSamples(
         world: ServerWorld,
         laneId: LaneId,
         lane: EffectProfile.LaneProfile,
     ) {
-        if (laneId in initializedPlans) return
+        val raw = materializeLane(world, lane)
+        if (raw.isEmpty()) {
+            lane.plan.updateSamples(EffectPlan.SampleUpdateContext(samples = emptyList(), random = rng))
+            return
+        }
 
-        lane.plan.initialize(
-            EffectPlan.InitializeContext(
-                samples = materializeLane(world, lane),
+        val bound = ArrayList<EffectPlan.BoundSample>(raw.size)
+        for (pos in raw) {
+            val system = chooseSystemFor(pos, lane) ?: continue
+            bound.add(
+                EffectPlan.BoundSample(
+                    pos = pos,
+                    emissionToken = BoundEmissionToken(
+                        system = system,
+                        verticalSpread = lane.verticalSpan,
+                    ),
+                )
+            )
+        }
+
+        lane.plan.updateSamples(
+            EffectPlan.SampleUpdateContext(
+                samples = bound,
                 random = rng,
             )
         )
-        initializedPlans.add(laneId)
+    }
+
+    private fun rebindAllLaneSamples(world: ServerWorld) {
+        rebindLaneSamples(world, LaneId.STONE_BLOCK, profile.stoneBlock)
+        rebindLaneSamples(world, LaneId.STONE_CHUNK, profile.stoneChunk)
+        rebindLaneSamples(world, LaneId.INFLUENCE_AREA, profile.influenceArea)
+        rebindLaneSamples(world, LaneId.INFLUENCE_OUTLINE, profile.influenceOutline)
+        samplesDirty = false
     }
 
     private fun chooseSystemFor(
@@ -242,6 +269,25 @@ abstract class EffectBase(
 
     private fun dominantKindAt(pos: BlockPos) =
         StoneMapService.dominantByChunk(stone.dimension)[ChunkPos(pos)]
+
+    private data class BoundEmissionToken(
+        val system: ParticleSystemPrototype,
+        val verticalSpread: IntRange,
+    )
+
+    private inner class LaneExecutionSurface(
+        private val world: ServerWorld,
+    ) : EffectPlan.ExecutionSurface {
+        override fun emit(sample: EffectPlan.BoundSample) {
+            val token = sample.emissionToken as? BoundEmissionToken ?: return
+            emitParticleAt(
+                world = world,
+                pos = sample.pos,
+                system = token.system,
+                yOffsetSpread = token.verticalSpread,
+            )
+        }
+    }
 
     protected fun anchorParticles(): ParticleSystemPrototype = ParticleSystemPrototype(
         particle = net.minecraft.particle.ParticleTypes.END_ROD,

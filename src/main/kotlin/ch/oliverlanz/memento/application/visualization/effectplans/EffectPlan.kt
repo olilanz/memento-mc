@@ -11,19 +11,27 @@ import java.util.Random as JavaRandom
  * then ticked with game-time deltas.
  */
 interface EffectPlan {
-    data class InitializeContext(
-        val samples: List<BlockPos>,
+    data class BoundSample(
+        val pos: BlockPos,
+        val emissionToken: Any,
+    )
+
+    data class SampleUpdateContext(
+        val samples: List<BoundSample>,
         val random: JavaRandom,
     )
+
+    interface ExecutionSurface {
+        fun emit(sample: BoundSample)
+    }
 
     data class TickContext(
         val deltaGameHours: GameHours,
         val random: JavaRandom,
-        val emit: (BlockPos) -> Unit,
+        val executionSurface: ExecutionSurface,
     )
 
-    fun initialize(context: InitializeContext)
+    fun updateSamples(context: SampleUpdateContext)
 
     fun tick(context: TickContext)
 }
-

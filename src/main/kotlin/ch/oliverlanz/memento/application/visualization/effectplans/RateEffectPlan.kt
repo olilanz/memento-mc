@@ -1,7 +1,6 @@
 package ch.oliverlanz.memento.application.visualization.effectplans
 
 import ch.oliverlanz.memento.infrastructure.time.GameHours
-import net.minecraft.util.math.BlockPos
 import kotlin.math.floor
 import kotlin.random.Random
 
@@ -10,9 +9,9 @@ data class RateEffectPlan(
     var emissionsPerGameHour: Int = 0,
 ) : EffectPlan {
 
-    private var samples: List<BlockPos> = emptyList()
+    private var samples: List<EffectPlan.BoundSample> = emptyList()
 
-    override fun initialize(context: EffectPlan.InitializeContext) {
+    override fun updateSamples(context: EffectPlan.SampleUpdateContext) {
         samples = context.samples
     }
 
@@ -23,7 +22,7 @@ data class RateEffectPlan(
 
         repeat(occurrences) {
             val base = samples[context.random.nextInt(samples.size)]
-            context.emit(base)
+            context.executionSurface.emit(base)
         }
     }
 }
@@ -42,4 +41,3 @@ private fun occurrencesForRate(
     val frac = expected - k
     return k + if (Random.nextDouble() < frac) 1 else 0
 }
-

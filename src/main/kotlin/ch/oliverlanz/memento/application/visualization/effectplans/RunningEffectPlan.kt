@@ -19,7 +19,7 @@ data class RunningEffectPlan(
     private var absoluteDistanceBlocks: Double = 0.0
     private var nextEmissionDistanceBlocks: Double = 0.0
 
-    override fun initialize(context: EffectPlan.InitializeContext) {
+    override fun updateSamples(context: EffectPlan.SampleUpdateContext) {
         path = RunningPath.from(context.samples)
         absoluteDistanceBlocks = 0.0
         nextEmissionDistanceBlocks = 0.0
@@ -36,22 +36,22 @@ data class RunningEffectPlan(
 
         val currentAbsolute = absoluteDistanceBlocks + travelDistance
         while (nextEmissionDistanceBlocks <= currentAbsolute) {
-            val pos = path.positionAtWrappedDistance(nextEmissionDistanceBlocks)
-            context.emit(pos)
+            val sample = path.sampleAtWrappedDistance(nextEmissionDistanceBlocks)
+            context.executionSurface.emit(sample)
             nextEmissionDistanceBlocks += spacing
         }
         absoluteDistanceBlocks = currentAbsolute
     }
 
     private data class RunningPath(
-        val points: List<BlockPos>,
+        val points: List<EffectPlan.BoundSample>,
         val cumulativeSegmentLength: List<Double>,
         val totalLengthBlocks: Double,
     ) {
         companion object {
             fun empty(): RunningPath = RunningPath(emptyList(), emptyList(), 0.0)
 
-            fun from(points: List<BlockPos>): RunningPath {
+            fun from(points: List<EffectPlan.BoundSample>): RunningPath {
                 if (points.isEmpty()) return empty()
                 if (points.size == 1) return RunningPath(points, listOf(0.0), 0.0)
 
@@ -72,15 +72,15 @@ data class RunningEffectPlan(
                 )
             }
 
-            private fun segmentLength(a: BlockPos, b: BlockPos): Double {
-                val dx = (b.x - a.x).toDouble()
-                val dz = (b.z - a.z).toDouble()
+            private fun segmentLength(a: EffectPlan.BoundSample, b: EffectPlan.BoundSample): Double {
+                val dx = (b.pos.x - a.pos.x).toDouble()
+                val dz = (b.pos.z - a.pos.z).toDouble()
                 return hypot(dx, dz)
             }
         }
 
-        fun positionAtWrappedDistance(distance: Double): BlockPos {
-            if (points.isEmpty()) return BlockPos(0, 0, 0)
+        fun sampleAtWrappedDistance(distance: Double): EffectPlan.BoundSample {
+            if (points.isEmpty()) return EffectPlan.BoundSample(BlockPos(0, 0, 0), emissionToken = Unit)
             if (points.size == 1 || totalLengthBlocks <= 0.0) return points.first()
 
             val wrapped = ((distance % totalLengthBlocks) + totalLengthBlocks) % totalLengthBlocks
@@ -95,17 +95,19 @@ data class RunningEffectPlan(
             if (segLen <= 0.0) return start
 
             val t = ((wrapped - segStart) / segLen).coerceIn(0.0, 1.0)
-            val x = start.x + (end.x - start.x) * t
-            val z = start.z + (end.z - start.z) * t
+            val x = start.pos.x + (end.pos.x - start.pos.x) * t
+            val z = start.pos.z + (end.pos.z - start.pos.z) * t
 
-            return BlockPos(x.roundToInt(), start.y, z.roundToInt())
+            return EffectPlan.BoundSample(
+                pos = BlockPos(x.roundToInt(), start.pos.y, z.roundToInt()),
+                emissionToken = start.emissionToken,
+            )
         }
 
-        private fun segmentLength(a: BlockPos, b: BlockPos): Double {
-            val dx = (b.x - a.x).toDouble()
-            val dz = (b.z - a.z).toDouble()
+        private fun segmentLength(a: EffectPlan.BoundSample, b: EffectPlan.BoundSample): Double {
+            val dx = (b.pos.x - a.pos.x).toDouble()
+            val dz = (b.pos.z - a.pos.z).toDouble()
             return hypot(dx, dz)
         }
     }
 }
-
