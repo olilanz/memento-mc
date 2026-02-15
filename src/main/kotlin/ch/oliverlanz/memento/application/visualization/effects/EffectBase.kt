@@ -25,7 +25,7 @@ import kotlin.random.Random
  * - This class is a poor-man DSL runtime: subclasses declare lane policy, base executes it.
  * - Subclasses are declarative: override onConfigure(profile) only.
  * - Semantics (lifetime, rates, particles, samplers) live in EffectProfile.
- * - Mechanics (ticking, one-time materialization, dominance-aware dispatch, emission) live here.
+ * - Mechanics (ticking, one-time sample binding, dominance-aware dispatch, emission) live here.
  *
  * IMPORTANT (locked emission model):
  * - lifetime (when configured) only gates *when to stop*, never plan semantics.
@@ -33,15 +33,16 @@ import kotlin.random.Random
  * - Per-lane pacing behavior is owned by [EffectPlan].
  *
  * IMPORTANT (locked plan model):
- * - Every lane is executed by one composable [EffectPlan].
+ * - Every lane is executed by one composable [EffectPlan] instance.
+ * - Runtime plan instances are recreated on sample rebind.
  * - [RateEffectPlan] emits a stochastic trickle by expected time throughput.
  * - [PulsatingEffectPlan] emits bursts on fixed game-time intervals.
  * - [RunningEffectPlan] advances a single wrapped cursor and emits trail points every N blocks.
  * - All pacing semantics are game-time delta driven from [GameClock].
  *
  * IMPORTANT (locked lane model):
- * - Four fixed lanes: stone block, stone chunk, influence area, influence outline.
- * - Lane samples are materialized once per effect instance and remain frozen for lifetime.
+ * - Four fixed lanes: anchor point, anchor chunk, influence area, influence outline.
+ * - Lane samples are rebound when requested, and runtime plan instances are recreated per rebind.
  * - Samplers are geometry-only; dominance is interpreted only in this base class.
  */
 abstract class EffectBase(
@@ -49,8 +50,8 @@ abstract class EffectBase(
 ) {
 
     protected enum class LaneId {
-        STONE_BLOCK,
-        STONE_CHUNK,
+        ANCHOR_POINT,
+        ANCHOR_CHUNK,
         INFLUENCE_AREA,
         INFLUENCE_OUTLINE,
     }
@@ -69,6 +70,11 @@ abstract class EffectBase(
     private var alive: Boolean = true
     private var elapsedGameHours: GameHours = GameHours(0.0)
     private var samplesDirty: Boolean = true
+
+    private var anchorPointRuntimePlan: EffectPlan? = null
+    private var anchorChunkRuntimePlan: EffectPlan? = null
+    private var influenceAreaRuntimePlan: EffectPlan? = null
+    private var influenceOutlineRuntimePlan: EffectPlan? = null
 
     /**
      * Lazily configured profile.
@@ -105,10 +111,10 @@ abstract class EffectBase(
             rebindAllLaneSamples(world)
         }
 
-        runLaneEffect(world, deltaGameHours, LaneId.STONE_BLOCK, profile.stoneBlock)
-        runLaneEffect(world, deltaGameHours, LaneId.STONE_CHUNK, profile.stoneChunk)
-        runLaneEffect(world, deltaGameHours, LaneId.INFLUENCE_AREA, profile.influenceArea)
-        runLaneEffect(world, deltaGameHours, LaneId.INFLUENCE_OUTLINE, profile.influenceOutline)
+        runLaneEffect(world, deltaGameHours, LaneId.ANCHOR_POINT)
+        runLaneEffect(world, deltaGameHours, LaneId.ANCHOR_CHUNK)
+        runLaneEffect(world, deltaGameHours, LaneId.INFLUENCE_AREA)
+        runLaneEffect(world, deltaGameHours, LaneId.INFLUENCE_OUTLINE)
 
         // Optional extension hook (not used in this slice)
         onTick(world, clock)
@@ -154,35 +160,31 @@ abstract class EffectBase(
         // Global defaults
         p.lifetime = null
 
-        // Stone block lane defaults (identity/anchor lane)
-        p.stoneBlock.verticalSpan = 0..16
-        p.stoneBlock.sampler = StoneBlockSampler(stone)
-        p.stoneBlock.materialization = SamplerMaterializationConfig()
-        p.stoneBlock.plan = RateEffectPlan(emissionsPerGameHour = 200)
-        p.stoneBlock.dominantLoreSystem = anchorParticles()
-        p.stoneBlock.dominantWitherSystem = anchorParticles()
+        // Anchor point lane defaults
+        p.anchorPoint.verticalSpan = 0..16
+        p.anchorPoint.sampler = AnchorPointSampler(stone)
+        p.anchorPoint.planFactory = { RateEffectPlan(emissionsPerGameHour = 200) }
+        p.anchorPoint.dominantLoreSystem = anchorParticles()
+        p.anchorPoint.dominantWitherSystem = anchorParticles()
 
-        // Stone chunk lane defaults
-        p.stoneChunk.verticalSpan = 2..3
-        p.stoneChunk.sampler = SingleChunkSurfaceSampler(stone)
-        p.stoneChunk.plan = PulsatingEffectPlan(pulseEveryGameHours = 0.04, emissionsPerPulse = 143)
-        p.stoneChunk.materialization = SamplerMaterializationConfig()
-        p.stoneChunk.dominantLoreSystem = lorestoneParticles()
-        p.stoneChunk.dominantWitherSystem = witherstoneParticles()
+        // Anchor chunk lane defaults
+        p.anchorChunk.verticalSpan = 2..3
+        p.anchorChunk.sampler = AnchorChunkSampler(stone)
+        p.anchorChunk.planFactory = { PulsatingEffectPlan(pulseEveryGameHours = 0.04, emissionsPerPulse = 143) }
+        p.anchorChunk.dominantLoreSystem = lorestoneParticles()
+        p.anchorChunk.dominantWitherSystem = witherstoneParticles()
 
         // Influence area lane defaults
         p.influenceArea.verticalSpan = 1..1
         p.influenceArea.sampler = InfluenceAreaSurfaceSampler(stone)
-        p.influenceArea.plan = PulsatingEffectPlan(pulseEveryGameHours = 0.04, emissionsPerPulse = 143)
-        p.influenceArea.materialization = SamplerMaterializationConfig()
+        p.influenceArea.planFactory = { PulsatingEffectPlan(pulseEveryGameHours = 0.04, emissionsPerPulse = 143) }
         p.influenceArea.dominantLoreSystem = lorestoneParticles()
         p.influenceArea.dominantWitherSystem = witherstoneParticles()
 
         // Influence outline lane defaults
         p.influenceOutline.verticalSpan = 1..1
         p.influenceOutline.sampler = InfluenceOutlineSurfaceSampler(stone, thicknessBlocks = 4)
-        p.influenceOutline.plan = RunningEffectPlan(speedChunksPerGameHour = 96.0, maxCursorSpacingBlocks = 6)
-        p.influenceOutline.materialization = SamplerMaterializationConfig()
+        p.influenceOutline.planFactory = { RunningEffectPlan(speedChunksPerGameHour = 96.0, maxCursorSpacingBlocks = 6) }
         p.influenceOutline.dominantLoreSystem = lorestoneParticles()
         p.influenceOutline.dominantWitherSystem = witherstoneParticles()
     }
@@ -192,7 +194,7 @@ abstract class EffectBase(
         lane: EffectProfile.LaneProfile,
     ): List<BlockPos> {
         val sampler = lane.sampler ?: return emptyList()
-        return sampler.materialize(world, rng, lane.materialization)
+        return sampler.candidates(world)
     }
 
     /* ---------- Plans ---------- */
@@ -201,9 +203,9 @@ abstract class EffectBase(
         world: ServerWorld,
         deltaGameHours: GameHours,
         laneId: LaneId,
-        lane: EffectProfile.LaneProfile,
     ) {
-        lane.plan.tick(
+        val runtimePlan = runtimePlanFor(laneId) ?: return
+        runtimePlan.tick(
             EffectPlan.TickContext(
                 deltaGameHours = deltaGameHours,
                 random = rng,
@@ -217,43 +219,46 @@ abstract class EffectBase(
         laneId: LaneId,
         lane: EffectProfile.LaneProfile,
     ) {
+        val runtimePlan = lane.planFactory()
         val raw = materializeLane(world, lane)
         if (raw.isEmpty()) {
-            lane.plan.updateSamples(EffectPlan.SampleUpdateContext(samples = emptyList(), random = rng))
+            runtimePlan.updateSamples(EffectPlan.SampleUpdateContext(samples = emptyList(), random = rng))
+            setRuntimePlan(laneId, runtimePlan)
             return
         }
 
         val bound = ArrayList<EffectPlan.BoundSample>(raw.size)
         for (pos in raw) {
-            val system = chooseSystemFor(pos, lane) ?: continue
+            val particlePrototype = resolveParticlePrototypeForSample(pos, lane) ?: continue
             bound.add(
                 EffectPlan.BoundSample(
                     pos = pos,
                     emissionToken = BoundEmissionToken(
-                        system = system,
+                        particlePrototype = particlePrototype,
                         verticalSpread = lane.verticalSpan,
                     ),
                 )
             )
         }
 
-        lane.plan.updateSamples(
+        runtimePlan.updateSamples(
             EffectPlan.SampleUpdateContext(
                 samples = bound,
                 random = rng,
             )
         )
+        setRuntimePlan(laneId, runtimePlan)
     }
 
     private fun rebindAllLaneSamples(world: ServerWorld) {
-        rebindLaneSamples(world, LaneId.STONE_BLOCK, profile.stoneBlock)
-        rebindLaneSamples(world, LaneId.STONE_CHUNK, profile.stoneChunk)
+        rebindLaneSamples(world, LaneId.ANCHOR_POINT, profile.anchorPoint)
+        rebindLaneSamples(world, LaneId.ANCHOR_CHUNK, profile.anchorChunk)
         rebindLaneSamples(world, LaneId.INFLUENCE_AREA, profile.influenceArea)
         rebindLaneSamples(world, LaneId.INFLUENCE_OUTLINE, profile.influenceOutline)
         samplesDirty = false
     }
 
-    private fun chooseSystemFor(
+    private fun resolveParticlePrototypeForSample(
         pos: BlockPos,
         lane: EffectProfile.LaneProfile,
     ): ParticleSystemPrototype? {
@@ -267,8 +272,24 @@ abstract class EffectBase(
     private fun dominantKindAt(pos: BlockPos) =
         StoneMapService.dominantByChunk(stone.dimension)[ChunkPos(pos)]
 
+    private fun runtimePlanFor(laneId: LaneId): EffectPlan? = when (laneId) {
+        LaneId.ANCHOR_POINT -> anchorPointRuntimePlan
+        LaneId.ANCHOR_CHUNK -> anchorChunkRuntimePlan
+        LaneId.INFLUENCE_AREA -> influenceAreaRuntimePlan
+        LaneId.INFLUENCE_OUTLINE -> influenceOutlineRuntimePlan
+    }
+
+    private fun setRuntimePlan(laneId: LaneId, plan: EffectPlan) {
+        when (laneId) {
+            LaneId.ANCHOR_POINT -> anchorPointRuntimePlan = plan
+            LaneId.ANCHOR_CHUNK -> anchorChunkRuntimePlan = plan
+            LaneId.INFLUENCE_AREA -> influenceAreaRuntimePlan = plan
+            LaneId.INFLUENCE_OUTLINE -> influenceOutlineRuntimePlan = plan
+        }
+    }
+
     private data class BoundEmissionToken(
-        val system: ParticleSystemPrototype,
+        val particlePrototype: ParticleSystemPrototype,
         val verticalSpread: IntRange,
     )
 
@@ -280,7 +301,7 @@ abstract class EffectBase(
             emitParticleAt(
                 world = world,
                 pos = sample.pos,
-                system = token.system,
+                particlePrototype = token.particlePrototype,
                 yOffsetSpread = token.verticalSpread,
             )
         }
@@ -319,7 +340,7 @@ abstract class EffectBase(
     protected fun emitParticleAt(
         world: ServerWorld,
         pos: BlockPos,
-        system: ParticleSystemPrototype,
+        particlePrototype: ParticleSystemPrototype,
         yOffsetSpread: IntRange,
     ) {
         val spread = when {
@@ -328,15 +349,15 @@ abstract class EffectBase(
         }.toDouble()
 
         world.spawnParticles(
-            system.particle,
+            particlePrototype.particle,
             pos.x + 0.5,
-            pos.y + system.baseYOffset + spread,
+            pos.y + particlePrototype.baseYOffset + spread,
             pos.z + 0.5,
-            system.count,
-            system.spreadX,
-            system.spreadY,
-            system.spreadZ,
-            system.speed
+            particlePrototype.count,
+            particlePrototype.spreadX,
+            particlePrototype.spreadY,
+            particlePrototype.spreadZ,
+            particlePrototype.speed
         )
     }
 }
