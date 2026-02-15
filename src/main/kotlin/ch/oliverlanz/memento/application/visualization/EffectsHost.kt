@@ -9,10 +9,12 @@ import ch.oliverlanz.memento.domain.events.StoneLifecycleTransition
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchLifecycleTransition
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchState
 import ch.oliverlanz.memento.domain.stones.*
+import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
+import net.minecraft.world.World
 import kotlin.reflect.KClass
 
 /**
@@ -81,6 +83,10 @@ class EffectsHost(
 
             else -> Unit
         }
+
+        // Dominance can shift whenever stone lifecycle changes; refresh bound
+        // sample/system mappings for effects in the same dimension.
+        refreshEffectsForDimension(event.stone.dimension)
     }
 
     /* ---------- Tick / lifecycle ---------- */
@@ -118,5 +124,14 @@ class EffectsHost(
             }
         }
         return removed
+    }
+
+    private fun refreshEffectsForDimension(dimension: RegistryKey<World>) {
+        val world = server.getWorld(dimension) ?: return
+        for ((_, entry) in effectsByKey) {
+            if (entry.stone.dimension != dimension) continue
+            entry.effect.markSamplesDirty()
+            entry.effect.refreshSamples(world)
+        }
     }
 }

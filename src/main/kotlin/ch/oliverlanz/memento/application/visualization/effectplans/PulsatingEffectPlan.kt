@@ -1,7 +1,6 @@
 package ch.oliverlanz.memento.application.visualization.effectplans
 
 import ch.oliverlanz.memento.infrastructure.time.GameHours
-import net.minecraft.util.math.BlockPos
 import kotlin.math.floor
 
 /** Discrete bursts emitted at fixed game-time intervals. */
@@ -10,10 +9,10 @@ data class PulsatingEffectPlan(
     var emissionsPerPulse: Int = 1,
 ) : EffectPlan {
 
-    private var samples: List<BlockPos> = emptyList()
+    private var samples: List<EffectPlan.BoundSample> = emptyList()
     private var elapsedGameHours: GameHours = GameHours(0.0)
 
-    override fun initialize(context: EffectPlan.InitializeContext) {
+    override fun updateSamples(context: EffectPlan.SampleUpdateContext) {
         samples = context.samples
         elapsedGameHours = GameHours(0.0)
     }
@@ -30,8 +29,7 @@ data class PulsatingEffectPlan(
 
         repeat(pulses * emissionsPerPulse) {
             val base = samples[context.random.nextInt(samples.size)]
-            context.emit(base)
+            context.executionSurface.emit(base)
         }
     }
 }
-
