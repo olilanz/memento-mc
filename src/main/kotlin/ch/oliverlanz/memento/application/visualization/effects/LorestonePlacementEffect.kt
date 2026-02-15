@@ -1,7 +1,9 @@
 package ch.oliverlanz.memento.application.visualization.effects
 
+import ch.oliverlanz.memento.application.visualization.effectplans.PulsatingEffectPlan
+import ch.oliverlanz.memento.application.visualization.effectplans.RateEffectPlan
+import ch.oliverlanz.memento.application.visualization.effectplans.RunningEffectPlan
 import ch.oliverlanz.memento.infrastructure.time.GameHours
-import ch.oliverlanz.memento.application.visualization.effects.EffectProfile.LanePlan
 import ch.oliverlanz.memento.application.visualization.samplers.InfluenceAreaSurfaceSampler
 import ch.oliverlanz.memento.application.visualization.samplers.InfluenceOutlineSurfaceSampler
 import ch.oliverlanz.memento.application.visualization.samplers.SamplerMaterializationConfig
@@ -26,11 +28,11 @@ class LorestonePlacementEffect(stone: LorestoneView) : EffectBase(stone) {
 
         // Stone chunk lane
         profile.stoneChunk.verticalSpan = 0..2
-        profile.stoneChunk.plan = LanePlan.Rate(emissionsPerGameHour = 2080)
+        profile.stoneChunk.plan = RateEffectPlan(emissionsPerGameHour = 2080)
 
         // Influence area lane
         profile.influenceArea.sampler = InfluenceAreaSurfaceSampler(stone)
-        profile.influenceArea.plan = LanePlan.Pulsating(
+        profile.influenceArea.plan = PulsatingEffectPlan(
             pulseEveryGameHours = 0.025,
             emissionsPerPulse = 84,
         )
@@ -39,7 +41,7 @@ class LorestonePlacementEffect(stone: LorestoneView) : EffectBase(stone) {
 
         // Influence outline lane
         profile.influenceOutline.sampler = InfluenceOutlineSurfaceSampler(stone, thicknessBlocks = 4)
-        profile.influenceOutline.plan = LanePlan.Running(
+        profile.influenceOutline.plan = RunningEffectPlan(
             speedChunksPerGameHour = 96.0,
             maxCursorSpacingBlocks = 8,
         )

@@ -1,6 +1,8 @@
 package ch.oliverlanz.memento.application.visualization.effects
 
-import ch.oliverlanz.memento.application.visualization.effects.EffectProfile.LanePlan
+import ch.oliverlanz.memento.application.visualization.effectplans.PulsatingEffectPlan
+import ch.oliverlanz.memento.application.visualization.effectplans.RateEffectPlan
+import ch.oliverlanz.memento.application.visualization.effectplans.RunningEffectPlan
 import ch.oliverlanz.memento.application.visualization.samplers.InfluenceAreaSurfaceSampler
 import ch.oliverlanz.memento.application.visualization.samplers.InfluenceOutlineSurfaceSampler
 import ch.oliverlanz.memento.application.visualization.samplers.SamplerMaterializationConfig
@@ -27,12 +29,12 @@ class WitherstoneWaitingEffect(stone: WitherstoneView) : EffectBase(stone) {
 
         // Stone chunk lane
         profile.stoneChunk.verticalSpan = 0..5
-        profile.stoneChunk.plan = LanePlan.Rate(emissionsPerGameHour = 1920)
+        profile.stoneChunk.plan = RateEffectPlan(emissionsPerGameHour = 1920)
 
         // Influence area lane
         profile.influenceArea.sampler = InfluenceAreaSurfaceSampler(stone)
         profile.influenceArea.verticalSpan = 0..6
-        profile.influenceArea.plan = LanePlan.Pulsating(
+        profile.influenceArea.plan = PulsatingEffectPlan(
             pulseEveryGameHours = 0.03,
             emissionsPerPulse = 101,
         )
@@ -42,7 +44,7 @@ class WitherstoneWaitingEffect(stone: WitherstoneView) : EffectBase(stone) {
         // Influence outline lane
         profile.influenceOutline.sampler = InfluenceOutlineSurfaceSampler(stone, thicknessBlocks = 6)
         profile.influenceOutline.verticalSpan = 0..4
-        profile.influenceOutline.plan = LanePlan.Running(
+        profile.influenceOutline.plan = RunningEffectPlan(
             speedChunksPerGameHour = 72.0,
             maxCursorSpacingBlocks = 10,
         )
