@@ -6,7 +6,8 @@ import kotlin.math.floor
 /** Discrete bursts emitted at fixed game-time intervals. */
 data class PulsatingEffectPlan(
     var pulseEveryGameHours: Double = 0.10,
-    var emissionsPerPulse: Int = 1,
+    /** Per-pulse selection density over bound samples (0.0..1.0). */
+    var selectionDensityPerPulse: Double = 1.0,
 ) : EffectPlan {
 
     private var samples: List<EffectPlan.BoundSample> = emptyList()
@@ -20,14 +21,11 @@ data class PulsatingEffectPlan(
     }
 
     override fun tick(context: EffectPlan.TickContext) {
-        if (pulseEveryGameHours <= 0.0 || emissionsPerPulse <= 0) return
+        if (pulseEveryGameHours <= 0.0 || selectionDensityPerPulse <= 0.0) return
         if (samples.isEmpty()) return
 
         if (emitInitialPulse) {
-            repeat(emissionsPerPulse) {
-                val base = samples[context.random.nextInt(samples.size)]
-                context.executionSurface.emit(base)
-            }
+            emitDensitySelection(context, pulseCount = 1)
             emitInitialPulse = false
         }
 
@@ -38,9 +36,30 @@ data class PulsatingEffectPlan(
         elapsedGameHours = GameHours(updated.value - (pulses * pulseEveryGameHours))
         if (pulses <= 0) return
 
-        repeat(pulses * emissionsPerPulse) {
-            val base = samples[context.random.nextInt(samples.size)]
-            context.executionSurface.emit(base)
+        emitDensitySelection(context, pulseCount = pulses)
+    }
+
+    private fun emitDensitySelection(
+        context: EffectPlan.TickContext,
+        pulseCount: Int,
+    ) {
+        if (pulseCount <= 0) return
+        val density = selectionDensityPerPulse.coerceIn(0.0, 1.0)
+
+        repeat(pulseCount) {
+            val target = kotlin.math.round(samples.size * density).toInt().coerceIn(0, samples.size)
+            if (target <= 0) return@repeat
+
+            // Start with all candidates, then randomly remove until target size remains.
+            val selected = samples.toMutableList()
+            while (selected.size > target) {
+                val removeIndex = context.random.nextInt(selected.size)
+                selected.removeAt(removeIndex)
+            }
+
+            for (sample in selected) {
+                context.executionSurface.emit(sample)
+            }
         }
     }
 }

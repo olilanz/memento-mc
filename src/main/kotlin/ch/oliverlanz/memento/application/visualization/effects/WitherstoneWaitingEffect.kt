@@ -1,5 +1,6 @@
 package ch.oliverlanz.memento.application.visualization.effects
 
+import ch.oliverlanz.memento.application.visualization.effectplans.RateEffectPlan
 import ch.oliverlanz.memento.application.visualization.samplers.InfluenceAreaSurfaceSampler
 import ch.oliverlanz.memento.application.visualization.samplers.InfluenceOutlineSurfaceSampler
 import ch.oliverlanz.memento.domain.stones.WitherstoneView
@@ -28,7 +29,8 @@ class WitherstoneWaitingEffect(stone: WitherstoneView) : EffectBase(stone) {
         profile.anchorChunk.sampler = null
 
         // Influence area lane
-        profile.influenceArea.verticalSpan = 0.0..5.0
+        profile.influenceArea.verticalSpan = 0.0..10.0
+        profile.influenceArea.planFactory = { RateEffectPlan(selectionDensityPerGameHour = 0.8) }
         profile.influenceArea.dominantLoreSystem = null
 
         // Influence outline lane
