@@ -24,13 +24,11 @@ class LorestonePlacementEffect(stone: LorestoneView) : EffectBase(stone) {
         profile.influenceArea.emissionsPerGameHour = 3360
         profile.influenceArea.verticalSpan = 0..2
         profile.influenceArea.materialization = SamplerMaterializationConfig(detail = 0.30)
-        profile.influenceArea.dominanceMode = EffectProfile.DominanceMode.COLOR_BY_DOMINANT
 
         // Influence outline lane
         profile.influenceOutline.sampler = InfluenceOutlineSurfaceSampler(stone, thicknessBlocks = 4)
         profile.influenceOutline.emissionsPerGameHour = 1920
         profile.influenceOutline.verticalSpan = 0..2
         profile.influenceOutline.materialization = SamplerMaterializationConfig(detail = 0.45)
-        profile.influenceOutline.dominanceMode = EffectProfile.DominanceMode.COLOR_BY_DOMINANT
     }
 }

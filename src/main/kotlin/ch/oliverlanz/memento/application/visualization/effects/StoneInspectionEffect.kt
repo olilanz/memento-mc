@@ -24,13 +24,11 @@ class StoneInspectionEffect(stone: StoneView) : EffectBase(stone) {
         profile.influenceArea.emissionsPerGameHour = 4000
         profile.influenceArea.verticalSpan = 0..2
         profile.influenceArea.materialization = SamplerMaterializationConfig(detail = 0.35)
-        profile.influenceArea.dominanceMode = EffectProfile.DominanceMode.COLOR_BY_DOMINANT
 
         // Influence outline lane
         profile.influenceOutline.sampler = InfluenceOutlineSurfaceSampler(stone, thicknessBlocks = 4)
         profile.influenceOutline.emissionsPerGameHour = 2080
         profile.influenceOutline.verticalSpan = 0..2
         profile.influenceOutline.materialization = SamplerMaterializationConfig(detail = 0.50)
-        profile.influenceOutline.dominanceMode = EffectProfile.DominanceMode.COLOR_BY_DOMINANT
     }
 }
