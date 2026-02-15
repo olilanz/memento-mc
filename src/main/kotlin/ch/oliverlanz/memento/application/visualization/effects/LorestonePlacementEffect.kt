@@ -1,11 +1,20 @@
 package ch.oliverlanz.memento.application.visualization.effects
 
 import ch.oliverlanz.memento.infrastructure.time.GameHours
+import ch.oliverlanz.memento.application.visualization.effects.EffectProfile.LanePlan
 import ch.oliverlanz.memento.application.visualization.samplers.InfluenceAreaSurfaceSampler
 import ch.oliverlanz.memento.application.visualization.samplers.InfluenceOutlineSurfaceSampler
 import ch.oliverlanz.memento.application.visualization.samplers.SamplerMaterializationConfig
 import ch.oliverlanz.memento.domain.stones.LorestoneView
 
+/**
+ * Lorestone placement effect: immediate, unambiguous confirmation of protective intent.
+ *
+ * Lane intent:
+ * - Stone block/chunk: steady rate signal to pin local origin.
+ * - Influence area: pulsating expansion pulses for footprint readability.
+ * - Influence outline: running wrapped perimeter cursor with spacing trail illusion.
+ */
 class LorestonePlacementEffect(stone: LorestoneView) : EffectBase(stone) {
 
     override fun onConfigure(profile: EffectProfile) {
@@ -17,17 +26,23 @@ class LorestonePlacementEffect(stone: LorestoneView) : EffectBase(stone) {
 
         // Stone chunk lane
         profile.stoneChunk.verticalSpan = 0..2
-        profile.stoneChunk.emissionsPerGameHour = 2080
+        profile.stoneChunk.plan = LanePlan.Rate(emissionsPerGameHour = 2080)
 
         // Influence area lane
         profile.influenceArea.sampler = InfluenceAreaSurfaceSampler(stone)
-        profile.influenceArea.emissionsPerGameHour = 3360
+        profile.influenceArea.plan = LanePlan.Pulsating(
+            pulseEveryGameHours = 0.025,
+            emissionsPerPulse = 84,
+        )
         profile.influenceArea.verticalSpan = 0..2
         profile.influenceArea.materialization = SamplerMaterializationConfig(detail = 0.30)
 
         // Influence outline lane
         profile.influenceOutline.sampler = InfluenceOutlineSurfaceSampler(stone, thicknessBlocks = 4)
-        profile.influenceOutline.emissionsPerGameHour = 1920
+        profile.influenceOutline.plan = LanePlan.Running(
+            speedChunksPerGameHour = 96.0,
+            maxCursorSpacingBlocks = 8,
+        )
         profile.influenceOutline.verticalSpan = 0..2
         profile.influenceOutline.materialization = SamplerMaterializationConfig(detail = 0.45)
     }
