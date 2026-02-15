@@ -19,7 +19,7 @@ import ch.oliverlanz.memento.application.visualization.samplers.StoneSampler
 class EffectProfile {
     data class LaneProfile(
         var sampler: StoneSampler? = null,
-        var verticalSpan: IntRange = 0..0,
+        var verticalSpan: ClosedFloatingPointRange<Double> = 0.0..0.0,
         var planFactory: () -> EffectPlan = { RateEffectPlan() },
         var dominantLoreSystem: EffectBase.ParticleSystemPrototype? = null,
         var dominantWitherSystem: EffectBase.ParticleSystemPrototype? = null,
