@@ -1,7 +1,9 @@
 package ch.oliverlanz.memento.application.visualization.effects
 
+import ch.oliverlanz.memento.application.visualization.effectplans.PulsatingEffectPlan
+import ch.oliverlanz.memento.application.visualization.effectplans.RateEffectPlan
+import ch.oliverlanz.memento.application.visualization.effectplans.RunningEffectPlan
 import ch.oliverlanz.memento.infrastructure.time.GameHours
-import ch.oliverlanz.memento.application.visualization.effects.EffectProfile.LanePlan
 import ch.oliverlanz.memento.application.visualization.samplers.InfluenceAreaSurfaceSampler
 import ch.oliverlanz.memento.application.visualization.samplers.InfluenceOutlineSurfaceSampler
 import ch.oliverlanz.memento.application.visualization.samplers.SamplerMaterializationConfig
@@ -26,12 +28,12 @@ class StoneInspectionEffect(stone: StoneView) : EffectBase(stone) {
         // no override; base defaults
 
         // Stone chunk lane
-        profile.stoneChunk.plan = LanePlan.Rate(emissionsPerGameHour = 1760)
+        profile.stoneChunk.plan = RateEffectPlan(emissionsPerGameHour = 1760)
         profile.stoneChunk.verticalSpan = 0..3
 
         // Influence area lane
         profile.influenceArea.sampler = InfluenceAreaSurfaceSampler(stone)
-        profile.influenceArea.plan = LanePlan.Pulsating(
+        profile.influenceArea.plan = PulsatingEffectPlan(
             pulseEveryGameHours = 0.02,
             emissionsPerPulse = 80,
         )
@@ -40,7 +42,7 @@ class StoneInspectionEffect(stone: StoneView) : EffectBase(stone) {
 
         // Influence outline lane
         profile.influenceOutline.sampler = InfluenceOutlineSurfaceSampler(stone, thicknessBlocks = 4)
-        profile.influenceOutline.plan = LanePlan.Running(
+        profile.influenceOutline.plan = RunningEffectPlan(
             speedChunksPerGameHour = 120.0,
             maxCursorSpacingBlocks = 8,
         )
