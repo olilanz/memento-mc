@@ -12,7 +12,8 @@ import ch.oliverlanz.memento.domain.stones.WitherstoneView
  * Witherstone waiting effect: persistent, operational signal while maturity is pending.
  *
  * Lane intent:
- * - Stone block/chunk: steady rate signal to keep anchor present during long waits.
+ * - Stone block: steady rate signal to keep anchor present during long waits.
+ * - Stone chunk: disabled to avoid competing with area/outline during waiting.
  * - Influence area: pulsating field to indicate active influence pressure.
  * - Influence outline: running wrapped perimeter cursor for directional perimeter motion.
  *
@@ -25,30 +26,32 @@ class WitherstoneWaitingEffect(stone: WitherstoneView) : EffectBase(stone) {
         profile.lifetime = null             // Waiting: infinite until externally terminated.
 
         // Stone block lane
-        // no override; base defaults
+        profile.stoneBlock.verticalSpan = 0..24
+        profile.stoneBlock.plan = RateEffectPlan(emissionsPerGameHour = 64)
+        profile.stoneBlock.dominantLoreSystem = lorestoneParticles()
+        profile.stoneBlock.dominantWitherSystem = lorestoneParticles()
 
         // Stone chunk lane
-        profile.stoneChunk.verticalSpan = 0..5
-        profile.stoneChunk.plan = RateEffectPlan(emissionsPerGameHour = 1920)
+        profile.stoneChunk.sampler = null
 
         // Influence area lane
         profile.influenceArea.sampler = InfluenceAreaSurfaceSampler(stone)
-        profile.influenceArea.verticalSpan = 0..6
+        profile.influenceArea.verticalSpan = 1..1
         profile.influenceArea.plan = PulsatingEffectPlan(
-            pulseEveryGameHours = 0.03,
-            emissionsPerPulse = 101,
+            pulseEveryGameHours = 0.04,
+            emissionsPerPulse = 84,
         )
-        profile.influenceArea.materialization = SamplerMaterializationConfig(detail = 0.28)
+        profile.influenceArea.materialization = SamplerMaterializationConfig(detail = 0.30)
         profile.influenceArea.dominantLoreSystem = null
 
         // Influence outline lane
-        profile.influenceOutline.sampler = InfluenceOutlineSurfaceSampler(stone, thicknessBlocks = 6)
-        profile.influenceOutline.verticalSpan = 0..4
+        profile.influenceOutline.sampler = InfluenceOutlineSurfaceSampler(stone, thicknessBlocks = 4)
+        profile.influenceOutline.verticalSpan = 1..1
         profile.influenceOutline.plan = RunningEffectPlan(
-            speedChunksPerGameHour = 72.0,
+            speedChunksPerGameHour = 96.0,
             maxCursorSpacingBlocks = 10,
         )
-        profile.influenceOutline.materialization = SamplerMaterializationConfig(detail = 0.35)
+        profile.influenceOutline.materialization = SamplerMaterializationConfig(detail = 0.45)
         profile.influenceOutline.dominantLoreSystem = null
     }
 }
