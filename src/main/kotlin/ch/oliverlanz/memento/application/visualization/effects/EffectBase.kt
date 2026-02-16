@@ -316,7 +316,7 @@ abstract class EffectBase(
     )
 
     protected fun lorestoneParticles(): ParticleSystemPrototype = ParticleSystemPrototype(
-        particle = net.minecraft.particle.ParticleTypes.SOUL_FIRE_FLAME,
+        particle = net.minecraft.particle.ParticleTypes.GLOW,
         count = 4,
         spreadX = 0.15,
         spreadY = 0.15,
