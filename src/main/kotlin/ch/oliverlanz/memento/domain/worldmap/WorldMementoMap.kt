@@ -7,7 +7,7 @@ data class ChunkScanSnapshotEntry(
         val key: ChunkKey,
         val signals: ChunkSignals?,
         val scanTick: Long,
-        val provenance: ChunkScanProvenance = ChunkScanProvenance.ENGINE_UNSOLICITED,
+        val provenance: ChunkScanProvenance = ChunkScanProvenance.ENGINE_AMBIENT,
         val unresolvedReason: ChunkScanUnresolvedReason? = null,
 )
 
@@ -17,12 +17,12 @@ data class ChunkScanSnapshotEntry(
  * The value captures the evidence path that produced the scan record:
  * - [FILE_PRIMARY]: metadata came from primary region-file reads.
  * - [ENGINE_FALLBACK]: metadata required an engine/runtime fallback path.
- * - [ENGINE_UNSOLICITED]: metadata arrived from unsolicited engine chunk availability.
+ * - [ENGINE_AMBIENT]: metadata arrived from ambient engine chunk availability.
  */
 enum class ChunkScanProvenance {
     FILE_PRIMARY,
     ENGINE_FALLBACK,
-    ENGINE_UNSOLICITED,
+    ENGINE_AMBIENT,
 }
 
 /**
@@ -60,7 +60,7 @@ class WorldMementoMap {
     private data class ChunkRecord(
             @Volatile var signals: ChunkSignals? = null,
             @Volatile var scanTick: Long? = null,
-            @Volatile var provenance: ChunkScanProvenance = ChunkScanProvenance.ENGINE_UNSOLICITED,
+            @Volatile var provenance: ChunkScanProvenance = ChunkScanProvenance.ENGINE_AMBIENT,
             @Volatile var unresolvedReason: ChunkScanUnresolvedReason? = null,
     )
 
@@ -102,7 +102,7 @@ class WorldMementoMap {
     fun markScanned(
             key: ChunkKey,
             scanTick: Long,
-            provenance: ChunkScanProvenance = ChunkScanProvenance.ENGINE_UNSOLICITED,
+            provenance: ChunkScanProvenance = ChunkScanProvenance.ENGINE_AMBIENT,
             unresolvedReason: ChunkScanUnresolvedReason? = null,
     ): Boolean {
         val record = records.computeIfAbsent(key) { ChunkRecord() }

@@ -9,6 +9,42 @@ package ch.oliverlanz.memento
 object MementoConstants {
 
     /* ---------------------------------------------------------------------
+     * Infrastructure pulse generator (cadence transport)
+     * ------------------------------------------------------------------ */
+
+    /** Every server tick (pulse baseline cadence). */
+    const val PULSE_CADENCE_REALTIME_TICKS: Long = 1L
+
+    /** High cadence for smooth transport consumers (e.g. clock). */
+    const val PULSE_CADENCE_HIGH_TICKS: Long = 2L
+
+    /** Medium cadence for bounded recurring work. */
+    const val PULSE_CADENCE_MEDIUM_TICKS: Long = 10L
+
+    /** Low cadence for deferred non-urgent work. */
+    const val PULSE_CADENCE_LOW_TICKS: Long = 100L
+
+    /** Very low cadence for heavy/rare maintenance work. */
+    const val PULSE_CADENCE_VERY_LOW_TICKS: Long = 1000L
+
+    /** Ultra-low cadence for long-horizon maintenance operations. */
+    const val PULSE_CADENCE_ULTRA_LOW_TICKS: Long = 10000L
+
+    /**
+     * Cadence phase staggering offsets (must remain distinct).
+     *
+     * Non-REALTIME tiers are offset so they do not co-fire on the same server tick.
+     */
+    const val PULSE_PHASE_HIGH: Long = 1L
+    const val PULSE_PHASE_MEDIUM: Long = 2L
+    const val PULSE_PHASE_LOW: Long = 3L
+    const val PULSE_PHASE_VERY_LOW: Long = 4L
+    const val PULSE_PHASE_ULTRA_LOW: Long = 5L
+
+    /** Pulse observability log cadence (ticks). */
+    const val PULSE_STATE_LOG_EVERY_TICKS: Long = 1000L
+
+    /* ---------------------------------------------------------------------
      * Chunk loading / driver pacing
      * ------------------------------------------------------------------ */
 
@@ -78,13 +114,6 @@ object MementoConstants {
     const val CHUNK_LOAD_MAX_OUTSTANDING_TICKETS: Int = 256
 
     /**
-     * State log cadence (ticks) for driver DEBUG state lines.
-     *
-     * Keep frequent enough to diagnose stalls, but not noisy under normal operation.
-     */
-    const val CHUNK_LOAD_STATE_LOG_EVERY_TICKS: Long = 100L
-
-    /**
      * Cadence for "awaiting full load" checks.
      *
      * We poll for accessibility on the tick thread to respect engine thread-safety constraints.
@@ -107,12 +136,6 @@ object MementoConstants {
      * This is the symmetric bounded-wait for the "ticketed but no callback" case.
      */
     const val CHUNK_LOAD_TICKET_ISSUED_TIMEOUT_TICKS: Long = 600L
-
-    /**
-     * Window (ticks) where a purely unsolicited engine chunk load is considered "active pressure".
-     * While pressure is active, the driver backs off entirely and does not issue new tickets.
-     */
-    const val CHUNK_LOAD_UNSOLICITED_PRESSURE_WINDOW_TICKS: Long = 100L
 
     /**
      * Expiry for COMPLETED_PENDING_PRUNE retention (ticks).
@@ -167,22 +190,9 @@ object MementoConstants {
     const val MEMENTO_SCAN_CSV_FILE: String = "memento_world_snapshot.csv"
 
     /**
-     * Tracer-bullet throttling: maximum chunk slots processed per server tick while /memento scan
-     * is active.
-     */
-    const val MEMENTO_SCAN_CHUNK_SLOTS_PER_TICK: Int = 2
-
-    /**
-     * Active-scan heartbeat cadence (ticks).
-     *
-     * INFO-level operator telemetry only: bounded progress snapshots for convergence reasoning.
-     */
-    const val MEMENTO_SCAN_HEARTBEAT_EVERY_TICKS: Long = 100L
-
-    /**
      * Maximum number of externally ingested scan metadata facts applied per server tick.
      *
      * Bounded application keeps map mutation costs predictable while preserving eventual progress.
      */
-    const val MEMENTO_SCAN_METADATA_APPLIER_MAX_PER_TICK: Int = 64
+    const val MEMENTO_SCAN_METADATA_APPLIER_MAX_PER_TICK: Int = 128
 }

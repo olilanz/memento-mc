@@ -1,18 +1,29 @@
 package ch.oliverlanz.memento.application.visualization.effects
 
-import ch.oliverlanz.memento.application.time.GameHours
-import ch.oliverlanz.memento.application.visualization.samplers.SingleChunkSurfaceSampler
-import ch.oliverlanz.memento.application.visualization.samplers.StoneBlockSampler
+import ch.oliverlanz.memento.infrastructure.time.GameHours
 import ch.oliverlanz.memento.domain.stones.WitherstoneView
-import net.minecraft.particle.ParticleTypes
 
+/**
+ * Witherstone placement effect: immediate, unambiguous confirmation of newly asserted intent.
+ *
+ * Lane intent:
+ * - Anchor point/chunk: steady rate signal to pin local origin.
+ * - Influence area: pulsating expansion pulses for footprint readability.
+ * - Influence outline: running wrapped perimeter cursor with spacing trail illusion.
+ */
 class WitherstonePlacementEffect(stone: WitherstoneView) : EffectBase(stone) {
 
     override fun onConfigure(profile: EffectProfile) {
+        // Global
         profile.lifetime = GameHours(0.25)  // Placement: short-lived, intense, unmistakable.
-        profile.surfaceVerticalSpan = 0..1 // 2 blocks high
 
-        profile.surfaceSampler = SingleChunkSurfaceSampler(stone)
-        profile.surfaceEmissionsPerGameHour = 500
+        // Anchor point lane
+        // use defaults
+
+        // Anchor chunk lane
+        // use defaults
+
+        // Influence area/outline lanes
+        // use defaults
     }
 }

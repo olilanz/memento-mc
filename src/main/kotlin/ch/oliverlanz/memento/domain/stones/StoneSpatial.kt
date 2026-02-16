@@ -38,6 +38,13 @@ object StoneSpatial {
         ChunkPos(stone.position.x shr 4, stone.position.z shr 4)
 
     /**
+     * Influence radius in blocks with the same margin used by [containsChunk].
+     *
+     * This keeps block-space visualizations semantically aligned with chunk influence projection.
+     */
+    fun influenceRadiusBlocks(stone: StoneView): Int = stone.radius * 16 + CENTER_MARGIN_BLOCKS
+
+    /**
      * True if [chunk] is inside [stone]'s influence footprint.
      *
      * The footprint is a circle in world space, evaluated against the chunk center.

@@ -1,8 +1,8 @@
 package ch.oliverlanz.memento.domain.worldmap
 
 import ch.oliverlanz.memento.domain.stones.Lorestone
+import ch.oliverlanz.memento.domain.stones.StoneMapService
 import ch.oliverlanz.memento.domain.stones.Stone
-import ch.oliverlanz.memento.domain.stones.StoneTopology
 import ch.oliverlanz.memento.domain.stones.Witherstone
 import net.minecraft.registry.RegistryKey
 import net.minecraft.util.math.ChunkPos
@@ -16,7 +16,7 @@ import kotlin.reflect.KClass
  *
  * Slice 0.9.5 semantics:
  * - Discovery is completed before this stage runs.
- * - Dominance rules are owned by [StoneTopology].
+ * - Dominance rules are owned by [StoneAuthority].
  * - The output is annotated with the convenience flags
  *   [ChunkMementoView.hasLorestoneInfluence] and [ChunkMementoView.hasWitherstoneInfluence].
  */
@@ -28,7 +28,7 @@ object StoneInfluenceSuperposition {
 
         val entries = substrate.snapshot().map { (key, signals) ->
             val dominantByChunk = dominantByChunkByWorld.getOrPut(key.world) {
-                StoneTopology.getInfluencedChunkSet(key.world)
+                StoneMapService.dominantByChunk(key.world)
             }
 
             val dominant = dominantByChunk[ChunkPos(key.chunkX, key.chunkZ)]
@@ -61,7 +61,7 @@ object StoneInfluenceSuperposition {
             val key = entry.key
             val signals = entry.signals
             val dominantByChunk = dominantByChunkByWorld.getOrPut(key.world) {
-                StoneTopology.getInfluencedChunkSet(key.world)
+                StoneMapService.dominantByChunk(key.world)
             }
 
             val dominant = dominantByChunk[ChunkPos(key.chunkX, key.chunkZ)]

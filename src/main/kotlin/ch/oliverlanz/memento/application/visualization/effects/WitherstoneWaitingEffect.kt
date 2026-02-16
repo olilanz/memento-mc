@@ -1,26 +1,39 @@
 package ch.oliverlanz.memento.application.visualization.effects
 
-import ch.oliverlanz.memento.application.visualization.samplers.StoneBlockSampler
-import ch.oliverlanz.memento.application.visualization.samplers.SingleChunkSurfaceSampler
+import ch.oliverlanz.memento.application.visualization.effectplans.RateEffectPlan
+import ch.oliverlanz.memento.application.visualization.samplers.InfluenceAreaSurfaceSampler
+import ch.oliverlanz.memento.application.visualization.samplers.InfluenceOutlineSurfaceSampler
 import ch.oliverlanz.memento.domain.stones.WitherstoneView
 
+/**
+ * Witherstone waiting effect: persistent, operational signal while maturity is pending.
+ *
+ * Lane intent:
+ * - Anchor point: steady rate signal to keep anchor present during long waits.
+ * - Anchor chunk: disabled to avoid competing with area/outline during waiting.
+ * - Influence area: pulsating field to indicate active influence pressure.
+ * - Influence outline: running wrapped perimeter cursor for directional perimeter motion.
+ *
+ * Domain semantic: waiting phase is wither-only across influence lanes.
+ */
 class WitherstoneWaitingEffect(stone: WitherstoneView) : EffectBase(stone) {
 
     override fun onConfigure(profile: EffectProfile) {
+        // Global
         profile.lifetime = null             // Waiting: infinite until externally terminated.
-        profile.surfaceVerticalSpan = 0..9  // 10 blocks high
 
-        profile.surfaceSampler = SingleChunkSurfaceSampler(stone)
-        profile.surfaceEmissionsPerGameHour = 500
+        // Anchor point lane
+        // use defaults
 
-        profile.surfaceSystem = ParticleSystemPrototype(
-            particle = net.minecraft.particle.ParticleTypes.END_ROD,
-            count = 7,
-            spreadX = 1.50,
-            spreadY = 1.50,
-            spreadZ = 1.50,
-            speed = 0.02,
-            baseYOffset = 1.0
-        )
+        // Anchor chunk lane
+        profile.anchorChunk.sampler = null
+
+        // Influence area lane
+        profile.influenceArea.verticalSpan = 0.0..15.0
+        profile.influenceArea.planFactory = { RateEffectPlan(selectionDensityPerGameHour = 0.8) }
+        profile.influenceArea.dominantLoreSystem = null
+
+        // Influence outline lane
+        profile.influenceOutline.dominantLoreSystem = null
     }
 }

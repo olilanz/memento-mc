@@ -1,4 +1,4 @@
-package ch.oliverlanz.memento.application.time
+package ch.oliverlanz.memento.infrastructure.time
 
 import ch.oliverlanz.memento.domain.events.GameDayAdvanced
 import ch.oliverlanz.memento.domain.events.GameTimeDomainEvents
@@ -58,7 +58,7 @@ class GameTimeTracker {
     /**
      * Transport tick only (NO domain logic here).
      *
-     * - Publishes [GameClock] each tick.
+     * - Publishes [GameClock] on each invocation.
      * - Publishes [GameDayAdvanced] only when Memento-day boundaries are crossed.
      */
     fun tick() {
@@ -82,12 +82,12 @@ class GameTimeTracker {
                 mementoDayIndex = mementoDayIndex
             )
         )
+        lastTimeOfDay = timeOfDay
 
         // Low-frequency semantic day advancement.
         val lastDay = lastMementoDayIndex
         if (lastDay == null) {
             lastMementoDayIndex = mementoDayIndex
-            lastTimeOfDay = timeOfDay
             return
         }
 
@@ -117,8 +117,6 @@ class GameTimeTracker {
 
             lastMementoDayIndex = mementoDayIndex
         }
-
-        lastTimeOfDay = timeOfDay
     }
 
     private fun computeMementoDayIndex(timeOfDay: Long): Long {

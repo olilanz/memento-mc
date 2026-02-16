@@ -10,7 +10,7 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * Locked responsibility:
  * - RenewalBatch is a synchronization primitive (chunks are processed together)
- * - StoneTopology provides eligible chunk sets
+ * - StoneAuthority provides eligible chunk sets
  * - RenewalTracker owns batch lifecycle + state transitions based on observations
  *
  * Domain code does not log. Observability is provided via [RenewalEvent] subscriptions.

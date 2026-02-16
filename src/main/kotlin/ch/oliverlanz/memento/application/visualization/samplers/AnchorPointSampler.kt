@@ -9,7 +9,7 @@ import net.minecraft.util.math.BlockPos
  *
  * Used for anchor / identity visuals. Effects typically project this upward.
  */
-class StoneBlockSampler(
+class AnchorPointSampler(
     private val stone: StoneView
 ) : StoneSampler {
 

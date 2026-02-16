@@ -8,17 +8,23 @@ import ch.oliverlanz.memento.application.renewal.RenewalInitialObserver
 import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge
 import ch.oliverlanz.memento.application.renewal.WitherstoneConsumptionBridge
 import ch.oliverlanz.memento.application.stone.StoneMaturityTimeBridge
-import ch.oliverlanz.memento.application.time.GameTimeTracker
 import ch.oliverlanz.memento.application.visualization.EffectsHost
 import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
 import ch.oliverlanz.memento.domain.worldmap.WorldMapService
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchLifecycleTransition
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
-import ch.oliverlanz.memento.domain.renewal.RenewalTrackerHooks
+import ch.oliverlanz.memento.domain.renewal.RenewalChunkObservationBridge
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerLogging
-import ch.oliverlanz.memento.domain.stones.StoneTopologyHooks
+import ch.oliverlanz.memento.domain.events.StoneLifecycleTrigger
+import ch.oliverlanz.memento.domain.stones.StoneAuthority
+import ch.oliverlanz.memento.domain.stones.StoneAuthorityWiring
 import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
+import ch.oliverlanz.memento.infrastructure.pulse.PulseCadence
+import ch.oliverlanz.memento.infrastructure.pulse.PulseClock
+import ch.oliverlanz.memento.infrastructure.pulse.PulseEvents
+import ch.oliverlanz.memento.infrastructure.pulse.PulseGenerator
+import ch.oliverlanz.memento.infrastructure.time.GameTimeTracker
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanCsvExporter
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
 import ch.oliverlanz.memento.infrastructure.worldscan.TwoPassRegionFileMetadataProvider
@@ -38,11 +44,37 @@ object Memento : ModInitializer {
 
     private var worldScanner: WorldScanner? = null
     private var worldMapService: WorldMapService? = null
+    private val pulseGenerator = PulseGenerator()
 
     // Renewal wiring (application / infrastructure)
     private var renewalInitialObserver: RenewalInitialObserver? = null
     private var renewalChunkLoadProvider: RenewalChunkLoadProvider? = null
     private var chunkLoadDriver: ChunkLoadDriver? = null
+
+    private val onRealtimePulse: (PulseClock) -> Unit = {
+        chunkLoadDriver?.tick()
+    }
+
+    private val onHighPulse: (PulseClock) -> Unit = {
+        gameTimeTracker.tick()
+        worldScanner?.tick()
+    }
+
+    private val onMediumPulse: (PulseClock) -> Unit = {
+    }
+
+    private val onLowPulse: (PulseClock) -> Unit = {
+        RenewalRegenerationBridge.tickThreadProcess()
+        chunkLoadDriver?.logStateOnLowPulse()
+    }
+
+    private val onUltraLowPulse: (PulseClock) -> Unit = {
+        // Reserved for future heavy maintenance cadence.
+    }
+
+    private val onExtremeLowPulse: (PulseClock) -> Unit = {
+        // Reserved for future very-low-frequency maintenance cadence.
+    }
 
     // Single listener to fan out RenewalTracker domain events
     private val renewalEventListener: (RenewalEvent) -> Unit = { e ->
@@ -66,6 +98,14 @@ object Memento : ModInitializer {
 
         ServerLifecycleEvents.SERVER_STARTED.register { server: MinecraftServer ->
 
+            pulseGenerator.reset()
+            PulseEvents.subscribe(PulseCadence.REALTIME, onRealtimePulse)
+            PulseEvents.subscribe(PulseCadence.HIGH, onHighPulse)
+            PulseEvents.subscribe(PulseCadence.MEDIUM, onMediumPulse)
+            PulseEvents.subscribe(PulseCadence.LOW, onLowPulse)
+            PulseEvents.subscribe(PulseCadence.VERY_LOW, onUltraLowPulse)
+            PulseEvents.subscribe(PulseCadence.ULTRA_LOW, onExtremeLowPulse)
+
             worldMapService = WorldMapService().also { it.attach() }
 
             RenewalTrackerLogging.attachOnce()
@@ -83,14 +123,14 @@ object Memento : ModInitializer {
                 // Single fan-out point for chunk availability → domain renewal tracker
                 it.registerConsumer(object : ChunkAvailabilityListener {
                     override fun onChunkMetadata(world: ServerWorld, fact: ChunkMetadataFact) {
-                        RenewalTrackerHooks.onChunkLoaded(
+                        RenewalChunkObservationBridge.onChunkLoaded(
                             world.registryKey,
                             ChunkPos(fact.key.chunkX, fact.key.chunkZ)
                         )
                     }
 
                     override fun onChunkUnloaded(world: ServerWorld, pos: ChunkPos) {
-                        RenewalTrackerHooks.onChunkUnloaded(world.registryKey, pos)
+                        RenewalChunkObservationBridge.onChunkUnloaded(world.registryKey, pos)
                     }
                 })
             }
@@ -117,12 +157,33 @@ object Memento : ModInitializer {
             RenewalTracker.subscribe(renewalEventListener)
 
             WitherstoneRenewalBridge.attach()
-            StoneTopologyHooks.onServerStarted(server)
+            CommandHandlers.attachStoneNameSuggestions()
+            StoneAuthorityWiring.onServerStarted(server)
+
+            // Explicit startup stone lifecycle bootstrap:
+            // 1) attach authority runtime, 2) process persisted stones through authoritative
+            // mutation/transition pathway, 3) evaluate startup lifecycle progression.
+            MementoLog.info(MementoConcept.STONE, "startup stone bootstrap phase=attach")
+            StoneAuthority.attach(server)
+
+            MementoLog.info(MementoConcept.STONE, "startup stone bootstrap phase=process_persisted")
+            StoneAuthority.processPersistedStones(trigger = StoneLifecycleTrigger.SERVER_START)
+
+            MementoLog.info(MementoConcept.STONE, "startup stone bootstrap phase=evaluate")
+            StoneAuthority.evaluate(StoneLifecycleTrigger.SERVER_START)
+
             StoneMaturityTimeBridge.attach()
             gameTimeTracker.attach(server)
         }
 
         ServerLifecycleEvents.SERVER_STOPPING.register {
+
+            PulseEvents.unsubscribe(PulseCadence.ULTRA_LOW, onExtremeLowPulse)
+            PulseEvents.unsubscribe(PulseCadence.VERY_LOW, onUltraLowPulse)
+            PulseEvents.unsubscribe(PulseCadence.LOW, onLowPulse)
+            PulseEvents.unsubscribe(PulseCadence.MEDIUM, onMediumPulse)
+            PulseEvents.unsubscribe(PulseCadence.HIGH, onHighPulse)
+            PulseEvents.unsubscribe(PulseCadence.REALTIME, onRealtimePulse)
 
             gameTimeTracker.detach()
             RenewalTracker.unsubscribe(renewalEventListener)
@@ -140,7 +201,8 @@ object Memento : ModInitializer {
 
             StoneMaturityTimeBridge.detach()
             WitherstoneRenewalBridge.detach()
-            StoneTopologyHooks.onServerStopping()
+            CommandHandlers.detachStoneNameSuggestions()
+            StoneAuthorityWiring.onServerStopping()
 
             CommandHandlers.detachVisualizationEngine()
             CommandHandlers.detachWorldScanner()
@@ -156,10 +218,7 @@ object Memento : ModInitializer {
 
         // Transport tick only
         ServerTickEvents.END_SERVER_TICK.register {
-            gameTimeTracker.tick()
-            worldMapService?.tick()
-            chunkLoadDriver?.tick()
-            worldScanner?.tick()
+            pulseGenerator.onServerTick()
         }
     }
 }

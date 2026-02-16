@@ -3,7 +3,6 @@ package ch.oliverlanz.memento.infrastructure.worldscan
 import ch.oliverlanz.memento.MementoConstants
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
 import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
-import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataIngestionPort
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanProvenance
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanUnresolvedReason
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry
@@ -31,7 +30,7 @@ import net.minecraft.util.math.ChunkPos
  * - Owns scan lifecycle and map convergence accounting.
  * - Owns file-primary scan startup and metadata ingestion into the map.
  * - Receives chunk availability via the ChunkLoadDriver's propagation callback for passive
- *   unsolicited enrichment.
+ *   ambient enrichment.
  *
  * This class implements [ChunkAvailabilityListener] (driver pushes availability).
  */
@@ -49,9 +48,6 @@ class WorldScanner : ChunkAvailabilityListener {
     /** Domain-owned world-map lifecycle/ingestion authority. */
     private var worldMapService: WorldMapService? = null
 
-    /** Domain ingestion port consumed by scanner publications. */
-    private var ingestionPort: ChunkMetadataIngestionPort? = null
-
     /** File-provider facts are queued and drained on tick thread by scanner runtime. */
     private val pendingFileFacts = ConcurrentLinkedQueue<ScanMetadataFact>()
 
@@ -63,11 +59,11 @@ class WorldScanner : ChunkAvailabilityListener {
     /** Observability only. */
     private var plannedChunks: Int = 0
 
-    /** Active-scan heartbeat cadence guard (absolute world tick). */
-    private var lastHeartbeatTick: Long = 0L
-
     /** Scanner progress sample used to derive heartbeat delta. */
     private var lastHeartbeatScanned: Int = 0
+
+    /** Next scan-progress threshold (percentage points) for heartbeat emission. */
+    private var nextHeartbeatProgressPct: Int = 5
 
     private val listeners = CopyOnWriteArrayList<WorldScanListener>()
 
@@ -78,16 +74,14 @@ class WorldScanner : ChunkAvailabilityListener {
         this.server = server
         MementoLog.info(
                 MementoConcept.SCANNER,
-                "scanner attach(server): worldMapServiceAttached={} ingestionPortBound={}",
+                "scanner attach(server): worldMapServiceAttached={}",
                 worldMapService != null,
-                ingestionPort != null,
         )
         ensureSubstrate()
     }
 
     fun attachWorldMapService(service: WorldMapService) {
         worldMapService = service
-        ingestionPort = service.ingestionPort()
         MementoLog.info(MementoConcept.SCANNER, "scanner attachWorldMapService: service bound")
         ensureSubstrate()
     }
@@ -107,8 +101,7 @@ class WorldScanner : ChunkAvailabilityListener {
 
         if (!activeScan.get()) return
         val m = mapSnapshot() ?: return
-        val tickNow = server?.overworld?.time ?: 0L
-        maybeEmitActiveHeartbeat(tickNow, m)
+        maybeEmitActiveHeartbeat(m)
         maybeFinalizeActiveScan(m)
     }
 
@@ -141,12 +134,11 @@ class WorldScanner : ChunkAvailabilityListener {
         fileMetadataProvider?.close()
         fileMetadataProvider = null
         worldMapService = null
-        ingestionPort = null
         pendingFileFacts.clear()
         consumer = null
         plannedChunks = 0
-        lastHeartbeatTick = 0L
         lastHeartbeatScanned = 0
+        nextHeartbeatProgressPct = 5
         completionEmittedForCurrentScan = false
         listeners.clear()
     }
@@ -210,8 +202,11 @@ class WorldScanner : ChunkAvailabilityListener {
         plannedChunks = scanMap.totalChunks()
         completionEmittedForCurrentScan = false
         val tickNow = srv.overworld.time
-        lastHeartbeatTick = tickNow
         lastHeartbeatScanned = scanMap.scannedChunks()
+        val baselineProgress =
+                if (plannedChunks <= 0) 0
+                else ((lastHeartbeatScanned * 100) / plannedChunks)
+        nextHeartbeatProgressPct = (((baselineProgress / 5) + 1) * 5).coerceAtMost(100)
 
         // If already complete, emit completion immediately without entering active scan mode.
         if (scanMap.isComplete()) {
@@ -271,19 +266,15 @@ class WorldScanner : ChunkAvailabilityListener {
         }
     }
 
-    private fun maybeEmitActiveHeartbeat(tickNow: Long, map: WorldMementoMap) {
-        if (tickNow != 0L &&
-                        (tickNow - lastHeartbeatTick) <
-                                MementoConstants.MEMENTO_SCAN_HEARTBEAT_EVERY_TICKS
-        ) {
-            return
-        }
+    private fun maybeEmitActiveHeartbeat(map: WorldMementoMap) {
+        if (plannedChunks <= 0) return
 
         val scanned = map.scannedChunks()
+        val progressPctInt = ((scanned * 100) / plannedChunks).coerceIn(0, 100)
+        if (progressPctInt < nextHeartbeatProgressPct) return
+
         val deltaScanned = scanned - lastHeartbeatScanned
-        val progressPct =
-                if (plannedChunks <= 0) 0.0
-                else (scanned.toDouble() * 100.0) / plannedChunks.toDouble()
+        val progressPct = (scanned.toDouble() * 100.0) / plannedChunks.toDouble()
         val progressPctText = String.format(Locale.ROOT, "%.1f", progressPct)
         MementoLog.info(
                 MementoConcept.SCANNER,
@@ -294,14 +285,13 @@ class WorldScanner : ChunkAvailabilityListener {
                 deltaScanned,
                 0,
         )
-
-        lastHeartbeatTick = tickNow
         lastHeartbeatScanned = scanned
+        nextHeartbeatProgressPct = (nextHeartbeatProgressPct + 5).coerceAtMost(100)
     }
 
     override fun onChunkMetadata(world: ServerWorld, fact: ChunkMetadataFact) {
         val m = mapSnapshot() ?: return
-        ingestionPort?.ingest(fact)
+        worldMapService?.applyFactOnTickThread(fact)
         // If not active scan, we do not drive demand; we only enrich the map.
         if (!activeScan.get()) return
 
@@ -345,28 +335,22 @@ class WorldScanner : ChunkAvailabilityListener {
         val m = ensureSubstrate()
         val c = consumer ?: ChunkMetadataConsumer(m).also { consumer = it }
         val fact = c.extractFact(world = world, chunk = chunk, source = source, scanTick = scanTick)
-        ingestionPort?.ingest(fact)
+        worldMapService?.applyFactOnTickThread(fact)
     }
 
     private fun drainQueuedFileFacts() {
-        val port = ingestionPort ?: return
+        val service = worldMapService ?: return
         if (MementoConstants.MEMENTO_SCAN_METADATA_APPLIER_MAX_PER_TICK <= 0) return
 
         var forwarded = 0
         while (forwarded < MementoConstants.MEMENTO_SCAN_METADATA_APPLIER_MAX_PER_TICK) {
             val fact = pendingFileFacts.poll() ?: break
-            port.ingest(fact)
+            service.applyFactOnTickThread(fact)
             forwarded++
         }
     }
 
     private val scannerQueueIngestionPort = ScanMetadataIngestionPort { fact -> pendingFileFacts.add(fact) }
-
-    private object NoopScanMetadataIngestionPort : ScanMetadataIngestionPort {
-        override fun ingest(fact: ScanMetadataFact) {
-            // Defensive no-op fallback; should not be reachable after ensureSubstrate().
-        }
-    }
 
     private fun emitCompleted(reason: String, map: WorldMementoMap) {
         if (!activeScan.compareAndSet(true, false)) return

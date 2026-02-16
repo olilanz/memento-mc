@@ -9,9 +9,9 @@ import java.util.Random
  *
  * Locked semantics:
  * - Samplers never emit particles and have no time dimension.
- * - Samplers discover and retain the full set of eligible blocks (no reduction).
- * - The candidate set is immutable and ordered deterministically.
- * - Randomness is applied at accessor time, not at construction time.
+ * - Samplers discover full geometry and return ordered immutable candidates.
+ * - Samplers are geometry-only and do not interpret dominance.
+ * - Candidate order is stable for the effect lifetime.
  */
 interface StoneSampler {
 

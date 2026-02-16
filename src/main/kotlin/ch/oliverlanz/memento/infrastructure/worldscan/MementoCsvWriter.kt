@@ -2,7 +2,7 @@ package ch.oliverlanz.memento.infrastructure.worldscan
 
 import ch.oliverlanz.memento.domain.worldmap.WorldMementoTopology
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry
-import ch.oliverlanz.memento.domain.stones.StoneTopology
+import ch.oliverlanz.memento.domain.stones.StoneMapService
 import ch.oliverlanz.memento.domain.stones.Stone
 import ch.oliverlanz.memento.MementoConstants
 import net.minecraft.server.MinecraftServer
@@ -27,7 +27,7 @@ object MementoCsvWriter {
         val sb = StringBuilder()
         sb.append("dimension,chunk_x,chunk_z,scan_tick,inhabited_ticks,dominant_stone,surface_y,biome_id,is_spawn_chunk,provenance,unresolved_reason\n")
 
-        // Dominant influence map per world (already lore-resolved by StoneTopology)
+        // Dominant influence map per world (already lore-resolved by StoneAuthority)
         val dominantByWorld = linkedMapOf<net.minecraft.registry.RegistryKey<net.minecraft.world.World>, Map<ChunkPos, kotlin.reflect.KClass<out ch.oliverlanz.memento.domain.stones.Stone>>>()
 
         snapshot.forEach { entry ->
@@ -35,7 +35,7 @@ object MementoCsvWriter {
             val signals = entry.signals
 
             val dominantByChunk = dominantByWorld.getOrPut(key.world) {
-                StoneTopology.getInfluencedChunkSet(key.world)
+                StoneMapService.dominantByChunk(key.world)
             }
             val dominant = dominantByChunk[ChunkPos(key.chunkX, key.chunkZ)]?.simpleName ?: ""
 

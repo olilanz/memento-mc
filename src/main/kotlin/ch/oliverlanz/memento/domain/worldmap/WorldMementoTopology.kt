@@ -6,7 +6,7 @@ import kotlin.reflect.KClass
 data class ChunkMementoView(
     val key: ChunkKey,
     val signals: ChunkSignals?,
-    /** Dominant influence for this chunk, if any. Lore dominance is already resolved by StoneTopology. */
+    /** Dominant influence for this chunk, if any. Lore dominance is already resolved by StoneAuthority. */
     val dominantStoneKind: KClass<out Stone>?,
     /** Convenience flag derived from [dominantStoneKind]. */
     val hasLorestoneInfluence: Boolean,
