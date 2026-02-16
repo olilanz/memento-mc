@@ -35,9 +35,8 @@ import kotlin.random.Random
  * IMPORTANT (locked plan model):
  * - Every lane is executed by one composable [EffectPlan] instance.
  * - Runtime plan instances are recreated on sample rebind.
- * - [RateEffectPlan] emits a stochastic trickle by expected time throughput.
- * - [PulsatingEffectPlan] emits bursts on fixed game-time intervals.
- * - [RunningEffectPlan] advances a single wrapped cursor and emits trail points every N blocks.
+ * - [RateEffectPlan] emits density-based scatter over bound samples.
+ * - [PulsatingEffectPlan] emits density-based bursts on fixed game-time intervals.
  * - All pacing semantics are game-time delta driven from [GameClock].
  *
  * IMPORTANT (locked lane model):
@@ -175,14 +174,13 @@ abstract class EffectBase(
         // Influence area lane defaults
         p.influenceArea.verticalSpan = 0.0..1.0
         p.influenceArea.sampler = InfluenceAreaSurfaceSampler(stone)
-        p.influenceArea.planFactory = { PulsatingEffectPlan(pulseEveryGameHours = 0.03, selectionDensityPerPulse = 0.03) }
+        p.influenceArea.planFactory = { PulsatingEffectPlan(pulseEveryGameHours = 0.03, selectionDensityPerPulse = 0.06) }
         p.influenceArea.dominantLoreSystem = lorestoneParticles()
         p.influenceArea.dominantWitherSystem = witherstoneParticles()
 
         // Influence outline lane defaults
         p.influenceOutline.verticalSpan = 0.0..0.3
         p.influenceOutline.sampler = InfluenceOutlineSurfaceSampler(stone)
-        //p.influenceOutline.planFactory = { RunningEffectPlan(speedChunksPerGameHour = 96.0, maxCursorSpacingBlocks = 10) }
         p.influenceOutline.planFactory = { RateEffectPlan(selectionDensityPerGameHour = 50.0) }
         p.influenceOutline.dominantLoreSystem = lorestoneParticles()
         p.influenceOutline.dominantWitherSystem = witherstoneParticles()
