@@ -13,6 +13,8 @@ customModes:
     groups:
       - read
       - ["edit", { fileRegex: "^(README|ARCHITECTURE|DEVELOPMENT|RENEWAL_MODEL)\\.md$", description: "Institutional memory docs only" }]
+      - browser
+      - command
     customInstructions: >-
       Sensemaker may freely read any file in the repository and perform
       semantic or regex search without requesting additional permission.
