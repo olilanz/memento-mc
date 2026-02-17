@@ -37,6 +37,9 @@ object Commands {
                  * INSPECT
                  * ====================== */
                 .then(literal("inspect")
+                    .executes { ctx ->
+                        CommandHandlers.inspect(ctx.source)
+                    }
                     .then(argument("name", StringArgumentType.word())
                         .suggests(CommandHandlers::suggestAnyStoneName)
                         .executes { ctx ->
