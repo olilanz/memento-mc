@@ -36,6 +36,16 @@ import net.minecraft.util.math.ChunkPos
  */
 class WorldScanner : ChunkAvailabilityListener {
 
+    data class StatusView(
+        val active: Boolean,
+        val plannedChunks: Int,
+        val pendingQueuedFacts: Int,
+        val worldMapTotal: Int,
+        val worldMapScanned: Int,
+        val worldMapMissing: Int,
+        val providerStatus: FileMetadataProviderStatus?,
+    )
+
     private var server: MinecraftServer? = null
 
     /**
@@ -109,6 +119,22 @@ class WorldScanner : ChunkAvailabilityListener {
     fun metadataIngestionPort(): ScanMetadataIngestionPort {
         ensureSubstrate()
         return scannerQueueIngestionPort
+    }
+
+    /**
+     * Lightweight read-only status surface for operator inspection.
+     */
+    fun statusView(): StatusView {
+        val map = mapSnapshot()
+        return StatusView(
+            active = activeScan.get(),
+            plannedChunks = plannedChunks,
+            pendingQueuedFacts = pendingFileFacts.size,
+            worldMapTotal = map?.totalChunks() ?: 0,
+            worldMapScanned = map?.scannedChunks() ?: 0,
+            worldMapMissing = map?.missingCount() ?: 0,
+            providerStatus = fileMetadataProvider?.status(),
+        )
     }
 
     fun detach() {

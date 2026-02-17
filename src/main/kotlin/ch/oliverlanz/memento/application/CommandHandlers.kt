@@ -8,22 +8,34 @@ import ch.oliverlanz.memento.domain.events.StoneDomainEvents
 import ch.oliverlanz.memento.domain.events.StoneLifecycleState
 import ch.oliverlanz.memento.domain.events.StoneLifecycleTransition
 import ch.oliverlanz.memento.domain.events.StoneLifecycleTrigger
+import ch.oliverlanz.memento.domain.renewal.RenewalBatchSnapshot
+import ch.oliverlanz.memento.domain.renewal.RenewalBatchState
+import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.stones.Lorestone
 import ch.oliverlanz.memento.domain.stones.LorestoneView
 import ch.oliverlanz.memento.domain.stones.Stone
 import ch.oliverlanz.memento.domain.stones.StoneAuthority
+import ch.oliverlanz.memento.domain.stones.StoneMapService
+import ch.oliverlanz.memento.domain.stones.StoneView
 import ch.oliverlanz.memento.domain.stones.Witherstone
 import ch.oliverlanz.memento.domain.stones.WitherstoneView
 import net.minecraft.entity.attribute.EntityAttributes
+import net.minecraft.entity.ItemEntity
+import net.minecraft.registry.Registries
+import net.minecraft.server.MinecraftServer
 import net.minecraft.server.command.ServerCommandSource
+import net.minecraft.server.world.ServerWorld
 import net.minecraft.text.Text
 import net.minecraft.util.Formatting
 import net.minecraft.util.hit.HitResult
+import net.minecraft.util.math.Box
 import net.minecraft.util.math.BlockPos
+import net.minecraft.util.math.ChunkPos
 import ch.oliverlanz.memento.application.visualization.EffectsHost
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
+import java.util.Locale
 
 /**
  * Application-layer command handlers.
@@ -33,6 +45,9 @@ import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
  * (StoneAuthority + RenewalTracker).
  */
 object CommandHandlers {
+
+    private const val INSPECT_MAX_CHUNK_PROBES = 4
+    private const val INSPECT_MAX_OTHER_IDENTIFIERS = 7
 
     private enum class SuggestedStoneKind {
         ANY,
@@ -137,7 +152,7 @@ object CommandHandlers {
                 return 0
             }
 
-            val lines = formatStoneInspect(stone)
+            val lines = formatStoneInspect(source, stone)
             source.sendFeedback({ Text.literal(lines.first()).formatted(Formatting.GOLD) }, false)
             lines.drop(1).forEach { line ->
                 source.sendFeedback({ Text.literal(line).formatted(Formatting.GRAY) }, false)
@@ -146,6 +161,21 @@ object CommandHandlers {
         } catch (e: Exception) {
             MementoLog.error(MementoConcept.OPERATOR, "command=inspect failed name='{}'", e, name)
             source.sendError(Text.literal("Memento: could not inspect stone (see server log)."))
+            0
+        }
+    }
+
+    fun inspect(source: ServerCommandSource): Int {
+        return try {
+            val lines = formatInspectSummary(source)
+            source.sendFeedback({ Text.literal(lines.first()).formatted(Formatting.GOLD) }, false)
+            lines.drop(1).forEach { line ->
+                source.sendFeedback({ Text.literal(line).formatted(Formatting.GRAY) }, false)
+            }
+            1
+        } catch (e: Exception) {
+            MementoLog.error(MementoConcept.OPERATOR, "command=inspect summary failed", e)
+            source.sendError(Text.literal("Memento: could not inspect status (see server log)."))
             0
         }
     }
@@ -399,23 +429,210 @@ object CommandHandlers {
                 "lorestone '${stone.name}' dim=${stone.dimension} pos=(${stone.position.x},${stone.position.y},${stone.position.z}) r=${stone.radius}"
         }
 
-    private fun formatStoneInspect(stone: Stone): List<String> =
-        when (stone) {
-            is Witherstone -> listOf(
-                "Witherstone '${stone.name}'",
-                "dimension: ${stone.dimension}",
-                "position: (${stone.position.x},${stone.position.y},${stone.position.z})",
-                "radius: ${stone.radius}",
-                "daysToMaturity: ${stone.daysToMaturity}",
-                "state: ${stone.state}",
-            )
-            is Lorestone -> listOf(
-                "Lorestone '${stone.name}'",
-                "dimension: ${stone.dimension}",
-                "position: (${stone.position.x},${stone.position.y},${stone.position.z})",
-                "radius: ${stone.radius}",
-            )
+    private fun formatInspectSummary(source: ServerCommandSource): List<String> {
+        val lines = mutableListOf("Memento inspect")
+
+        val stones = StoneAuthority.list().sortedBy { it.name }
+        val withers = stones.filterIsInstance<Witherstone>()
+        val lores = stones.filterIsInstance<Lorestone>()
+        val witherStates = withers
+            .groupingBy { it.state }
+            .eachCount()
+
+        lines += "Stones: total=${stones.size}, witherstone=${withers.size}, lorestone=${lores.size}"
+        if (witherStates.isNotEmpty()) {
+            lines += "  Witherstone states: ${witherStates.entries.sortedBy { it.key.name }.joinToString(", ") { "${it.key.name.lowercase(Locale.ROOT)}=${it.value}" }}"
         }
+
+        val batches = RenewalTracker.snapshotBatches()
+        if (batches.isNotEmpty()) {
+            val states = batches.groupingBy { it.state }.eachCount()
+            lines += "Renewal: active batches=${batches.size}"
+            lines += "  States: ${states.entries.sortedBy { it.key.name }.joinToString(", ") { "${it.key.name.lowercase(Locale.ROOT)}=${it.value}" }}"
+        }
+
+        val scannerStatus = worldScanner?.statusView()
+        if (scannerStatus != null) {
+            val providerLifecycle = scannerStatus.providerStatus?.lifecycle?.name?.lowercase(Locale.ROOT) ?: "none"
+            lines += "Scanner: active=${scannerStatus.active}, planned=${scannerStatus.plannedChunks}, queuedFacts=${scannerStatus.pendingQueuedFacts}, filePhase=$providerLifecycle"
+
+            if (scannerStatus.worldMapTotal > 0) {
+                lines += "WorldMap: total=${scannerStatus.worldMapTotal}, scanned=${scannerStatus.worldMapScanned}, missing=${scannerStatus.worldMapMissing}"
+            }
+        }
+
+        return lines
+    }
+
+    private fun formatStoneInspect(source: ServerCommandSource, stone: Stone): List<String> {
+        val lines = mutableListOf<String>()
+
+        when (stone) {
+            is Witherstone -> {
+                lines += "Witherstone '${stone.name}'"
+                lines += "dimension: ${stone.dimension}"
+                lines += "position: (${stone.position.x},${stone.position.y},${stone.position.z})"
+                lines += "radius: ${stone.radius}"
+                lines += "daysToMaturity: ${stone.daysToMaturity}"
+                lines += "state: ${stone.state}"
+
+                val influenceCount = StoneMapService.influencedChunks(stone).size
+                lines += "influenced chunks: $influenceCount"
+
+                val batch = RenewalTracker.snapshotBatches().firstOrNull { it.name == stone.name }
+                if (batch != null) {
+                    lines += "renewal batch: ${batch.state} (${batch.chunks.size} chunks)"
+                    lines += waitingExplanation(batch.state)
+
+                    if (batch.state == RenewalBatchState.WAITING_FOR_UNLOAD) {
+                        val blockers = probeUnloadBlockers(
+                            server = source.server,
+                            stone = stone,
+                            batch = batch,
+                        )
+                        if (blockers.players.isNotEmpty()) {
+                            lines += "Players: ${blockers.players.joinToString(", ")}"
+                        }
+                        if (blockers.otherNames.isNotEmpty()) {
+                            lines += "Other: ${blockers.otherNames.joinToString(", ")}"
+                        }
+                    }
+                }
+            }
+
+            is Lorestone -> {
+                lines += "Lorestone '${stone.name}'"
+                lines += "dimension: ${stone.dimension}"
+                lines += "position: (${stone.position.x},${stone.position.y},${stone.position.z})"
+                lines += "radius: ${stone.radius}"
+                val influenceCount = StoneMapService.influencedChunks(stone).size
+                lines += "influenced chunks: $influenceCount"
+            }
+        }
+
+        return lines
+    }
+
+    private fun waitingExplanation(state: RenewalBatchState): String =
+        when (state) {
+            RenewalBatchState.WAITING_FOR_UNLOAD ->
+                "waiting: for chunks to unload naturally"
+
+            RenewalBatchState.WAITING_FOR_RENEWAL ->
+                "waiting: for post-unload load evidence"
+
+            RenewalBatchState.UNLOAD_COMPLETED ->
+                "waiting: unload gate just passed"
+
+            RenewalBatchState.RENEWAL_COMPLETE ->
+                "waiting: none (renewal complete)"
+        }
+
+    private data class UnloadBlockers(
+        val players: List<String>,
+        val otherNames: List<String>,
+    )
+
+    private fun probeUnloadBlockers(
+        server: MinecraftServer,
+        stone: StoneView,
+        batch: RenewalBatchSnapshot,
+    ): UnloadBlockers {
+        val world = server.getWorld(stone.dimension) ?: return UnloadBlockers(emptyList(), emptyList())
+
+        val targetChunks = batch.chunks
+            .asSequence()
+            .sortedWith(compareBy({ it.x }, { it.z }))
+            .take(INSPECT_MAX_CHUNK_PROBES)
+            .toList()
+
+        if (targetChunks.isEmpty()) {
+            return UnloadBlockers(emptyList(), emptyList())
+        }
+
+        val players = linkedSetOf<String>()
+        val others = linkedSetOf<String>()
+
+        for (pos in targetChunks) {
+            playersNearChunk(server, world, pos).forEach { players += it }
+
+            val loaded = world.chunkManager.getChunk(pos.x, pos.z, net.minecraft.world.chunk.ChunkStatus.FULL, false)
+                as? net.minecraft.world.chunk.WorldChunk
+                ?: continue
+
+            collectEntityIdentifiers(world, pos, others)
+            collectBlockEntityIdentifiers(loaded, others)
+
+            if (others.size >= INSPECT_MAX_OTHER_IDENTIFIERS) break
+        }
+
+        return UnloadBlockers(
+            players = players.toList(),
+            otherNames = others.take(INSPECT_MAX_OTHER_IDENTIFIERS),
+        )
+    }
+
+    private fun playersNearChunk(
+        server: MinecraftServer,
+        world: ServerWorld,
+        pos: ChunkPos,
+    ): List<String> {
+        val maxDist = server.playerManager.viewDistance
+        return world.players
+            .asSequence()
+            .filter {
+                val dx = kotlin.math.abs(it.chunkPos.x - pos.x)
+                val dz = kotlin.math.abs(it.chunkPos.z - pos.z)
+                dx <= maxDist && dz <= maxDist
+            }
+            .map { it.gameProfile.name }
+            .distinct()
+            .sorted()
+            .toList()
+    }
+
+    private fun collectEntityIdentifiers(
+        world: ServerWorld,
+        pos: ChunkPos,
+        out: MutableSet<String>,
+    ) {
+        if (out.size >= INSPECT_MAX_OTHER_IDENTIFIERS) return
+
+        val box = Box(
+            pos.startX.toDouble(),
+            world.bottomY.toDouble(),
+            pos.startZ.toDouble(),
+            (pos.startX + 16).toDouble(),
+            320.0,
+            (pos.startZ + 16).toDouble(),
+        )
+
+        val entities = world.getOtherEntities(null, box)
+        for (entity in entities) {
+            if (out.size >= INSPECT_MAX_OTHER_IDENTIFIERS) break
+            if (entity is net.minecraft.server.network.ServerPlayerEntity) continue
+
+            val name = if (entity is ItemEntity) {
+                Registries.ITEM.getId(entity.stack.item).path
+            } else {
+                Registries.ENTITY_TYPE.getId(entity.type).path
+            }
+            if (name.isNotBlank()) out += name
+        }
+    }
+
+    private fun collectBlockEntityIdentifiers(
+        chunk: net.minecraft.world.chunk.WorldChunk,
+        out: MutableSet<String>,
+    ) {
+        if (out.size >= INSPECT_MAX_OTHER_IDENTIFIERS) return
+
+        for (be in chunk.blockEntities.values) {
+            if (out.size >= INSPECT_MAX_OTHER_IDENTIFIERS) break
+            val id = Registries.BLOCK_ENTITY_TYPE.getId(be.type)?.path ?: continue
+            if (id.isNotBlank()) out += id
+        }
+    }
 
     private fun onStoneLifecycleTransitionForSuggestions(event: StoneLifecycleTransition) {
         val next = linkedMapOf<String, SuggestedStoneKind>()
