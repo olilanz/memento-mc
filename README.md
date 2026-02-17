@@ -1,8 +1,8 @@
-# Natural Renewal
+# Memento – Natural Renewal
 
 **Intentional world renewal through remembering and forgetting.**
 
-Natural Renewal is a lightweight, server-side Fabric mod for Minecraft that helps long-lived worlds evolve naturally over time — without wiping the world or interrupting gameplay.
+Memento is a lightweight, server-side Fabric mod for Minecraft that helps long-lived worlds evolve naturally over time — without wiping the world or interrupting gameplay.
 
 Vanilla clients are fully compatible.
 
@@ -14,7 +14,7 @@ Minecraft worlds never forget.
 
 Over time, long-lived worlds become surrounded by vast areas of old, unused terrain. New world features appear farther and farther away, and upgrades or world-generation changes rarely affect the places where players actually live.
 
-Natural Renewal lets the world **move forward naturally**.
+Memento lets the world **move forward naturally**.
 
 It distinguishes between land that is **memorable** — inhabited areas and their surroundings — and land that is **forgettable** — terrain that was explored briefly and then abandoned.
 
@@ -29,7 +29,7 @@ All of this happens **while the server is running**, without offline tools or ma
 
 Not all land deserves to last forever.
 
-Natural Renewal models a simple idea:
+Memento models a simple idea:
 
 * **Memorable land**
   Areas where players live, return to, or spend time — including their immediate surroundings.
@@ -63,82 +63,119 @@ The world feels stable where it matters — and fresh where it doesn’t.
 
 ## Stones: guiding memory and renewal
 
-Natural Renewal introduces two conceptual tools to express intent:
+Memento introduces two conceptual tools to express intent:
 
-* **Witherstone**
-  Marks land for renewal over time. When it matures, it schedules chunks in its area for renewal as soon as the server naturally unloads them.
+### Witherstone
 
-* **Lorestone**
-  Protects land from renewal. Any chunks covered by a Lorestone are guaranteed to never be renewed, even if they overlap a Witherstone.
+Marks land as *allowed to renew*.
+
+When it matures, chunks inside its area become eligible for renewal as soon as the server naturally unloads them.
+
+### Lorestone
+
+Protects land from renewal.
+
+Any chunks covered by a Lorestone are guaranteed to never be renewed by Memento, even if they overlap a Witherstone.
 
 Stones do not force immediate change.
-Renewal only happens when chunks can unload naturally (for example, when players leave an area), keeping the world stable and predictable.
+Renewal only happens when chunks unload naturally (for example, when players leave an area), keeping the world stable and predictable.
+
+Stones can be visualized in-world using particle effects to clearly show their area of influence.
 
 ---
 
-## Operator control
+## Quick operator flow (OP ≥ 2)
 
-Natural Renewal is **conservative by default**.
+You do not need to memorize command options — tab-completion guides you.
 
-The system avoids coming too close to active gameplay and prioritizes stability over speed. Operator control exists as a **protective and guiding mechanism**, not as the primary driver of renewal.
+### Allow renewal
 
-Operators can:
+Stand in the area and run:
 
-* explicitly protect important areas
-* guide renewal toward places where change is acceptable
-* take a more deliberate or aggressive stance when desired
+```
+/memento add witherstone mystone
+```
 
-Nothing is automatic.
+This marks the surrounding area as allowed to renew once inactive.
+
+To adjust maturity for testing:
+
+```
+/memento alter witherstone mystone daysToMaturity 0
+```
+
+---
+
+### Inspect why nothing happens
+
+```
+/memento inspect mystone
+```
+
+Explains the current state of the stone and what prevents renewal from progressing
+(for example: player presence or loaded chunks).
+
+---
+
+### Let the area unload
+
+Renewal only occurs when chunks unload naturally.
+
+To allow that:
+
+* Leave the area
+* Ask players to move away
+* Log out
+* Restart the server (optional)
+
 Nothing is forced.
 
 ---
 
-## Operator commands (OP ≥ 2)
+### Protect important areas
 
-### System
+```
+/memento add lorestone mybase
+```
 
-* `/naturalrenewal version`
-  Show the installed mod version.
+Remove protection later if needed:
 
----
+```
+/memento remove mybase
+```
 
-### Stones
-
-* `/naturalrenewal add witherstone <name> <radius> <daysToMaturity>`
-  Register a new Witherstone.
-
-* `/naturalrenewal add lorestone <name> <radius>`
-  Register a new Lorestone.
-
-* `/naturalrenewal remove witherstone <name>`
-  Remove a Witherstone.
-
-* `/naturalrenewal remove lorestone <name>`
-  Remove a Lorestone.
-
-* `/naturalrenewal set witherstone <name> daysToMaturity <value>`
-  Adjust the maturity time of a Witherstone.
-
-* `/naturalrenewal set witherstone <name> radius <value>`
-  Adjust the radius of a Witherstone.
+Lorestones override Witherstones inside their area.
 
 ---
 
-### Inspection
+### Visualize influence
 
-* `/naturalrenewal list`
-  List all registered stones.
+```
+/memento visualize mystone
+```
 
-* `/naturalrenewal list witherstone`
-  List all Witherstones.
+Shows temporary particle effects marking the stone’s exact area of influence.
+Visualization is informational only and does not modify terrain.
 
-* `/naturalrenewal list lorestone`
-  List all Lorestones.
+---
 
-* `/naturalrenewal inspect <name>`
-  Explain the current state of a stone, including what is preventing renewal.
+## Command overview
 
-Inspection commands are designed to be **explainable** — they tell you *what the system is waiting for*.
+All commands require OP level 2 or higher.
+
+Common commands:
+
+```
+/memento add witherstone <name> [...]
+/memento add lorestone <name> [...]
+/memento alter witherstone <name> ...
+/memento remove <name>
+/memento list
+/memento inspect <name>
+/memento visualize <name>
+```
+
+Use tab-completion to explore available parameters.
 
 ---
 
@@ -152,12 +189,13 @@ Inspection commands are designed to be **explainable** — they tell you *what t
 * Compatible with world-generation mods
 
 Renewal only occurs when land is fully abandoned.
+The Minecraft server always remains authoritative over chunk lifecycle.
 
 ---
 
 ## Installation
 
-Natural Renewal is a standard Fabric mod.
+Memento is a standard Fabric mod.
 
 1. Install Fabric Loader for your Minecraft version
 2. Drop the mod JAR into your server’s `mods` folder
@@ -175,5 +213,5 @@ No client-side installation is required.
 
 ---
 
-Natural Renewal does not erase history.
+Memento does not erase history.
 It makes room for new stories.
