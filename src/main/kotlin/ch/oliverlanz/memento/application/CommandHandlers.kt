@@ -48,6 +48,8 @@ object CommandHandlers {
 
     private const val INSPECT_MAX_CHUNK_PROBES = 4
     private const val INSPECT_MAX_OTHER_IDENTIFIERS = 7
+    private const val INSPECT_MAX_PLAYERS = 6
+    private const val LIST_MAX_ROWS = 4
 
     private enum class SuggestedStoneKind {
         ANY,
@@ -131,10 +133,28 @@ object CommandHandlers {
                 return 1
             }
 
-            source.sendFeedback({ Text.literal("Registered stones (${stones.size}):").formatted(Formatting.GOLD) }, false)
-            stones.forEach { stone ->
-                source.sendFeedback({ Text.literal(" - ${formatStoneLine(stone)}") }, false)
+            val scope = when (kind) {
+                null -> "all"
+                StoneKind.WITHERSTONE -> "witherstone"
+                StoneKind.LORESTONE -> "lorestone"
             }
+
+            val lines = mutableListOf<String>()
+            lines += "scope: $scope"
+            stones.take(LIST_MAX_ROWS).forEach { stone ->
+                lines += "- ${formatStoneLine(stone)}"
+            }
+            val remaining = stones.size - LIST_MAX_ROWS
+            if (remaining > 0) {
+                lines += "and $remaining more"
+            }
+
+            sendCompactReport(
+                source = source,
+                header = "Stones (${stones.size})",
+                body = lines,
+                maxBodyLines = 6,
+            )
             1
         } catch (e: Exception) {
             MementoLog.error(MementoConcept.OPERATOR, "command=list failed", e)
@@ -153,10 +173,12 @@ object CommandHandlers {
             }
 
             val lines = formatStoneInspect(source, stone)
-            source.sendFeedback({ Text.literal(lines.first()).formatted(Formatting.GOLD) }, false)
-            lines.drop(1).forEach { line ->
-                source.sendFeedback({ Text.literal(line).formatted(Formatting.GRAY) }, false)
-            }
+            sendCompactReport(
+                source = source,
+                header = lines.first(),
+                body = lines.drop(1),
+                maxBodyLines = 9,
+            )
             1
         } catch (e: Exception) {
             MementoLog.error(MementoConcept.OPERATOR, "command=inspect failed name='{}'", e, name)
@@ -168,10 +190,12 @@ object CommandHandlers {
     fun inspect(source: ServerCommandSource): Int {
         return try {
             val lines = formatInspectSummary(source)
-            source.sendFeedback({ Text.literal(lines.first()).formatted(Formatting.GOLD) }, false)
-            lines.drop(1).forEach { line ->
-                source.sendFeedback({ Text.literal(line).formatted(Formatting.GRAY) }, false)
-            }
+            sendCompactReport(
+                source = source,
+                header = lines.first(),
+                body = lines.drop(1),
+                maxBodyLines = 5,
+            )
             1
         } catch (e: Exception) {
             MementoLog.error(MementoConcept.OPERATOR, "command=inspect summary failed", e)
@@ -198,7 +222,7 @@ object CommandHandlers {
 
         return try {
             engine.visualizeStone(stone)
-            source.sendFeedback({ Text.literal("Visualizing '$name' for a short time.").formatted(Formatting.YELLOW) }, false)
+            source.sendFeedback({ Text.literal("Visualizing '$name' briefly.").formatted(Formatting.YELLOW) }, false)
             1
         } catch (e: Exception) {
             MementoLog.error(MementoConcept.OPERATOR, "command=visualize failed name='{}'", e, name)
@@ -228,7 +252,7 @@ object CommandHandlers {
             }
 
             source.sendFeedback(
-                { Text.literal("Visualizing all ${stones.size} stones for a short time.").formatted(Formatting.YELLOW) },
+                { Text.literal("Visualizing ${stones.size} stones briefly.").formatted(Formatting.YELLOW) },
                 false
             )
             1
@@ -259,7 +283,6 @@ object CommandHandlers {
 
     fun addWitherstone(source: ServerCommandSource, name: String, radius: Int, daysToMaturity: Int): Int {
         MementoLog.info(MementoConcept.OPERATOR, "command=addWitherstone name='{}' radius={} daysToMaturity={} by={}", name, radius, daysToMaturity, source.name)
-        val player = source.playerOrThrow
         val dim = source.world.registryKey
 
         val pos = resolveTargetBlockOrFail(source) ?: return 0
@@ -279,7 +302,7 @@ object CommandHandlers {
                 }
 
         source.sendFeedback(
-            { Text.literal("Witherstone '$name' registered at ${pos.x},${pos.y},${pos.z} (r=$radius, days=$daysToMaturity).").formatted(Formatting.GREEN) },
+            { Text.literal("Witherstone '$name' added at ${pos.x},${pos.y},${pos.z}.").formatted(Formatting.GREEN) },
             false
         )
         return 1
@@ -287,7 +310,6 @@ object CommandHandlers {
 
     fun addLorestone(source: ServerCommandSource, name: String, radius: Int): Int {
         MementoLog.info(MementoConcept.OPERATOR, "command=addLorestone name='{}' radius={} by={}", name, radius, source.name)
-        val player = source.playerOrThrow
         val dim = source.world.registryKey
 
         val pos = resolveTargetBlockOrFail(source) ?: return 0
@@ -305,7 +327,7 @@ object CommandHandlers {
                 }
 
         source.sendFeedback(
-            { Text.literal("Lorestone '$name' registered at ${pos.x},${pos.y},${pos.z} (r=$radius).").formatted(Formatting.GREEN) },
+            { Text.literal("Lorestone '$name' added at ${pos.x},${pos.y},${pos.z}.").formatted(Formatting.GREEN) },
             false
         )
         return 1
@@ -567,9 +589,29 @@ object CommandHandlers {
         }
 
         return UnloadBlockers(
-            players = players.toList(),
+            players = capNames(players.toList(), INSPECT_MAX_PLAYERS),
             otherNames = others.take(INSPECT_MAX_OTHER_IDENTIFIERS),
         )
+    }
+
+    private fun capNames(names: List<String>, max: Int): List<String> {
+        if (names.size <= max) return names
+        val head = names.take(max)
+        return head + "and more"
+    }
+
+    private fun sendCompactReport(
+        source: ServerCommandSource,
+        header: String,
+        body: List<String>,
+        maxBodyLines: Int,
+    ) {
+        source.sendFeedback({ Text.literal(header).formatted(Formatting.GOLD) }, false)
+        body
+            .take(maxBodyLines)
+            .forEach { line ->
+                source.sendFeedback({ Text.literal(line).formatted(Formatting.GRAY) }, false)
+            }
     }
 
     private fun playersNearChunk(
