@@ -30,6 +30,7 @@ import kotlin.math.max
 import net.minecraft.nbt.NbtCompound
 import net.minecraft.nbt.NbtIo
 import net.minecraft.nbt.NbtSizeTracker
+import net.minecraft.world.storage.ChunkCompressionFormat
 
 /**
  * File-primary metadata provider with locked two-pass policy.
@@ -316,6 +317,7 @@ class TwoPassRegionFileMetadataProvider(
                 COMPRESSION_GZIP -> decode(payload) { input -> GZIPInputStream(input) }
                 COMPRESSION_ZLIB -> decode(payload) { input -> InflaterInputStream(input) }
                 COMPRESSION_NONE -> decode(payload) { input -> input }
+                COMPRESSION_LZ4 -> decode(payload) { input -> ChunkCompressionFormat.LZ4.wrap(input) }
                 else -> throw UnsupportedCompressionException(compressionType)
             }
 
@@ -351,7 +353,7 @@ class TwoPassRegionFileMetadataProvider(
 
     private fun classifyFailure(t: Throwable): ChunkScanUnresolvedReason {
         if (t is UnsupportedCompressionException) {
-            return ChunkScanUnresolvedReason.FILE_NBT_UNSUPPORTED
+            return ChunkScanUnresolvedReason.FILE_COMPRESSION_UNSUPPORTED
         }
 
         if (isLockedFailure(t)) {
@@ -434,6 +436,7 @@ class TwoPassRegionFileMetadataProvider(
         private const val COMPRESSION_GZIP = 1
         private const val COMPRESSION_ZLIB = 2
         private const val COMPRESSION_NONE = 3
+        private const val COMPRESSION_LZ4 = 4
         private const val DEFAULT_DELAYED_RECONCILIATION_MILLIS = 250L
     }
 }

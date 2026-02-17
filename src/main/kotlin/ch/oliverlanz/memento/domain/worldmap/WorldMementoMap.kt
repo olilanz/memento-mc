@@ -32,7 +32,7 @@ enum class ChunkScanUnresolvedReason {
     FILE_LOCKED,
     FILE_IO_ERROR,
     FILE_CORRUPT_OR_TRUNCATED,
-    FILE_NBT_UNSUPPORTED,
+    FILE_COMPRESSION_UNSUPPORTED,
 }
 
 /**
