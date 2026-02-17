@@ -25,7 +25,7 @@ object MementoCsvWriter {
         Files.createDirectories(path.parent)
 
         val sb = StringBuilder()
-        sb.append("dimension,chunk_x,chunk_z,scan_tick,inhabited_ticks,dominant_stone,surface_y,biome_id,is_spawn_chunk,provenance,unresolved_reason\n")
+        sb.append("dimension,chunk_x,chunk_z,scan_tick,inhabited_ticks,dominant_stone,surface_y,biome_id,is_spawn_chunk,source,status\n")
 
         // Dominant influence map per world (already lore-resolved by StoneAuthority)
         val dominantByWorld = linkedMapOf<net.minecraft.registry.RegistryKey<net.minecraft.world.World>, Map<ChunkPos, kotlin.reflect.KClass<out ch.oliverlanz.memento.domain.stones.Stone>>>()
@@ -44,8 +44,8 @@ object MementoCsvWriter {
             val surfaceY = signals?.surfaceY?.toString() ?: ""
             val biome = signals?.biomeId ?: ""
             val isSpawn = signals?.isSpawnChunk?.toString() ?: ""
-            val provenance = entry.provenance.name
-            val unresolvedReason = entry.unresolvedReason?.name ?: ""
+            val source = projectSource(entry)
+            val status = projectStatus(entry)
 
             sb.append(dim)
                 .append(',').append(key.chunkX)
@@ -56,13 +56,26 @@ object MementoCsvWriter {
                 .append(',').append(surfaceY)
                 .append(',').append(biome)
                 .append(',').append(isSpawn)
-                .append(',').append(provenance)
-                .append(',').append(unresolvedReason)
+                .append(',').append(source)
+                .append(',').append(status)
                 .append('\n')
         }
 
         Files.writeString(path, sb.toString(), StandardCharsets.UTF_8)
         MementoLog.info(MementoConcept.SCANNER, "Wrote scan CSV: {}", path)
+    }
+
+    private fun projectSource(entry: ChunkScanSnapshotEntry): String {
+        return when (entry.provenance) {
+            ch.oliverlanz.memento.domain.worldmap.ChunkScanProvenance.FILE_PRIMARY -> "NBT"
+            ch.oliverlanz.memento.domain.worldmap.ChunkScanProvenance.ENGINE_FALLBACK,
+            ch.oliverlanz.memento.domain.worldmap.ChunkScanProvenance.ENGINE_AMBIENT -> "ENGINE"
+        }
+    }
+
+    private fun projectStatus(entry: ChunkScanSnapshotEntry): String {
+        if (entry.signals != null) return "OK"
+        return entry.unresolvedReason?.name ?: "UNKNOWN"
     }
 
     fun write(server: MinecraftServer, topology: WorldMementoTopology): Path {
