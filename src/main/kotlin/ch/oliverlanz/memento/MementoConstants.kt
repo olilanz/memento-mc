@@ -195,4 +195,11 @@ object MementoConstants {
      * Bounded application keeps map mutation costs predictable while preserving eventual progress.
      */
     const val MEMENTO_SCAN_METADATA_APPLIER_MAX_PER_TICK: Int = 128
+
+    /**
+     * Maximum number of renewal projection chunk recomputations per tick.
+     *
+     * Keeps projection processing cooperative and prevents long tick monopolization.
+     */
+    const val MEMENTO_RENEWAL_PROJECTION_MAX_PER_TICK: Int = 50
 }

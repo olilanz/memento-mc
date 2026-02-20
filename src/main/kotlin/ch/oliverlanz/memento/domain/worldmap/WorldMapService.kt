@@ -1,5 +1,6 @@
 package ch.oliverlanz.memento.domain.worldmap
 
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalProjectionEvents
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 
@@ -43,5 +44,7 @@ class WorldMapService {
             provenance = fact.source,
             unresolvedReason = fact.unresolvedReason,
         )
+
+        RenewalProjectionEvents.emitFactApplied(fact)
     }
 }
