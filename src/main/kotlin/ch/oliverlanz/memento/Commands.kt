@@ -72,6 +72,15 @@ object Commands {
                         CommandHandlers.scan(ctx.source)
                     }
                 )
+
+                /* ======================
+                 * RENEW (simulation only)
+                 * ====================== */
+                .then(literal("renew")
+                    .executes { ctx ->
+                        CommandHandlers.renew(ctx.source)
+                    }
+                )
                 /* ======================
                  * ADD
                  * ====================== */

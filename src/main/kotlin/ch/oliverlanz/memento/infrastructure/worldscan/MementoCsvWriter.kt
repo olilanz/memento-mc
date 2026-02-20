@@ -1,9 +1,10 @@
 package ch.oliverlanz.memento.infrastructure.worldscan
 
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalChunkMetrics
 import ch.oliverlanz.memento.domain.worldmap.WorldMementoTopology
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry
+import ch.oliverlanz.memento.domain.worldmap.ChunkKey
 import ch.oliverlanz.memento.domain.stones.StoneMapService
-import ch.oliverlanz.memento.domain.stones.Stone
 import ch.oliverlanz.memento.MementoConstants
 import net.minecraft.server.MinecraftServer
 import net.minecraft.util.WorldSavePath
@@ -63,6 +64,61 @@ object MementoCsvWriter {
 
         Files.writeString(path, sb.toString(), StandardCharsets.UTF_8)
         MementoLog.info(MementoConcept.SCANNER, "Wrote scan CSV: {}", path)
+    }
+
+    fun writeProjectionSnapshot(
+        server: MinecraftServer,
+        snapshot: List<ChunkScanSnapshotEntry>,
+        metricsByChunk: Map<ChunkKey, RenewalChunkMetrics>,
+    ) {
+        val path = server.getSavePath(WorldSavePath.ROOT)
+            .resolve(MementoConstants.MEMENTO_SCAN_CSV_FILE)
+
+        Files.createDirectories(path.parent)
+
+        val sb = StringBuilder()
+        sb.append("dimension,chunk_x,chunk_z,scan_tick,inhabited_ticks,dominant_stone,surface_y,biome_id,is_spawn_chunk,source,status,forgettability_index,liveliness_index,eligible_region_index,eligible_chunk_index\n")
+
+        val dominantByWorld = linkedMapOf<net.minecraft.registry.RegistryKey<net.minecraft.world.World>, Map<ChunkPos, kotlin.reflect.KClass<out ch.oliverlanz.memento.domain.stones.Stone>>>()
+
+        snapshot.forEach { entry ->
+            val key = entry.key
+            val signals = entry.signals
+            val metrics = metricsByChunk[key] ?: RenewalChunkMetrics()
+
+            val dominantByChunk = dominantByWorld.getOrPut(key.world) {
+                StoneMapService.dominantByChunk(key.world)
+            }
+            val dominant = dominantByChunk[ChunkPos(key.chunkX, key.chunkZ)]?.simpleName ?: ""
+
+            val dim = key.world.value.toString()
+            val inhabited = signals?.inhabitedTimeTicks?.toString() ?: ""
+            val surfaceY = signals?.surfaceY?.toString() ?: ""
+            val biome = signals?.biomeId ?: ""
+            val isSpawn = signals?.isSpawnChunk?.toString() ?: ""
+            val source = projectSource(entry)
+            val status = projectStatus(entry)
+
+            sb.append(dim)
+                .append(',').append(key.chunkX)
+                .append(',').append(key.chunkZ)
+                .append(',').append(entry.scanTick)
+                .append(',').append(inhabited)
+                .append(',').append(dominant)
+                .append(',').append(surfaceY)
+                .append(',').append(biome)
+                .append(',').append(isSpawn)
+                .append(',').append(source)
+                .append(',').append(status)
+                .append(',').append(metrics.forgettabilityIndex)
+                .append(',').append(metrics.livelinessIndex)
+                .append(',').append(metrics.eligibleByRegionCandidateIndex)
+                .append(',').append(metrics.eligibleByChunkCandidateIndex)
+                .append('\n')
+        }
+
+        Files.writeString(path, sb.toString(), StandardCharsets.UTF_8)
+        MementoLog.info(MementoConcept.RENEWAL, "Wrote projection CSV: {}", path)
     }
 
     private fun projectSource(entry: ChunkScanSnapshotEntry): String {

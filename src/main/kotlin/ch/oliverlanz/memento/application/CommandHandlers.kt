@@ -11,6 +11,9 @@ import ch.oliverlanz.memento.domain.events.StoneLifecycleTrigger
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchSnapshot
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchState
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalAnalysisState
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalDecision
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalProjection
 import ch.oliverlanz.memento.domain.stones.Lorestone
 import ch.oliverlanz.memento.domain.stones.LorestoneView
 import ch.oliverlanz.memento.domain.stones.Stone
@@ -70,6 +73,9 @@ object CommandHandlers {
     @Volatile
     private var worldScanner: WorldScanner? = null
 
+    @Volatile
+    private var renewalProjection: RenewalProjection? = null
+
     fun attachVisualizationEngine(engine: EffectsHost) {
         effectsHost = engine
     }
@@ -84,6 +90,14 @@ object CommandHandlers {
 
     fun detachWorldScanner() {
         worldScanner = null
+    }
+
+    fun attachRenewalProjection(projection: RenewalProjection) {
+        renewalProjection = projection
+    }
+
+    fun detachRenewalProjection() {
+        renewalProjection = null
     }
 
     fun attachStoneNameSuggestions() {
@@ -279,6 +293,58 @@ object CommandHandlers {
             source.sendError(Text.literal("Memento: could not start scan (see server log)."))
             0
         }
+    }
+
+    fun renew(source: ServerCommandSource): Int {
+        val projection = renewalProjection
+        if (projection == null) {
+            source.sendError(Text.literal("Renewal projection is not ready yet."))
+            return 0
+        }
+
+        val status = projection.statusView()
+        if (status.state != RenewalAnalysisState.STABLE) {
+            source.sendError(Text.literal("Memento: renewal analysis is not stable yet."))
+            return 0
+        }
+
+        val decision = projection.decisionView()
+        if (decision == null) {
+            source.sendError(Text.literal("Memento: no eligible renewal target identified."))
+            return 0
+        }
+
+        when (decision) {
+            is RenewalDecision.Region -> {
+                MementoLog.info(
+                    MementoConcept.RENEWAL,
+                    "renew simulation decision grain=region world={} region=({}, {}) by={}",
+                    decision.region.worldId,
+                    decision.region.regionX,
+                    decision.region.regionZ,
+                    source.name,
+                )
+                source.sendFeedback(
+                    { Text.literal("Memento: simulated region renewal for ${decision.region.worldId} r(${decision.region.regionX},${decision.region.regionZ}).").formatted(Formatting.YELLOW) },
+                    false
+                )
+            }
+
+            is RenewalDecision.ChunkBatch -> {
+                MementoLog.info(
+                    MementoConcept.RENEWAL,
+                    "renew simulation decision grain=chunk count={} by={}",
+                    decision.chunks.size,
+                    source.name,
+                )
+                source.sendFeedback(
+                    { Text.literal("Memento: simulated chunk-batch renewal for ${decision.chunks.size} chunks.").formatted(Formatting.YELLOW) },
+                    false
+                )
+            }
+        }
+
+        return 1
     }
 
     fun addWitherstone(source: ServerCommandSource, name: String, radius: Int, daysToMaturity: Int): Int {
@@ -480,6 +546,23 @@ object CommandHandlers {
 
             if (scannerStatus.worldMapTotal > 0) {
                 lines += "WorldMap: total=${scannerStatus.worldMapTotal}, scanned=${scannerStatus.worldMapScanned}, missing=${scannerStatus.worldMapMissing}"
+            }
+        }
+
+        val projection = renewalProjection
+        if (projection != null) {
+            val status = projection.statusView()
+            lines += "Renewal projection: state=${status.state.name.lowercase(Locale.ROOT)}, workSet=${status.pendingWorkSetSize}, tracked=${status.trackedChunks}"
+
+            if (status.state == RenewalAnalysisState.STABLE) {
+                when (val d = projection.decisionView()) {
+                    is RenewalDecision.Region ->
+                        lines += "Renewal decision: region ${d.region.worldId} r(${d.region.regionX},${d.region.regionZ})"
+                    is RenewalDecision.ChunkBatch ->
+                        lines += "Renewal decision: chunk batch size=${d.chunks.size}"
+                    null ->
+                        lines += "Renewal decision: none"
+                }
             }
         }
 
