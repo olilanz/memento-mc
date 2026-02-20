@@ -57,6 +57,7 @@ object Memento : ModInitializer {
     }
 
     private val onWorldScanCompleted = WorldScanListener { _, _ ->
+        RenewalProjectionCsvExporter.armForNextStableAfterScan()
         renewalProjection?.observeWorldScanCompleted()
     }
 
