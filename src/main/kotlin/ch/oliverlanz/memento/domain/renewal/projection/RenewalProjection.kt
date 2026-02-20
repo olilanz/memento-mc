@@ -118,10 +118,31 @@ class RenewalProjection {
         }
     }
 
+    private data class SnapshotIndex(
+        val entries: List<ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>,
+        val byKey: Map<ChunkKey, ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>,
+        val keysByWorld: Map<net.minecraft.registry.RegistryKey<net.minecraft.world.World>, List<ChunkKey>>,
+    )
+
+    private fun buildSnapshotIndex(): SnapshotIndex? {
+        val service = worldMapService ?: return null
+        val entries = service.substrate().snapshot()
+        if (entries.isEmpty()) return null
+
+        val byKey = entries.associateBy { it.key }
+        val keysByWorld = entries
+            .groupBy { it.key.world }
+            .mapValues { (_, list) -> list.map { it.key } }
+
+        return SnapshotIndex(
+            entries = entries,
+            byKey = byKey,
+            keysByWorld = keysByWorld,
+        )
+    }
+
     private fun processComputeWorkSet() {
-        val service = worldMapService ?: return
-        val snapshot = service.substrate().snapshot()
-        if (snapshot.isEmpty()) return
+        val index = buildSnapshotIndex() ?: return
 
         var processed = 0
         while (processed < MementoConstants.MEMENTO_RENEWAL_PROJECTION_MAX_PER_TICK) {
@@ -133,25 +154,26 @@ class RenewalProjection {
 
             processed++
             val previous = metricsByChunk[key] ?: RenewalChunkMetrics()
-            val nextForgettability = computeForgettability(key, snapshot)
+            val nextForgettability = computeForgettability(key, index)
             val next = previous.copy(forgettabilityIndex = nextForgettability)
 
             metricsByChunk[key] = next
             if (previous.forgettabilityIndex != nextForgettability) {
-                enqueueNeighborhood(key, 32, snapshot)
+                enqueueNeighborhood(key, 32, index)
             }
         }
     }
 
     private fun runStabilizationAndDecision() {
-        val service = worldMapService ?: return
-        val snapshot = service.substrate().snapshot()
+        val index = buildSnapshotIndex()
 
-        if (snapshot.isEmpty()) {
+        if (index == null) {
             metricsByChunk.clear()
             decision = null
             return
         }
+
+        val snapshot = index.entries
 
         val maxTicks = snapshot.asSequence()
             .mapNotNull { it.signals?.inhabitedTimeTicks }
@@ -292,23 +314,23 @@ class RenewalProjection {
 
     private fun computeForgettability(
         key: ChunkKey,
-        snapshot: List<ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>,
+        index: SnapshotIndex,
     ): Double {
-        val byKey = snapshot.associateBy { it.key }
-        val current = byKey[key]
+        val current = index.byKey[key]
         val currentTicks = current?.signals?.inhabitedTimeTicks
         if (currentTicks == null) return 0.0
         if (currentTicks > 0L) return 0.0
 
-        val hasNeighborWithActivity = snapshot.asSequence()
-            .filter { it.key.world == key.world }
+        val worldKeys = index.keysByWorld[key.world] ?: return 0.0
+        val hasNeighborWithActivity = worldKeys.asSequence()
             .filter {
-                val dx = kotlin.math.abs(it.key.chunkX - key.chunkX)
-                val dz = kotlin.math.abs(it.key.chunkZ - key.chunkZ)
+                val dx = kotlin.math.abs(it.chunkX - key.chunkX)
+                val dz = kotlin.math.abs(it.chunkZ - key.chunkZ)
                 kotlin.math.max(dx, dz) <= 32
             }
-            .any {
-                val t = it.signals?.inhabitedTimeTicks
+            .any { neighborKey ->
+                val neighbor = index.byKey[neighborKey]
+                val t = neighbor?.signals?.inhabitedTimeTicks
                 t == null || t > 0L
             }
 
@@ -318,12 +340,11 @@ class RenewalProjection {
     private fun enqueueNeighborhood(
         center: ChunkKey,
         radius: Int,
-        snapshot: List<ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>,
+        index: SnapshotIndex,
     ) {
+        val worldKeys = index.keysByWorld[center.world] ?: return
         synchronized(workSet) {
-            snapshot.asSequence()
-                .map { it.key }
-                .filter { it.world == center.world }
+            worldKeys.asSequence()
                 .filter {
                     val dx = kotlin.math.abs(it.chunkX - center.chunkX)
                     val dz = kotlin.math.abs(it.chunkZ - center.chunkZ)

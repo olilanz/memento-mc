@@ -21,17 +21,34 @@ object RenewalProjectionCsvExporter : RenewalProjectionStableListener {
     @Volatile
     private var worldMapService: WorldMapService? = null
 
+    @Volatile
+    private var exportArmedByScanCompletion: Boolean = false
+
     fun attach(server: MinecraftServer, worldMapService: WorldMapService) {
         this.server = server
         this.worldMapService = worldMapService
+        this.exportArmedByScanCompletion = false
     }
 
     fun detach() {
         this.server = null
         this.worldMapService = null
+        this.exportArmedByScanCompletion = false
+    }
+
+    /**
+     * Arms exactly one CSV write for the next projection STABLE transition.
+     *
+     * This is called from scan-completion boundary handling so CSV remains a scan-scoped
+     * debug artifact and is not emitted for unrelated ambient/stabilization cycles.
+     */
+    fun armForNextStableAfterScan() {
+        exportArmedByScanCompletion = true
     }
 
     override fun onProjectionStable(snapshot: RenewalStableSnapshot) {
+        if (!exportArmedByScanCompletion) return
+
         val srv = server ?: return
         val service = worldMapService ?: return
         val factualSnapshot = service.substrate().snapshot()
@@ -40,5 +57,6 @@ object RenewalProjectionCsvExporter : RenewalProjectionStableListener {
             snapshot = factualSnapshot,
             metricsByChunk = snapshot.metricsByChunk,
         )
+        exportArmedByScanCompletion = false
     }
 }

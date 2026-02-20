@@ -85,13 +85,13 @@ class WorldMementoMap {
      * Attach/replace signals for a chunk.
      *
      * - If the chunk was not previously known, it will be added.
-     * - If this is the first time signals are attached, scan progress advances.
+     * - Returns true when effective signal value changed (including first attachment).
      */
     fun upsertSignals(key: ChunkKey, signals: ChunkSignals): Boolean {
         val record = records.computeIfAbsent(key) { ChunkRecord() }
         val previous = record.signals
         record.signals = signals
-        return (previous == null)
+        return previous != signals
     }
 
     /**
