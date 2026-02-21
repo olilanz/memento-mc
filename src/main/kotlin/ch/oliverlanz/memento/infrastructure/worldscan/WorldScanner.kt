@@ -218,7 +218,7 @@ class WorldScanner : ChunkAvailabilityListener {
         this.server = srv
 
         if (activeScan.get()) {
-            source.sendError(Text.literal("Memento: scan is already running."))
+            source.sendError(Text.literal("[Memento] scan is already running."))
             return 0
         }
 
@@ -250,7 +250,7 @@ class WorldScanner : ChunkAvailabilityListener {
 
         if (ensured == 0 && scanMap.totalChunks() == 0) {
             source.sendFeedback(
-                    { Text.literal("Memento: no existing chunks discovered; nothing to scan.") },
+                    { Text.literal("[Memento] no existing chunks discovered; nothing to scan.") },
                     false
             )
             MementoLog.debug(MementoConcept.SCANNER, "active=false scan aborted reason=no_chunks")
@@ -278,7 +278,7 @@ class WorldScanner : ChunkAvailabilityListener {
                     plannedChunks,
                     scanMap.scannedChunks()
             )
-            source.sendFeedback({ Text.literal("Memento: scan already complete.") }, false)
+            source.sendFeedback({ Text.literal("[Memento] scan already complete.") }, false)
             return 1
         }
 
@@ -301,7 +301,7 @@ class WorldScanner : ChunkAvailabilityListener {
                 scanMap.missingCount(),
         )
         source.sendFeedback(
-                { Text.literal("Memento: scan started. Planned chunks: $plannedChunks") },
+                { Text.literal("[Memento] scan started. Planned chunks: $plannedChunks") },
                 false
         )
         return 1
