@@ -855,7 +855,7 @@ object CommandHandlers {
             source.name,
         )
 
-        return when (val result = WorldPruningService.submit(decision.region)) {
+        return when (val result = WorldPruningService.submit(source.world.registryKey, decision.region)) {
             is WorldPruningService.SubmitResult.Submitted -> {
                 source.sendFeedback(
                     {

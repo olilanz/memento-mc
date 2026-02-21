@@ -5,17 +5,15 @@ import ch.oliverlanz.memento.domain.renewal.projection.RegionKey
 import ch.oliverlanz.memento.infrastructure.async.GlobalAsyncExclusionGate
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
-import ch.oliverlanz.memento.infrastructure.worldscan.RegionDiscovery
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
+import ch.oliverlanz.memento.infrastructure.worldstorage.WorldStorageService
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.util.concurrent.Future
 import net.minecraft.registry.RegistryKey
-import net.minecraft.registry.RegistryKeys
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ServerWorld
-import net.minecraft.util.Identifier
 import net.minecraft.util.WorldSavePath
 import net.minecraft.world.World
 import net.minecraft.world.chunk.ChunkStatus
@@ -43,7 +41,9 @@ object WorldPruningService {
         success,
         rejected_loaded,
         rejected_busy,
+        rejected_dimension_mismatch,
         rename_failed,
+        partial_rollback_failed,
         pruned_with_residual_backup,
     }
 
@@ -60,10 +60,16 @@ object WorldPruningService {
 
     private data class SubmittedOperation(
         val target: RegionKey,
-        val worldKey: RegistryKey<World>,
+        val dimension: RegistryKey<World>,
         val regionX: Int,
         val regionZ: Int,
         val future: Future<Completion>,
+    )
+
+    private data class RenameMember(
+        val label: String,
+        val livePath: Path,
+        val backupPath: Path,
     )
 
     @Volatile
@@ -99,7 +105,7 @@ object WorldPruningService {
 
     fun statusView(): Pair<OperationState, Completion?> = state to lastCompletion
 
-    fun submit(region: RegionKey): SubmitResult {
+    fun submit(dimension: RegistryKey<World>, region: RegionKey): SubmitResult {
         val srv = server
         if (srv == null) {
             val completion = Completion(region, Outcome.rename_failed, "server detached")
@@ -115,10 +121,20 @@ object WorldPruningService {
             return SubmitResult.Completed(completion)
         }
 
-        val worldKey = resolveWorldKey(region.worldId)
-        val world = worldKey?.let { srv.getWorld(it) }
-        if (worldKey == null || world == null) {
-            val completion = Completion(region, Outcome.rename_failed, "unknown world='${region.worldId}'")
+        if (dimension.value.toString() != region.worldId) {
+            val completion = Completion(
+                region,
+                Outcome.rejected_dimension_mismatch,
+                "requestedDimension=${dimension.value} decisionWorld=${region.worldId}",
+            )
+            state = OperationState.COMPLETED_FAILED
+            lastCompletion = completion
+            return SubmitResult.Completed(completion)
+        }
+
+        val world = srv.getWorld(dimension)
+        if (world == null) {
+            val completion = Completion(region, Outcome.rename_failed, "unknown world='${dimension.value}'")
             state = OperationState.COMPLETED_FAILED
             lastCompletion = completion
             return SubmitResult.Completed(completion)
@@ -137,7 +153,7 @@ object WorldPruningService {
             owner = "world-pruning",
         ) {
             java.util.concurrent.Callable {
-                pruneRegion(root, region, worldKey)
+                pruneRegionTriple(root, dimension, region)
             }
         }
 
@@ -152,7 +168,7 @@ object WorldPruningService {
                 lastCompletion = null
                 submitted = SubmittedOperation(
                     target = region,
-                    worldKey = worldKey,
+                    dimension = dimension,
                     regionX = region.regionX,
                     regionZ = region.regionZ,
                     future = submit.future,
@@ -191,7 +207,7 @@ object WorldPruningService {
         if (success) {
             val scanTick = server?.overworld?.time ?: 0L
             scanner?.startRegionRescan(
-                world = op.worldKey,
+                world = op.dimension,
                 regionX = op.regionX,
                 regionZ = op.regionZ,
                 reason = "renew_force_prune",
@@ -200,40 +216,119 @@ object WorldPruningService {
         }
     }
 
-    private fun pruneRegion(root: Path, target: RegionKey, worldKey: RegistryKey<World>): Completion {
-        val regionFile = RegionDiscovery.resolveRegionFile(root, worldKey, target.regionX, target.regionZ)
-        val backup = regionFile.resolveSibling(regionFile.fileName.toString() + MementoConstants.MEMENTO_RENEW_FORCE_BACKUP_SUFFIX)
+    private fun pruneRegionTriple(
+        root: Path,
+        dimension: RegistryKey<World>,
+        target: RegionKey,
+    ): Completion {
+        val triple = WorldStorageService.resolveRegionTriple(root, dimension, target.regionX, target.regionZ)
+        val candidates = listOf(
+            RenameMember(
+                label = "region",
+                livePath = triple.region,
+                backupPath =
+                    triple.region.resolveSibling(
+                        triple.region.fileName.toString() + MementoConstants.MEMENTO_RENEW_FORCE_BACKUP_SUFFIX
+                    ),
+            ),
+            RenameMember(
+                label = "entities",
+                livePath = triple.entities,
+                backupPath =
+                    triple.entities.resolveSibling(
+                        triple.entities.fileName.toString() + MementoConstants.MEMENTO_RENEW_FORCE_BACKUP_SUFFIX
+                    ),
+            ),
+            RenameMember(
+                label = "poi",
+                livePath = triple.poi,
+                backupPath =
+                    triple.poi.resolveSibling(
+                        triple.poi.fileName.toString() + MementoConstants.MEMENTO_RENEW_FORCE_BACKUP_SUFFIX
+                    ),
+            ),
+        )
 
-        if (Files.exists(backup)) {
+        val toRename = candidates.filter { Files.exists(it.livePath) }
+        if (toRename.isEmpty()) {
+            return Completion(target, Outcome.rename_failed, "region triple missing for world=${target.worldId} region=(${target.regionX},${target.regionZ})")
+        }
+
+        for (member in toRename) {
+            if (!Files.exists(member.backupPath)) continue
             try {
-                Files.delete(backup)
+                Files.delete(member.backupPath)
             } catch (t: Throwable) {
-                return Completion(target, Outcome.rename_failed, "backup not removable path=$backup error=${t.message}")
+                return Completion(
+                    target,
+                    Outcome.rename_failed,
+                    "backup not removable member=${member.label} path=${member.backupPath} error=${t.message}",
+                )
             }
         }
 
-        if (!Files.exists(regionFile)) {
-            return Completion(target, Outcome.rename_failed, "region file missing path=$regionFile")
+        val renamed = mutableListOf<RenameMember>()
+        for (member in toRename) {
+            try {
+                Files.move(member.livePath, member.backupPath, StandardCopyOption.ATOMIC_MOVE)
+                renamed += member
+            } catch (t: Throwable) {
+                val rollbackFailures = rollbackRenames(renamed.asReversed())
+                return if (rollbackFailures.isEmpty()) {
+                    Completion(
+                        target,
+                        Outcome.rename_failed,
+                        "atomic triple rename failed member=${member.label} path=${member.livePath} error=${t.message}",
+                    )
+                } else {
+                    Completion(
+                        target,
+                        Outcome.partial_rollback_failed,
+                        "atomic triple rename failed member=${member.label}; rollback failures=${rollbackFailures.joinToString(";")}",
+                    )
+                }
+            }
         }
 
-        try {
-            Files.move(regionFile, backup, StandardCopyOption.ATOMIC_MOVE)
-        } catch (t: Throwable) {
-            return Completion(target, Outcome.rename_failed, "atomic rename failed path=$regionFile error=${t.message}")
+        val residualBackups = mutableListOf<Path>()
+        for (member in renamed) {
+            try {
+                Files.deleteIfExists(member.backupPath)
+            } catch (t: Throwable) {
+                MementoLog.warn(
+                    MementoConcept.PRUNING,
+                    "world pruning backup delete failed member={} path={} error={}",
+                    member.label,
+                    member.backupPath,
+                    t.message,
+                )
+                residualBackups.add(member.backupPath)
+                continue
+            }
+            if (Files.exists(member.backupPath)) {
+                residualBackups.add(member.backupPath)
+            }
         }
 
-        return try {
-            Files.deleteIfExists(backup)
+        return if (residualBackups.isEmpty()) {
             Completion(target, Outcome.success)
-        } catch (_: Throwable) {
-            Completion(target, Outcome.pruned_with_residual_backup, "backup retained path=$backup")
+        } else {
+            Completion(target, Outcome.pruned_with_residual_backup, "backup retained paths=${residualBackups.joinToString(",")}")
         }
     }
 
-    private fun resolveWorldKey(worldId: String): RegistryKey<World>? {
-        return runCatching {
-            RegistryKey.of(RegistryKeys.WORLD, Identifier.of(worldId))
-        }.getOrNull()
+    private fun rollbackRenames(renamed: List<RenameMember>): List<String> {
+        if (renamed.isEmpty()) return emptyList()
+
+        val failures = mutableListOf<String>()
+        for (member in renamed) {
+            try {
+                Files.move(member.backupPath, member.livePath, StandardCopyOption.ATOMIC_MOVE)
+            } catch (t: Throwable) {
+                failures += "member=${member.label} backup=${member.backupPath} live=${member.livePath} error=${t.message}"
+            }
+        }
+        return failures
     }
 
     private fun hasAnyLoadedChunk(world: ServerWorld, regionX: Int, regionZ: Int): Boolean {
