@@ -5,12 +5,12 @@ import ch.oliverlanz.memento.domain.worldmap.ChunkKey
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry
 import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
 import ch.oliverlanz.memento.domain.worldmap.WorldMapService
+import ch.oliverlanz.memento.infrastructure.async.GlobalAsyncExclusionGate
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import java.util.concurrent.Callable
 import net.minecraft.registry.RegistryKey
 import net.minecraft.world.World
 
@@ -32,10 +32,6 @@ class RenewalProjection {
     private val dirtySet = linkedSetOf<ChunkKey>()
     private val metricsByChunk = ConcurrentHashMap<ChunkKey, RenewalChunkMetrics>()
     private val stableListeners = CopyOnWriteArrayList<RenewalProjectionStableListener>()
-    private val computeExecutor: ExecutorService =
-        Executors.newSingleThreadExecutor { runnable ->
-            Thread(runnable, "memento-renewal-projection").apply { isDaemon = true }
-        }
 
     private var dirtySinceMs: Long? = null
     private var generationHead: Long = 0L
@@ -43,6 +39,7 @@ class RenewalProjection {
     private var inFlight: InFlightJob? = null
     private var supersededDuringInFlight: Boolean = false
     private var scanRecomputeRequested: Boolean = false
+    private var blockedOnGate: Boolean = false
 
     @Volatile
     private var analysisState: RenewalAnalysisState = RenewalAnalysisState.COMPUTING
@@ -79,6 +76,7 @@ class RenewalProjection {
     fun detach() {
         attached = false
         worldMapService = null
+        inFlight?.future?.cancel(true)
         synchronized(dirtySet) {
             dirtySet.clear()
             dirtySinceMs = null
@@ -86,13 +84,13 @@ class RenewalProjection {
         inFlight = null
         supersededDuringInFlight = false
         scanRecomputeRequested = false
+        blockedOnGate = false
         generationHead = 0L
         appliedGeneration = 0L
         metricsByChunk.clear()
         decision = null
         analysisState = RenewalAnalysisState.COMPUTING
         stableListeners.clear()
-        computeExecutor.shutdownNow()
     }
 
     fun addStableListener(listener: RenewalProjectionStableListener) {
@@ -110,6 +108,7 @@ class RenewalProjection {
             pendingWorkSetSize = pending,
             trackedChunks = metricsByChunk.size,
             hasStableDecision = analysisState == RenewalAnalysisState.STABLE && decision != null,
+            blockedOnGate = blockedOnGate,
         )
     }
 
@@ -135,6 +134,7 @@ class RenewalProjection {
         }
         if (analysisState == RenewalAnalysisState.STABLE || analysisState == RenewalAnalysisState.STABILIZING) {
             analysisState = RenewalAnalysisState.COMPUTING
+            blockedOnGate = false
         }
     }
 
@@ -146,6 +146,7 @@ class RenewalProjection {
         }
         if (analysisState == RenewalAnalysisState.STABLE || analysisState == RenewalAnalysisState.STABILIZING) {
             analysisState = RenewalAnalysisState.COMPUTING
+            blockedOnGate = false
         }
     }
 
@@ -177,6 +178,7 @@ class RenewalProjection {
                 job.generation,
             )
             analysisState = RenewalAnalysisState.COMPUTING
+            blockedOnGate = false
             return
         }
 
@@ -191,6 +193,7 @@ class RenewalProjection {
             )
             analysisState = RenewalAnalysisState.COMPUTING
             supersededDuringInFlight = false
+            blockedOnGate = false
             return
         }
 
@@ -200,6 +203,7 @@ class RenewalProjection {
         appliedGeneration = result.generation
         analysisState = RenewalAnalysisState.STABLE
         supersededDuringInFlight = false
+        blockedOnGate = false
 
         MementoLog.debug(
             MementoConcept.PROJECTION,
@@ -246,32 +250,54 @@ class RenewalProjection {
         val snapshot = service.substrate().snapshot()
 
         val generation = generationHead + 1L
-        generationHead = generation
+        val dirtySeedCount = synchronized(dirtySet) { dirtySet.size }
 
-        val dirtySeedCount = synchronized(dirtySet) {
-            val count = dirtySet.size
-            dirtySet.clear()
-            dirtySinceMs = null
-            count
+        val submit = GlobalAsyncExclusionGate.submitIfIdle(
+            concept = MementoConcept.PROJECTION,
+            owner = "renewal-projection",
+        ) {
+            Callable {
+                computeWorkerResult(generation, snapshot)
+            }
         }
 
-        scanRecomputeRequested = false
-        supersededDuringInFlight = false
-        analysisState = RenewalAnalysisState.STABILIZING
+        when (submit) {
+            is GlobalAsyncExclusionGate.SubmitResult.Busy -> {
+                blockedOnGate = true
+                analysisState = RenewalAnalysisState.COMPUTING
+                MementoLog.debug(
+                    MementoConcept.PROJECTION,
+                    "worker blocked-on-gate reason={} activeOwner={} pendingDirty={}",
+                    reason.name,
+                    submit.activeOwner,
+                    dirtySeedCount,
+                )
+                return
+            }
 
-        MementoLog.debug(
-            MementoConcept.PROJECTION,
-            "worker start generation={} reason={} dirtySeed={} snapshot={}",
-            generation,
-            reason.name,
-            dirtySeedCount,
-            snapshot.size,
-        )
+            is GlobalAsyncExclusionGate.SubmitResult.Accepted -> {
+                generationHead = generation
+                synchronized(dirtySet) {
+                    dirtySet.clear()
+                    dirtySinceMs = null
+                }
 
-        val future = computeExecutor.submit<WorkerResult> {
-            computeWorkerResult(generation, snapshot)
+                scanRecomputeRequested = false
+                supersededDuringInFlight = false
+                blockedOnGate = false
+                analysisState = RenewalAnalysisState.STABILIZING
+
+                MementoLog.debug(
+                    MementoConcept.PROJECTION,
+                    "worker start generation={} reason={} dirtySeed={} snapshot={}",
+                    generation,
+                    reason.name,
+                    dirtySeedCount,
+                    snapshot.size,
+                )
+                inFlight = InFlightJob(generation = generation, future = submit.future)
+            }
         }
-        inFlight = InFlightJob(generation = generation, future = future)
     }
 
     private fun computeWorkerResult(
