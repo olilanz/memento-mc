@@ -140,8 +140,6 @@ object Memento : ModInitializer {
 
                 val operatorListener = RenewalProjectionStableListener {
                     val status = projection.statusView()
-                    if (status.lastCompletedReason != "SCAN_COMPLETED") return@RenewalProjectionStableListener
-
                     val durationText = status.lastCompletedDurationMs
                         ?.let { " in ${formatDuration(it)}" }
                         ?: ""
