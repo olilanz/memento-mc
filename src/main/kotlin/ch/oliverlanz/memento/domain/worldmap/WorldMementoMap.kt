@@ -173,6 +173,34 @@ class WorldMementoMap {
                 .toList()
     }
 
+    /**
+     * Removes all chunk records for a specific world-region tuple.
+     *
+     * Used when region files are confirmed absent and prior scan records must be expunged so
+     * projection derivation no longer considers stale region evidence.
+     */
+    fun expungeRegion(world: net.minecraft.registry.RegistryKey<net.minecraft.world.World>, regionX: Int, regionZ: Int): List<ChunkKey> {
+        val removed = mutableListOf<ChunkKey>()
+        records.entries.forEach { (key, value) ->
+            if (key.world != world || key.regionX != regionX || key.regionZ != regionZ) return@forEach
+            val deleted = records.remove(key, value)
+            if (!deleted) return@forEach
+            if (value.scanTick != null) {
+                scannedCount.decrementAndGet()
+            }
+            removed += key
+        }
+        return removed.sortedWith(
+            compareBy(
+                { it.world.value.toString() },
+                { it.regionX },
+                { it.regionZ },
+                { it.chunkX },
+                { it.chunkZ },
+            )
+        )
+    }
+
     /** Deterministic snapshot of scanned chunks (signals present). */
     fun snapshot(): List<ChunkScanSnapshotEntry> {
         return records.entries

@@ -686,24 +686,14 @@ class WorldScanner : ChunkAvailabilityListener {
         regionZ: Int,
         scanTick: Long,
     ) {
-        val map = mapSnapshot() ?: return
-        val keys =
-            map.snapshot()
-                .asSequence()
-                .map { it.key }
-                .filter { it.world == world && it.regionX == regionX && it.regionZ == regionZ }
-                .toList()
-
-        for (key in keys) {
-            scannerQueueIngestionPort.ingest(
-                ScanMetadataFact(
-                    key = key,
-                    source = ChunkScanProvenance.FILE_PRIMARY,
-                    unresolvedReason = ChunkScanUnresolvedReason.FILE_MISSING,
-                    signals = null,
-                    scanTick = scanTick,
-                )
-            )
-        }
+        val removed = worldMapService?.expungeRegionOnTickThread(world, regionX, regionZ, scanTick) ?: 0
+        MementoLog.info(
+            MementoConcept.SCANNER,
+            "region rescan missing-region expunge world={} region=({}, {}) removedChunkRecords={}",
+            world.value,
+            regionX,
+            regionZ,
+            removed,
+        )
     }
 }
