@@ -26,10 +26,13 @@ import ch.oliverlanz.memento.domain.stones.WitherstoneView
 import net.minecraft.entity.attribute.EntityAttributes
 import net.minecraft.entity.ItemEntity
 import net.minecraft.registry.Registries
+import net.minecraft.registry.RegistryKey
+import net.minecraft.registry.RegistryKeys
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.command.ServerCommandSource
 import net.minecraft.server.world.ServerWorld
 import net.minecraft.text.Text
+import net.minecraft.util.Identifier
 import net.minecraft.util.Formatting
 import net.minecraft.util.hit.HitResult
 import net.minecraft.util.math.Box
@@ -827,18 +830,26 @@ object CommandHandlers {
     private fun stableDecisionOrSendError(source: ServerCommandSource): RenewalDecision? {
         val projection = renewalProjection
         if (projection == null) {
+            MementoLog.info(MementoConcept.OPERATOR, "renew force/renew rejected reason=projection_not_ready by={}", source.name)
             source.sendError(Text.literal("Renewal projection is not ready yet."))
             return null
         }
 
         val status = projection.statusView()
         if (status.state != RenewalAnalysisState.STABLE) {
+            MementoLog.info(
+                MementoConcept.OPERATOR,
+                "renew force/renew rejected reason=projection_not_stable state={} by={}",
+                status.state.name,
+                source.name,
+            )
             source.sendError(Text.literal("[Memento] renewal analysis is not stable yet."))
             return null
         }
 
         val decision = projection.decisionView()
         if (decision == null) {
+            MementoLog.info(MementoConcept.OPERATOR, "renew force/renew rejected reason=no_decision by={}", source.name)
             source.sendError(Text.literal("[Memento] no eligible area for renewal could be identified."))
             return null
         }
@@ -855,7 +866,19 @@ object CommandHandlers {
             source.name,
         )
 
-        return when (val result = WorldPruningService.submit(source.world.registryKey, decision.region)) {
+        val dimension = resolveWorldKey(decision.region.worldId)
+        if (dimension == null) {
+            MementoLog.info(
+                MementoConcept.PRUNING,
+                "renew force rejected reason=invalid_decision_world world={} by={}",
+                decision.region.worldId,
+                source.name,
+            )
+            source.sendError(Text.literal("[Memento] projection returned an invalid world id for force renewal."))
+            return 0
+        }
+
+        return when (val result = WorldPruningService.submit(dimension, decision.region)) {
             is WorldPruningService.SubmitResult.Submitted -> {
                 source.sendFeedback(
                     {
@@ -881,6 +904,12 @@ object CommandHandlers {
                 if (c.outcome == WorldPruningService.Outcome.success || c.outcome == WorldPruningService.Outcome.pruned_with_residual_backup) 1 else 0
             }
         }
+    }
+
+    private fun resolveWorldKey(worldId: String): RegistryKey<net.minecraft.world.World>? {
+        return runCatching {
+            RegistryKey.of(RegistryKeys.WORLD, Identifier.of(worldId))
+        }.getOrNull()
     }
 
     private fun forceChunkBatchRenew(source: ServerCommandSource, decision: RenewalDecision.ChunkBatch): Int {
