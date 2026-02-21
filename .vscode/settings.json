@@ -1,6 +1,7 @@
 {
   "java.configuration.updateBuildConfiguration": "automatic",
   "java.import.gradle.enabled": true,
+  "java.import.gradle.java.home": "/usr/lib/jvm/msopenjdk-current",
   "java.import.gradle.wrapper.enabled": true,
   "terminal.integrated.defaultProfile.linux": "bash"
 }
