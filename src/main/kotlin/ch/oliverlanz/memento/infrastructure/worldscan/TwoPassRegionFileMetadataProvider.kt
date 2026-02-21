@@ -4,6 +4,7 @@ import ch.oliverlanz.memento.domain.worldmap.ChunkKey
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanProvenance
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanUnresolvedReason
 import ch.oliverlanz.memento.domain.worldmap.ChunkSignals
+import ch.oliverlanz.memento.infrastructure.async.GlobalAsyncExclusionGate
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import java.io.ByteArrayInputStream
@@ -18,9 +19,8 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.util.Optional
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 import java.util.concurrent.Future
+import java.util.concurrent.Callable
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import java.util.zip.GZIPInputStream
@@ -42,16 +42,12 @@ import net.minecraft.world.storage.ChunkCompressionFormat
  * - Terminal completion after pass 2 (or pass 1 if no transient failures)
  *
  * Threading:
- * - All file IO and NBT decode runs on a dedicated background thread.
+ * - All file IO and NBT decode runs off-thread via global async exclusion gate.
  * - World map mutation stays on tick thread via [ScanMetadataIngestionPort].
  */
 class TwoPassRegionFileMetadataProvider(
     private val ingestionPort: ScanMetadataIngestionPort,
     private val delayedReconciliationMillis: Long = DEFAULT_DELAYED_RECONCILIATION_MILLIS,
-    private val executor: ExecutorService =
-        Executors.newSingleThreadExecutor { runnable ->
-            Thread(runnable, "memento-scan-file-metadata").apply { isDaemon = true }
-        },
 ) : FileMetadataProvider {
 
     private val lifecycle = AtomicReference(FileMetadataProviderLifecycle.IDLE)
@@ -80,19 +76,35 @@ class TwoPassRegionFileMetadataProvider(
         emittedFacts.set(0)
         lifecycle.set(FileMetadataProviderLifecycle.RUNNING)
 
-        runFuture = executor.submit {
-            runCatching {
-                runTwoPass(work, scanTick)
-            }.onFailure { t ->
-                if (lifecycle.get() == FileMetadataProviderLifecycle.CANCELLED || t is InterruptedException) {
-                    MementoLog.debug(MementoConcept.SCANNER, "file metadata provider cancelled")
-                } else {
-                    MementoLog.error(MementoConcept.SCANNER, "file metadata provider failed", t)
+        val submit = GlobalAsyncExclusionGate.submitIfIdle(
+            concept = MementoConcept.SCANNER,
+            owner = "scanner-file-provider",
+        ) {
+            Callable {
+                runCatching {
+                    runTwoPass(work, scanTick)
+                }.onFailure { t ->
+                    if (lifecycle.get() == FileMetadataProviderLifecycle.CANCELLED || t is InterruptedException) {
+                        MementoLog.debug(MementoConcept.SCANNER, "file metadata provider cancelled")
+                    } else {
+                        MementoLog.error(MementoConcept.SCANNER, "file metadata provider failed", t)
+                    }
+                }
+
+                if (lifecycle.get() != FileMetadataProviderLifecycle.CANCELLED) {
+                    lifecycle.set(FileMetadataProviderLifecycle.COMPLETE)
                 }
             }
+        }
 
-            if (lifecycle.get() != FileMetadataProviderLifecycle.CANCELLED) {
-                lifecycle.set(FileMetadataProviderLifecycle.COMPLETE)
+        when (submit) {
+            is GlobalAsyncExclusionGate.SubmitResult.Accepted -> {
+                runFuture = submit.future
+            }
+
+            is GlobalAsyncExclusionGate.SubmitResult.Busy -> {
+                lifecycle.set(FileMetadataProviderLifecycle.IDLE)
+                return false
             }
         }
 
@@ -121,7 +133,6 @@ class TwoPassRegionFileMetadataProvider(
     override fun close() {
         lifecycle.set(FileMetadataProviderLifecycle.CANCELLED)
         runFuture?.cancel(true)
-        executor.shutdownNow()
     }
 
     private fun runTwoPass(work: List<FileChunkWorkUnit>, scanTick: Long) {

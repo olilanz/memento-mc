@@ -11,6 +11,10 @@ import ch.oliverlanz.memento.application.stone.StoneMaturityTimeBridge
 import ch.oliverlanz.memento.application.visualization.EffectsHost
 import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
 import ch.oliverlanz.memento.domain.worldmap.WorldMapService
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalProjection
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalProjectionEvents
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalProjectionStableListener
+import ch.oliverlanz.memento.domain.renewal.projection.WorldMapFactAppliedListener
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchLifecycleTransition
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
@@ -20,6 +24,8 @@ import ch.oliverlanz.memento.domain.events.StoneLifecycleTrigger
 import ch.oliverlanz.memento.domain.stones.StoneAuthority
 import ch.oliverlanz.memento.domain.stones.StoneAuthorityWiring
 import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
+import ch.oliverlanz.memento.infrastructure.renewal.RenewalProjectionCsvExporter
+import ch.oliverlanz.memento.infrastructure.async.GlobalAsyncExclusionGate
 import ch.oliverlanz.memento.infrastructure.pulse.PulseCadence
 import ch.oliverlanz.memento.infrastructure.pulse.PulseClock
 import ch.oliverlanz.memento.infrastructure.pulse.PulseEvents
@@ -28,6 +34,8 @@ import ch.oliverlanz.memento.infrastructure.time.GameTimeTracker
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanCsvExporter
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
 import ch.oliverlanz.memento.infrastructure.worldscan.TwoPassRegionFileMetadataProvider
+import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanListener
+import ch.oliverlanz.memento.infrastructure.observability.OperatorMessages
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents
@@ -44,7 +52,18 @@ object Memento : ModInitializer {
 
     private var worldScanner: WorldScanner? = null
     private var worldMapService: WorldMapService? = null
+    private var renewalProjection: RenewalProjection? = null
+    private var projectionOperatorListener: RenewalProjectionStableListener? = null
     private val pulseGenerator = PulseGenerator()
+
+    private val onWorldMapFactApplied = WorldMapFactAppliedListener {
+        renewalProjection?.observeFactApplied(it.fact)
+    }
+
+    private val onWorldScanCompleted = WorldScanListener { _, _ ->
+        RenewalProjectionCsvExporter.armForNextStableAfterScan()
+        renewalProjection?.observeWorldScanCompleted()
+    }
 
     // Renewal wiring (application / infrastructure)
     private var renewalInitialObserver: RenewalInitialObserver? = null
@@ -58,9 +77,12 @@ object Memento : ModInitializer {
     private val onHighPulse: (PulseClock) -> Unit = {
         gameTimeTracker.tick()
         worldScanner?.tick()
+        renewalProjection?.tick()
     }
 
     private val onMediumPulse: (PulseClock) -> Unit = {
+        worldScanner?.onMediumPulse()
+        renewalProjection?.onMediumPulse()
     }
 
     private val onLowPulse: (PulseClock) -> Unit = {
@@ -98,6 +120,8 @@ object Memento : ModInitializer {
 
         ServerLifecycleEvents.SERVER_STARTED.register { server: MinecraftServer ->
 
+            GlobalAsyncExclusionGate.attach()
+
             pulseGenerator.reset()
             PulseEvents.subscribe(PulseCadence.REALTIME, onRealtimePulse)
             PulseEvents.subscribe(PulseCadence.HIGH, onHighPulse)
@@ -107,6 +131,30 @@ object Memento : ModInitializer {
             PulseEvents.subscribe(PulseCadence.ULTRA_LOW, onExtremeLowPulse)
 
             worldMapService = WorldMapService().also { it.attach() }
+
+            renewalProjection = RenewalProjection().also { projection ->
+                projection.attach(checkNotNull(worldMapService))
+                projection.addStableListener(RenewalProjectionCsvExporter)
+
+                val operatorListener = RenewalProjectionStableListener {
+                    val status = projection.statusView()
+                    if (status.lastCompletedReason != "SCAN_COMPLETED") return@RenewalProjectionStableListener
+
+                    val durationText = status.lastCompletedDurationMs
+                        ?.let { " in ${formatDuration(it)}" }
+                        ?: ""
+                    val outcome = when (projection.decisionView()) {
+                        is ch.oliverlanz.memento.domain.renewal.projection.RenewalDecision.Region -> "a renewal area"
+                        is ch.oliverlanz.memento.domain.renewal.projection.RenewalDecision.ChunkBatch -> "renewal chunks"
+                        null -> "no safe renewal target"
+                    }
+                    OperatorMessages.info(server, "Renewal analysis finished$durationText and found $outcome.")
+                }
+                projection.addStableListener(operatorListener)
+                projectionOperatorListener = operatorListener
+            }
+
+            RenewalProjectionEvents.subscribeFactApplied(onWorldMapFactApplied)
 
             RenewalTrackerLogging.attachOnce()
             renewalInitialObserver = RenewalInitialObserver().also { it.attach(server) }
@@ -144,11 +192,14 @@ object Memento : ModInitializer {
                 it.attachWorldMapService(service)
                 it.attach(server)
                 it.attachFileMetadataProvider(TwoPassRegionFileMetadataProvider(it.metadataIngestionPort()))
-                it.addListener(WorldScanCsvExporter)
+                it.addListener(onWorldScanCompleted)
             }
+
+            RenewalProjectionCsvExporter.attach(server, checkNotNull(worldMapService))
 
             worldScanner = scanner
             CommandHandlers.attachWorldScanner(scanner)
+            CommandHandlers.attachRenewalProjection(checkNotNull(renewalProjection))
 
             // World scanner remains a passive chunk-availability consumer.
             chunkLoadDriver?.registerConsumer(scanner)
@@ -187,6 +238,7 @@ object Memento : ModInitializer {
 
             gameTimeTracker.detach()
             RenewalTracker.unsubscribe(renewalEventListener)
+            RenewalProjectionEvents.unsubscribeFactApplied(onWorldMapFactApplied)
 
             chunkLoadDriver?.detach()
             chunkLoadDriver = null
@@ -206,19 +258,37 @@ object Memento : ModInitializer {
 
             CommandHandlers.detachVisualizationEngine()
             CommandHandlers.detachWorldScanner()
+            CommandHandlers.detachRenewalProjection()
 
             worldScanner?.detach()
             worldScanner = null
+
+            RenewalProjectionCsvExporter.detach()
+
+            renewalProjection?.removeStableListener(RenewalProjectionCsvExporter)
+            projectionOperatorListener?.let { renewalProjection?.removeStableListener(it) }
+            projectionOperatorListener = null
+            renewalProjection?.detach()
+            renewalProjection = null
 
             worldMapService?.detach()
             worldMapService = null
 
             effectsHost = null
+
+            GlobalAsyncExclusionGate.detach()
         }
 
         // Transport tick only
         ServerTickEvents.END_SERVER_TICK.register {
             pulseGenerator.onServerTick()
         }
+    }
+
+    private fun formatDuration(durationMs: Long): String {
+        val totalSeconds = (durationMs / 1000L).coerceAtLeast(0L)
+        val minutes = totalSeconds / 60L
+        val seconds = totalSeconds % 60L
+        return if (minutes > 0L) "${minutes}m ${seconds}s" else "${seconds}s"
     }
 }

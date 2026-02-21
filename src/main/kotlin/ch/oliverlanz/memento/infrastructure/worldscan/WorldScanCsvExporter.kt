@@ -11,6 +11,7 @@ import net.minecraft.server.MinecraftServer
 object WorldScanCsvExporter : WorldScanListener {
 
     override fun onWorldScanCompleted(server: MinecraftServer, event: WorldScanCompleted) {
-        MementoCsvWriter.writeSnapshot(server, event.snapshot)
+        // CSV export is now gated by renewal projection STABLE state.
+        // World-scan completion no longer writes CSV directly.
     }
 }

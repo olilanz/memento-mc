@@ -1,5 +1,6 @@
 package ch.oliverlanz.memento.domain.worldmap
 
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalProjectionEvents
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 
@@ -33,15 +34,35 @@ class WorldMapService {
      */
     fun applyFactOnTickThread(fact: ChunkMetadataFact) {
         if (!attached) return
-        fact.signals?.let { signals ->
+        val signalsChanged = fact.signals?.let { signals ->
             map.upsertSignals(fact.key, signals)
-        }
+        } ?: false
 
-        map.markScanned(
+        val firstScannedMark = map.markScanned(
             key = fact.key,
             scanTick = fact.scanTick,
             provenance = fact.source,
             unresolvedReason = fact.unresolvedReason,
         )
+
+        // Debug signal for projection churn analysis:
+        // if both are false, we received another fact for an already-known, already-scanned key
+        // without factual signal change.
+        if (!signalsChanged && !firstScannedMark) {
+            MementoLog.debug(
+                MementoConcept.PROJECTION,
+                "world-map duplicate fact key=({}, {}) world={} source={} unresolvedReason={}",
+                fact.key.chunkX,
+                fact.key.chunkZ,
+                fact.key.world.value,
+                fact.source,
+                fact.unresolvedReason,
+            )
+        }
+
+        // Projection recomputation trigger is strictly signal-change based, not scan-discovery based.
+        if (signalsChanged) {
+            RenewalProjectionEvents.emitFactApplied(fact)
+        }
     }
 }

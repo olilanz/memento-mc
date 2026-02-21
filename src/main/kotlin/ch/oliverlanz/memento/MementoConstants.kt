@@ -195,4 +195,19 @@ object MementoConstants {
      * Bounded application keeps map mutation costs predictable while preserving eventual progress.
      */
     const val MEMENTO_SCAN_METADATA_APPLIER_MAX_PER_TICK: Int = 128
+
+    /**
+     * Dirty-set threshold that triggers immediate projection worker start.
+     *
+     * When pending dirty chunk keys reaches this value, projection starts a worker immediately
+     * on the next tick without waiting for debounce time.
+     */
+    const val MEMENTO_RENEWAL_PROJECTION_DIRTY_THRESHOLD: Int = 128
+
+    /**
+     * Debounce window for projection worker start after first dirty key arrives.
+     *
+     * If dirty threshold is not reached, worker starts once this debounce interval elapses.
+     */
+    const val MEMENTO_RENEWAL_PROJECTION_DIRTY_DEBOUNCE_MS: Long = 250L
 }

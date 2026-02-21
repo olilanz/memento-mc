@@ -11,6 +11,7 @@ import ch.oliverlanz.memento.domain.worldmap.WorldMapService
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkAvailabilityListener
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
+import ch.oliverlanz.memento.infrastructure.observability.OperatorMessages
 import ch.oliverlanz.memento.infrastructure.worldscan.FileMetadataProvider
 import java.lang.Math
 import java.util.Locale
@@ -44,6 +45,10 @@ class WorldScanner : ChunkAvailabilityListener {
         val worldMapScanned: Int,
         val worldMapMissing: Int,
         val providerStatus: FileMetadataProviderStatus?,
+        val runningDurationMs: Long?,
+        val lastCompletedDurationMs: Long?,
+        val lastCompletedAtMs: Long?,
+        val lastCompletionReason: String?,
     )
 
     private var server: MinecraftServer? = null
@@ -80,6 +85,16 @@ class WorldScanner : ChunkAvailabilityListener {
     /** True after the current active scan has emitted ScanCompleted. */
     private var completionEmittedForCurrentScan: Boolean = false
 
+    /** Retry ownership remains in scanner: provider busy waits for next MEDIUM pulse retry. */
+    private var pendingProviderStartPlan: WorldDiscoveryPlan? = null
+    private var pendingProviderStartScanTick: Long? = null
+    private var providerRetryPending: Boolean = false
+
+    private var activeSinceMs: Long? = null
+    private var lastCompletedDurationMs: Long? = null
+    private var lastCompletedAtMs: Long? = null
+    private var lastCompletionReason: String? = null
+
     fun attach(server: MinecraftServer) {
         this.server = server
         MementoLog.info(
@@ -115,6 +130,14 @@ class WorldScanner : ChunkAvailabilityListener {
         maybeFinalizeActiveScan(m)
     }
 
+    fun onMediumPulse() {
+        if (!activeScan.get()) return
+        if (!providerRetryPending) return
+        val plan = pendingProviderStartPlan ?: return
+        val scanTick = pendingProviderStartScanTick ?: return
+        attemptStartFileProvider(plan = plan, scanTick = scanTick, fromRetry = true)
+    }
+
     /** Application ingestion boundary for future providers (e.g. file-based readers). */
     fun metadataIngestionPort(): ScanMetadataIngestionPort {
         ensureSubstrate()
@@ -126,6 +149,7 @@ class WorldScanner : ChunkAvailabilityListener {
      */
     fun statusView(): StatusView {
         val map = mapSnapshot()
+        val now = System.currentTimeMillis()
         return StatusView(
             active = activeScan.get(),
             plannedChunks = plannedChunks,
@@ -134,6 +158,10 @@ class WorldScanner : ChunkAvailabilityListener {
             worldMapScanned = map?.scannedChunks() ?: 0,
             worldMapMissing = map?.missingCount() ?: 0,
             providerStatus = fileMetadataProvider?.status(),
+            runningDurationMs = activeSinceMs?.let { (now - it).coerceAtLeast(0L) },
+            lastCompletedDurationMs = lastCompletedDurationMs,
+            lastCompletedAtMs = lastCompletedAtMs,
+            lastCompletionReason = lastCompletionReason,
         )
     }
 
@@ -166,6 +194,13 @@ class WorldScanner : ChunkAvailabilityListener {
         lastHeartbeatScanned = 0
         nextHeartbeatProgressPct = 5
         completionEmittedForCurrentScan = false
+        pendingProviderStartPlan = null
+        pendingProviderStartScanTick = null
+        providerRetryPending = false
+        activeSinceMs = null
+        lastCompletedDurationMs = null
+        lastCompletedAtMs = null
+        lastCompletionReason = null
         listeners.clear()
     }
 
@@ -183,7 +218,7 @@ class WorldScanner : ChunkAvailabilityListener {
         this.server = srv
 
         if (activeScan.get()) {
-            source.sendError(Text.literal("Memento: scan is already running."))
+            source.sendError(Text.literal("[Memento] scan is already running."))
             return 0
         }
 
@@ -215,7 +250,7 @@ class WorldScanner : ChunkAvailabilityListener {
 
         if (ensured == 0 && scanMap.totalChunks() == 0) {
             source.sendFeedback(
-                    { Text.literal("Memento: no existing chunks discovered; nothing to scan.") },
+                    { Text.literal("[Memento] no existing chunks discovered; nothing to scan.") },
                     false
             )
             MementoLog.debug(MementoConcept.SCANNER, "active=false scan aborted reason=no_chunks")
@@ -243,28 +278,21 @@ class WorldScanner : ChunkAvailabilityListener {
                     plannedChunks,
                     scanMap.scannedChunks()
             )
-            source.sendFeedback({ Text.literal("Memento: scan already complete.") }, false)
+            source.sendFeedback({ Text.literal("[Memento] scan already complete.") }, false)
             return 1
         }
 
         val provider = fileMetadataProvider
         if (provider != null) {
-            val started = provider.start(discoveredChunks, tickNow)
-            if (started) {
-                MementoLog.info(
-                        MementoConcept.SCANNER,
-                        "scan file-primary phase started chunks={}",
-                        ensured,
-                )
-            } else {
-                MementoLog.warn(
-                        MementoConcept.SCANNER,
-                        "scan file-primary phase skipped reason=provider_busy",
-                )
-            }
+            pendingProviderStartPlan = discoveredChunks
+            pendingProviderStartScanTick = tickNow
+            providerRetryPending = true
+            attemptStartFileProvider(plan = discoveredChunks, scanTick = tickNow, fromRetry = false)
         }
 
         activeScan.set(true)
+        activeSinceMs = System.currentTimeMillis()
+        lastCompletionReason = null
         MementoLog.info(
                 MementoConcept.SCANNER,
                 "World scan started. Planned chunks: {}. Scanned: {}. Missing: {}.",
@@ -273,7 +301,7 @@ class WorldScanner : ChunkAvailabilityListener {
                 scanMap.missingCount(),
         )
         source.sendFeedback(
-                { Text.literal("Memento: scan started. Planned chunks: $plannedChunks") },
+                { Text.literal("[Memento] scan started. Planned chunks: $plannedChunks") },
                 false
         )
         return 1
@@ -383,6 +411,16 @@ class WorldScanner : ChunkAvailabilityListener {
         if (completionEmittedForCurrentScan) return
         completionEmittedForCurrentScan = true
 
+        val completedAtMs = System.currentTimeMillis()
+        val durationMs = activeSinceMs?.let { (completedAtMs - it).coerceAtLeast(0L) }
+        lastCompletedDurationMs = durationMs
+        lastCompletedAtMs = completedAtMs
+        lastCompletionReason = reason
+        activeSinceMs = null
+        providerRetryPending = false
+        pendingProviderStartPlan = null
+        pendingProviderStartScanTick = null
+
         val srv = server
         if (srv == null) {
             MementoLog.warn(
@@ -449,6 +487,51 @@ class WorldScanner : ChunkAvailabilityListener {
                     event.unresolvedWithoutReasonCount,
             )
         }
+
+        val durationText = durationMs?.let { " after ${formatDuration(it)}" } ?: ""
+        val message = if (map.isComplete()) {
+            "The world survey has completed$durationText. ${event.scannedChunks} chunks were confirmed."
+        } else {
+            "The world survey pause ended$durationText. ${event.missingChunks} chunks still need confirmation."
+        }
+        OperatorMessages.info(srv, message)
+    }
+
+    private fun attemptStartFileProvider(plan: WorldDiscoveryPlan, scanTick: Long, fromRetry: Boolean) {
+        val provider = fileMetadataProvider ?: run {
+            providerRetryPending = false
+            pendingProviderStartPlan = null
+            pendingProviderStartScanTick = null
+            return
+        }
+
+        val started = provider.start(plan, scanTick)
+        if (started) {
+            providerRetryPending = false
+            pendingProviderStartPlan = null
+            pendingProviderStartScanTick = null
+            MementoLog.info(
+                MementoConcept.SCANNER,
+                "scan file-primary phase started retry={} plannedChunks={}",
+                fromRetry,
+                plannedChunks,
+            )
+            return
+        }
+
+        providerRetryPending = true
+        MementoLog.debug(
+            MementoConcept.SCANNER,
+            "scan file-primary gate busy; retryScheduled=medium-cadence active={}",
+            activeScan.get(),
+        )
+    }
+
+    private fun formatDuration(durationMs: Long): String {
+        val totalSeconds = Math.max(0L, durationMs / 1000L)
+        val minutes = totalSeconds / 60L
+        val seconds = totalSeconds % 60L
+        return if (minutes > 0L) "${minutes}m ${seconds}s" else "${seconds}s"
     }
 
     private fun aggregateProvenanceCounts(snapshot: List<ChunkScanSnapshotEntry>): Map<ChunkScanProvenance, Int> {

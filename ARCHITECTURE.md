@@ -157,6 +157,18 @@ Renewal consumes world facts from `WorldMapService` and stone influence from `St
 
 Renewal eligibility derivation is owned on the renewal side and must use `StoneMapService` for dominant-stone lookup rather than re-deriving stone influence internally.
 
+### Renewal projection (`RenewalProjection`)
+
+`RenewalProjection` is a **derived, ephemeral evaluation boundary** (ADR‑017, ADR‑018).
+
+It owns:
+
+* recomputation state (`COMPUTING`, `STABILIZING`, `STABLE`)
+* generation-scoped snapshot evaluation
+* materialized renewal decision for read-only surfaces
+
+`RenewalProjection` is fully recomputable from `WorldMap` facts and must not persist derived projection metrics into factual world memory.
+
 ### WorldMap
 
 `WorldMap` is Memento’s **institutional memory**. It records what the system has observed about the world.
@@ -216,6 +228,25 @@ Cadence delivery doctrine:
 * Domain and application components subscribe to cadence signals and own their own logic.
 * Startup wiring may register subscriptions, but must not encode semantic execution policy inside the pulse generator.
 * Non-HIGH cadences are phase-staggered so they do not co-fire on the same server tick.
+* Busy-retry policy for deferred background work is caller-owned and currently mediated on `MEDIUM` cadence; cadence transport itself remains non-semantic.
+
+### Global async exclusion gate
+
+`GlobalAsyncExclusionGate` is an infrastructure-only concurrency boundary for deferred background work (ADR‑019).
+
+It provides:
+
+* one global background execution slot
+* reject-while-busy submission behavior
+* explicit attach/detach lifecycle
+
+It does **not** provide:
+
+* queueing
+* fairness or prioritization
+* semantic retry policy
+
+Retry ownership remains with caller components (scanner/projection/future renewal execution), preserving detection/execution boundaries and avoiding hidden orchestration.
 
 ```mermaid
 stateDiagram-v2
@@ -241,12 +272,20 @@ flowchart TB
     FileSystem --> Scanner
     EngineTick --> Pulse
     Pulse --> DomainSubscribers
+    Pulse -->|MEDIUM cadence| Scanner
+    Pulse -->|MEDIUM cadence| Projection
     Scanner --> WorldMapService
     StoneAuthority --> StoneMap
     StoneMap --> Renewal
+    WorldMap --> Projection
+    Projection --> Decision
+    Decision --> Inspect
     Driver --> Engine
     Engine --> Driver
     Driver --> WorldMapService
+    Scanner --> ExclusionGate
+    Projection --> ExclusionGate
+    ExclusionGate --> BackgroundSlot
     WorldMapService --> WorldMap
     WorldMap --> Renewal
 ```
@@ -268,6 +307,10 @@ The following properties must remain true:
 * No central orchestrator
 * Pulse generator is cadence transport only, never semantic orchestration
 * No internal load scheduler
+* RenewalProjection is a formal derived boundary: ephemeral, recomputable, and generation-guarded on apply
+* Derived renewal metrics/decisions must not be persisted into WorldMap factual memory
+* Global async exclusion gate is infra-only: one background slot, reject-while-busy, no queue/fairness/prioritization semantics
+* Busy retry ownership is caller-side and cadence-driven (current policy: MEDIUM cadence), not gate-owned
 * Cadence constants are centralized in `MementoConstants` with no in-code magic cadence numbers
 * Non-HIGH cadence tiers are phase-staggered and must not co-fire on the same server tick
 * Piggyback unsolicited loads
@@ -287,6 +330,7 @@ The following properties must remain true:
 * Partial knowledge is valid
 * Active scan may complete with unresolved leftovers recorded explicitly
 * Observability must explain stalling and progress
+* Inspect/operator-facing scheduler status remains human-facing; internal state fields remain diagnostic-level, not operator-copy contracts
 
 Violating these invariants requires an explicit architectural decision.
 
@@ -300,27 +344,100 @@ The scanner and WorldMap form the foundation for later forgettability computatio
 
 ## 9. Architectural Decision Records (ADRs)
 
-### ADR‑001: Two renewal mechanisms coexist
+### ADR-001: Two renewal mechanisms coexist
 
-Two renewal mechanisms exist: player‑driven stones and autonomous renewal. Separating them stabilizes semantics and preserves player agency.
+Two renewal mechanisms exist: player-driven stones and autonomous renewal. Separating them stabilizes semantics and preserves player agency.  
 → Collapsing them caused renewal to become reactive and brittle.
 
-### ADR‑002: Detection vs execution
+---
 
-Detection observes eligibility; execution applies change when the world allows it.
+### ADR-002: Detection vs execution
+
+Detection observes eligibility; execution applies change when the world allows it.  
 → Coupling them caused cascading side effects and irrecoverable partial progress.
 
-### ADR‑003: Server authority over chunk lifecycle
+---
 
-Minecraft owns chunk lifecycle and scheduling.
+### ADR-003: Server authority over chunk lifecycle
+
+Minecraft owns chunk lifecycle and scheduling.  
 → Overriding this caused instability and engine conflicts.
 
-### ADR‑004: StoneTopology is sole influence authority (superseded by ADR‑014)
+---
 
-All stone influence resolution flows through StoneTopology.
+### ADR-004: StoneTopology is sole influence authority (superseded by ADR-014)
+
+All stone influence resolution flows through StoneTopology.  
 → Duplicate logic drifted and produced conflicting outcomes.
 
-### ADR‑014: Split stone lifecycle authority and stone influence projection authority (superseded by ADR‑015)
+---
+
+### ADR-005: One Witherstone → one RenewalBatch
+
+Each Witherstone produces exactly one RenewalBatch.  
+→ Reuse or multiplexing destroyed lifecycle clarity.
+
+---
+
+### ADR-006: Typed domain events as boundary
+
+Engine interaction is mediated through typed events.  
+→ Direct callbacks leaked threading assumptions into the domain.
+
+---
+
+### ADR-007: Engine-mediated scanning (superseded by ADR-012)
+
+Scanning reacts to engine availability.  
+→ Aggressive scheduling caused load storms.
+
+---
+
+### ADR-008: Shared Chunk Load Driver
+
+All engine interaction is encapsulated in the driver.  
+→ Bypassing it reintroduced concurrency bugs.
+
+---
+
+### ADR-009: WorldMap replaces scan plans
+
+The map itself is the plan.  
+→ Separate plans drifted from reality.
+
+---
+
+### ADR-010: Adaptive pacing over fixed modes
+
+Pacing is based on observed latency.  
+→ Static modes failed under real load.
+
+---
+
+### ADR-011: Scan completion allows unresolved file leftovers
+
+Active scan completion is defined by completion of file-primary two-pass processing and queue drain, not by full metadata success for every chunk. Unresolved leftovers remain first-class WorldMap state and completion telemetry.  
+→ Treating unresolved leftovers as non-terminal blocked scan closure despite explicit best-effort semantics.
+
+---
+
+### ADR-012: Filesystem-primary scanning with no scanner demand
+
+Active scanning is driven by filesystem region/NBT reads, not by scanner-issued engine demand. The engine remains a passive observation source only for unsolicited loads.  
+→ Scanner demand paths coupled detection to engine pressure and increased orchestration complexity.
+
+---
+
+### ADR-013: Domain WorldMapService and metadata-fact ingestion boundary
+
+World map lifecycle and mutation authority are centralized in domain `WorldMapService`. Scanner and Driver are infrastructure publishers that emit boundary-safe metadata facts; they do not propagate chunk runtime objects across the boundary.
+
+Driver serves renewal demand plus ambient load observation handling, and emits world map facts only when full-load accessibility is reached. Expiry outcomes without full-load accessibility remain lifecycle signals and do not mutate world map state.  
+→ Direct scanner-owned map lifecycle and chunk-object propagation blurred authority and thread boundaries, increasing coupling and reducing explainability.
+
+---
+
+### ADR-014: Split stone lifecycle authority and stone influence projection authority (superseded by ADR-015)
 
 Stone lifecycle ownership remains in stone authority (implementation name at decision time: `StoneTopology`) for placement, removal, maturity transitions, and persistence.
 
@@ -328,69 +445,51 @@ Dominant-stone projection at chunk granularity is owned solely by `StoneMapServi
 
 Renewal-side derivation consumes `StoneMapService` dominance and must not re-derive influence independently.
 
-Class renaming to `StoneAuthority` is deferred until functional parity validation is complete.
+Class renaming to `StoneAuthority` is deferred until functional parity validation is complete.  
 → This split preserves lifecycle clarity while removing projection duplication risk across renewal and overlays.
 
-### ADR‑015: Naming alignment — lifecycle authority uses `StoneAuthority`
+---
+
+### ADR-015: Naming alignment — lifecycle authority uses `StoneAuthority`
 
 After parity verification, the lifecycle authority naming was updated from `StoneTopology` to `StoneAuthority` across code references and integration hooks.
 
 This ADR changes naming only. Ownership boundaries, lifecycle behavior, dominance semantics, and renewal derivation rules remain unchanged.
 
-### ADR‑005: One Witherstone → one RenewalBatch
+---
 
-Each Witherstone produces exactly one RenewalBatch.
-→ Reuse or multiplexing destroyed lifecycle clarity.
-
-### ADR‑006: Typed domain events as boundary
-
-Engine interaction is mediated through typed events.
-→ Direct callbacks leaked threading assumptions into the domain.
-
-### ADR‑007: Engine‑mediated scanning (superseded by ADR‑012)
-
-Scanning reacts to engine availability.
-→ Aggressive scheduling caused load storms.
-
-### ADR‑008: Shared Chunk Load Driver
-
-All engine interaction is encapsulated in the driver.
-→ Bypassing it reintroduced concurrency bugs.
-
-### ADR‑009: WorldMap replaces scan plans
-
-The map itself is the plan.
-→ Separate plans drifted from reality.
-
-### ADR‑010: Adaptive pacing over fixed modes
-
-Pacing is based on observed latency.
-→ Static modes failed under real load.
-
-### ADR‑011: Scan completion allows unresolved file leftovers
-
-Active scan completion is defined by completion of file-primary two-pass processing and queue drain, not by full metadata success for every chunk. Unresolved leftovers remain first-class WorldMap state and completion telemetry.
-→ Treating unresolved leftovers as non-terminal blocked scan closure despite explicit best-effort semantics.
-
-### ADR‑012: Filesystem-primary scanning with no scanner demand
-
-Active scanning is driven by filesystem region/NBT reads, not by scanner-issued engine demand. The engine remains a passive observation source only for unsolicited loads.
-→ Scanner demand paths coupled detection to engine pressure and increased orchestration complexity.
-
-### ADR‑013: Domain WorldMapService and metadata-fact ingestion boundary
-
-World map lifecycle and mutation authority are centralized in domain `WorldMapService`. Scanner and Driver are infrastructure publishers that emit boundary-safe metadata facts; they do not propagate chunk runtime objects across the boundary.
-
-Driver serves renewal demand plus ambient load observation handling, and emits world map facts only when full-load accessibility is reached. Expiry outcomes without full-load accessibility remain lifecycle signals and do not mutate world map state.
-
-→ Direct scanner-owned map lifecycle and chunk-object propagation blurred authority and thread boundaries, increasing coupling and reducing explainability.
-
-### ADR‑016: Infrastructure pulse generator and cadence shielding
+### ADR-016: Infrastructure pulse generator and cadence shielding
 
 Server tick handling is shielded through an infrastructure pulse generator that emits cadence signals and does not execute semantic domain decisions.
 
 Domain and application components subscribe to cadence tiers and own their own logic. Startup wiring may bind subscribers but does not transfer semantic authority to the pulse generator.
 
-Cadence tier values are centralized in `MementoConstants` and currently locked to 1, 10, 100, 1000, and 10000 tick intervals. Non-HIGH cadence tiers are phase-staggered and must not co-fire on the same server tick.
-
+Cadence tier values are centralized in `MementoConstants` and currently locked to 1, 10, 100, 1000, and 10000 tick intervals. Non-HIGH cadence tiers are phase-staggered and must not co-fire on the same server tick.  
 → Direct per-component raw tick handling and ad-hoc cadence literals caused drift in politeness policy and reduced runtime explainability.
+
+---
+
+### ADR-017: Renewal projection is a derived boundary
+
+Renewal evaluation is isolated into a dedicated projection layer that is fully derived from `WorldMementoMap`.
+
+The projection owns renewal eligibility and decision materialization, but must never persist derived metrics into factual world memory. It is ephemeral and fully recomputable from the world map.  
+→ Without a strict derived boundary, renewal metrics would leak into institutional memory. Factual ingestion and interpretative logic would become entangled, weakening the architectural separation between detection and evaluation.
+
+---
+
+### ADR-018: Generation guard for stable renewal decisions
+
+Renewal evaluation operates under a generation model. Each evaluation run derives its result from a specific snapshot of world state. Results are applied only if they match the current generation head.
+
+If newer metadata arrives during computation, earlier generations are discarded.  
+→ Without generation guarding, renewal decisions could reflect partially outdated inputs or interleaved evaluation results. Under constant metadata inflow, conclusions would become unstable or ambiguous.
+
+---
+
+### ADR-019: Single background slot for background work
+
+All background work (world scanning, renewal projection evaluation, and future renewal execution) shares a single global execution slot.
+
+Only one background task may run at a time. Concurrent submissions are rejected while the slot is busy. Retry responsibility remains with the caller.  
+→ Without serialized background execution, scanning and renewal processing could overlap, compete for resources, or introduce race conditions when renewal begins mutating world data.
