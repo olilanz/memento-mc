@@ -157,6 +157,18 @@ Renewal consumes world facts from `WorldMapService` and stone influence from `St
 
 Renewal eligibility derivation is owned on the renewal side and must use `StoneMapService` for dominant-stone lookup rather than re-deriving stone influence internally.
 
+### Renewal projection (`RenewalProjection`)
+
+`RenewalProjection` is a **derived, ephemeral evaluation boundary** (ADR‑017, ADR‑018).
+
+It owns:
+
+* recomputation state (`COMPUTING`, `STABILIZING`, `STABLE`)
+* generation-scoped snapshot evaluation
+* materialized renewal decision for read-only surfaces
+
+`RenewalProjection` is fully recomputable from `WorldMap` facts and must not persist derived projection metrics into factual world memory.
+
 ### WorldMap
 
 `WorldMap` is Memento’s **institutional memory**. It records what the system has observed about the world.
@@ -216,6 +228,25 @@ Cadence delivery doctrine:
 * Domain and application components subscribe to cadence signals and own their own logic.
 * Startup wiring may register subscriptions, but must not encode semantic execution policy inside the pulse generator.
 * Non-HIGH cadences are phase-staggered so they do not co-fire on the same server tick.
+* Busy-retry policy for deferred background work is caller-owned and currently mediated on `MEDIUM` cadence; cadence transport itself remains non-semantic.
+
+### Global async exclusion gate
+
+`GlobalAsyncExclusionGate` is an infrastructure-only concurrency boundary for deferred background work (ADR‑019).
+
+It provides:
+
+* one global background execution slot
+* reject-while-busy submission behavior
+* explicit attach/detach lifecycle
+
+It does **not** provide:
+
+* queueing
+* fairness or prioritization
+* semantic retry policy
+
+Retry ownership remains with caller components (scanner/projection/future renewal execution), preserving detection/execution boundaries and avoiding hidden orchestration.
 
 ```mermaid
 stateDiagram-v2
@@ -241,12 +272,20 @@ flowchart TB
     FileSystem --> Scanner
     EngineTick --> Pulse
     Pulse --> DomainSubscribers
+    Pulse -->|MEDIUM cadence| Scanner
+    Pulse -->|MEDIUM cadence| Projection
     Scanner --> WorldMapService
     StoneAuthority --> StoneMap
     StoneMap --> Renewal
+    WorldMap --> Projection
+    Projection --> Decision
+    Decision --> Inspect
     Driver --> Engine
     Engine --> Driver
     Driver --> WorldMapService
+    Scanner --> ExclusionGate
+    Projection --> ExclusionGate
+    ExclusionGate --> BackgroundSlot
     WorldMapService --> WorldMap
     WorldMap --> Renewal
 ```
@@ -268,6 +307,10 @@ The following properties must remain true:
 * No central orchestrator
 * Pulse generator is cadence transport only, never semantic orchestration
 * No internal load scheduler
+* RenewalProjection is a formal derived boundary: ephemeral, recomputable, and generation-guarded on apply
+* Derived renewal metrics/decisions must not be persisted into WorldMap factual memory
+* Global async exclusion gate is infra-only: one background slot, reject-while-busy, no queue/fairness/prioritization semantics
+* Busy retry ownership is caller-side and cadence-driven (current policy: MEDIUM cadence), not gate-owned
 * Cadence constants are centralized in `MementoConstants` with no in-code magic cadence numbers
 * Non-HIGH cadence tiers are phase-staggered and must not co-fire on the same server tick
 * Piggyback unsolicited loads
@@ -287,6 +330,7 @@ The following properties must remain true:
 * Partial knowledge is valid
 * Active scan may complete with unresolved leftovers recorded explicitly
 * Observability must explain stalling and progress
+* Inspect/operator-facing scheduler status remains human-facing; internal state fields remain diagnostic-level, not operator-copy contracts
 
 Violating these invariants requires an explicit architectural decision.
 
