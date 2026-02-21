@@ -40,6 +40,9 @@ class RenewalProjection {
     private var supersededDuringInFlight: Boolean = false
     private var scanRecomputeRequested: Boolean = false
     private var blockedOnGate: Boolean = false
+    private var lastCompletedDurationMs: Long? = null
+    private var lastCompletedAtMs: Long? = null
+    private var lastCompletedReason: TriggerReason? = null
 
     @Volatile
     private var analysisState: RenewalAnalysisState = RenewalAnalysisState.COMPUTING
@@ -52,6 +55,8 @@ class RenewalProjection {
 
     private data class InFlightJob(
         val generation: Long,
+        val reason: TriggerReason,
+        val startedAtMs: Long,
         val future: java.util.concurrent.Future<WorkerResult>,
     )
 
@@ -85,6 +90,9 @@ class RenewalProjection {
         supersededDuringInFlight = false
         scanRecomputeRequested = false
         blockedOnGate = false
+        lastCompletedDurationMs = null
+        lastCompletedAtMs = null
+        lastCompletedReason = null
         generationHead = 0L
         appliedGeneration = 0L
         metricsByChunk.clear()
@@ -102,13 +110,19 @@ class RenewalProjection {
     }
 
     fun statusView(): RenewalProjectionStatusView {
+        val now = System.currentTimeMillis()
         val pending = synchronized(dirtySet) { dirtySet.size }
+        val runningDuration = inFlight?.let { now - it.startedAtMs }
         return RenewalProjectionStatusView(
             state = analysisState,
             pendingWorkSetSize = pending,
             trackedChunks = metricsByChunk.size,
             hasStableDecision = analysisState == RenewalAnalysisState.STABLE && decision != null,
             blockedOnGate = blockedOnGate,
+            runningDurationMs = runningDuration,
+            lastCompletedDurationMs = lastCompletedDurationMs,
+            lastCompletedAtMs = lastCompletedAtMs,
+            lastCompletedReason = lastCompletedReason?.name,
         )
     }
 
@@ -154,7 +168,10 @@ class RenewalProjection {
         if (!attached) return
 
         maybeFinalizeInFlight()
+    }
 
+    fun onMediumPulse() {
+        if (!attached) return
         if (inFlight == null) {
             val reason = nextTriggerReason(System.currentTimeMillis())
             if (reason != null) {
@@ -167,15 +184,22 @@ class RenewalProjection {
         val job = inFlight ?: return
         if (!job.future.isDone) return
         inFlight = null
+        val completedAtMs = System.currentTimeMillis()
+        val durationMs = (completedAtMs - job.startedAtMs).coerceAtLeast(0L)
+        lastCompletedDurationMs = durationMs
+        lastCompletedAtMs = completedAtMs
+        lastCompletedReason = job.reason
 
         val result = try {
             job.future.get()
         } catch (t: Throwable) {
             MementoLog.error(
                 MementoConcept.PROJECTION,
-                "worker failed generation={} (state->COMPUTING)",
+                "worker failed generation={} reason={} durationMs={} (state->COMPUTING)",
                 t,
                 job.generation,
+                job.reason.name,
+                durationMs,
             )
             analysisState = RenewalAnalysisState.COMPUTING
             blockedOnGate = false
@@ -185,8 +209,10 @@ class RenewalProjection {
         if (result.generation != generationHead || supersededDuringInFlight) {
             MementoLog.debug(
                 MementoConcept.PROJECTION,
-                "worker discard generation={} head={} superseded={} pendingDirty={}",
+                "worker discard generation={} reason={} durationMs={} head={} superseded={} pendingDirty={}",
                 result.generation,
+                job.reason.name,
+                durationMs,
                 generationHead,
                 supersededDuringInFlight,
                 synchronized(dirtySet) { dirtySet.size },
@@ -207,8 +233,10 @@ class RenewalProjection {
 
         MementoLog.debug(
             MementoConcept.PROJECTION,
-            "worker apply generation={} tracked={} hasDecision={}",
+            "worker apply generation={} reason={} durationMs={} tracked={} hasDecision={}",
             appliedGeneration,
+            job.reason.name,
+            durationMs,
             metricsByChunk.size,
             decision != null,
         )
@@ -267,7 +295,7 @@ class RenewalProjection {
                 analysisState = RenewalAnalysisState.COMPUTING
                 MementoLog.debug(
                     MementoConcept.PROJECTION,
-                    "worker blocked-on-gate reason={} activeOwner={} pendingDirty={}",
+                    "worker blocked-on-gate reason={} activeOwner={} pendingDirty={} retry=medium-cadence",
                     reason.name,
                     submit.activeOwner,
                     dirtySeedCount,
@@ -289,13 +317,18 @@ class RenewalProjection {
 
                 MementoLog.debug(
                     MementoConcept.PROJECTION,
-                    "worker start generation={} reason={} dirtySeed={} snapshot={}",
+                    "worker start generation={} reason={} dirtySeed={} snapshot={} retryPolicy=medium-cadence-retained-intent",
                     generation,
                     reason.name,
                     dirtySeedCount,
                     snapshot.size,
                 )
-                inFlight = InFlightJob(generation = generation, future = submit.future)
+                inFlight = InFlightJob(
+                    generation = generation,
+                    reason = reason,
+                    startedAtMs = System.currentTimeMillis(),
+                    future = submit.future,
+                )
             }
         }
     }

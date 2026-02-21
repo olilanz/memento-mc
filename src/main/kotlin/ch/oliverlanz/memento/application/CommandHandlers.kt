@@ -172,7 +172,7 @@ object CommandHandlers {
             1
         } catch (e: Exception) {
             MementoLog.error(MementoConcept.OPERATOR, "command=list failed", e)
-            source.sendError(Text.literal("Memento: could not list stones (see server log)."))
+            source.sendError(Text.literal("[Memento] could not list stones (see server log)."))
             0
         }
     }
@@ -196,7 +196,7 @@ object CommandHandlers {
             1
         } catch (e: Exception) {
             MementoLog.error(MementoConcept.OPERATOR, "command=inspect failed name='{}'", e, name)
-            source.sendError(Text.literal("Memento: could not inspect stone (see server log)."))
+            source.sendError(Text.literal("[Memento] could not inspect stone (see server log)."))
             0
         }
     }
@@ -213,7 +213,7 @@ object CommandHandlers {
             1
         } catch (e: Exception) {
             MementoLog.error(MementoConcept.OPERATOR, "command=inspect summary failed", e)
-            source.sendError(Text.literal("Memento: could not inspect status (see server log)."))
+            source.sendError(Text.literal("[Memento] could not inspect status (see server log)."))
             0
         }
     }
@@ -240,7 +240,7 @@ object CommandHandlers {
             1
         } catch (e: Exception) {
             MementoLog.error(MementoConcept.OPERATOR, "command=visualize failed name='{}'", e, name)
-            source.sendError(Text.literal("Memento: could not visualize stone (see server log)."))
+            source.sendError(Text.literal("[Memento] could not visualize stone (see server log)."))
             0
         }
     }
@@ -272,7 +272,7 @@ object CommandHandlers {
             1
         } catch (e: Exception) {
             MementoLog.error(MementoConcept.OPERATOR, "command=visualize all failed", e)
-            source.sendError(Text.literal("Memento: could not visualize stones (see server log)."))
+            source.sendError(Text.literal("[Memento] could not visualize stones (see server log)."))
             0
         }
     }
@@ -290,7 +290,7 @@ object CommandHandlers {
             scanner.startActiveScan(source)
         } catch (e: Exception) {
             MementoLog.error(MementoConcept.OPERATOR, "command=scan failed", e)
-            source.sendError(Text.literal("Memento: could not start scan (see server log)."))
+            source.sendError(Text.literal("[Memento] could not start scan (see server log)."))
             0
         }
     }
@@ -304,13 +304,13 @@ object CommandHandlers {
 
         val status = projection.statusView()
         if (status.state != RenewalAnalysisState.STABLE) {
-            source.sendError(Text.literal("Memento: renewal analysis is not stable yet."))
+            source.sendError(Text.literal("[Memento] renewal analysis is not stable yet."))
             return 0
         }
 
         val decision = projection.decisionView()
         if (decision == null) {
-            source.sendError(Text.literal("Memento: no eligible renewal target identified."))
+            source.sendError(Text.literal("[Memento] no eligible renewal target identified."))
             return 0
         }
 
@@ -325,7 +325,7 @@ object CommandHandlers {
                     source.name,
                 )
                 source.sendFeedback(
-                    { Text.literal("Memento: simulated region renewal for ${decision.region.worldId} r(${decision.region.regionX},${decision.region.regionZ}).").formatted(Formatting.YELLOW) },
+                    { Text.literal("[Memento] simulated region renewal for ${decision.region.worldId} r(${decision.region.regionX},${decision.region.regionZ}).").formatted(Formatting.YELLOW) },
                     false
                 )
             }
@@ -338,7 +338,7 @@ object CommandHandlers {
                     source.name,
                 )
                 source.sendFeedback(
-                    { Text.literal("Memento: simulated chunk-batch renewal for ${decision.chunks.size} chunks.").formatted(Formatting.YELLOW) },
+                    { Text.literal("[Memento] simulated chunk-batch renewal for ${decision.chunks.size} chunks.").formatted(Formatting.YELLOW) },
                     false
                 )
             }
@@ -415,7 +415,7 @@ object CommandHandlers {
             1
         } catch (e: Exception) {
             MementoLog.error(MementoConcept.OPERATOR, "command=removeStone failed name='{}'", e, name)
-            source.sendError(Text.literal("Memento: could not remove stone (see server log)."))
+            source.sendError(Text.literal("[Memento] could not remove stone (see server log)."))
             0
         }
     }
@@ -443,7 +443,7 @@ object CommandHandlers {
             }
         } catch (e: Exception) {
             MementoLog.error(MementoConcept.OPERATOR, "command=alterRadius failed name='{}' radius={}", e, name, value)
-            source.sendError(Text.literal("Memento: could not alter radius (see server log)."))
+            source.sendError(Text.literal("[Memento] could not alter radius (see server log)."))
             0
         }
     }
@@ -486,7 +486,7 @@ object CommandHandlers {
             }
         } catch (e: Exception) {
             MementoLog.error(MementoConcept.OPERATOR, "command=alterDaysToMaturity failed name='{}' daysToMaturity={}", e, name, value)
-            source.sendError(Text.literal("Memento: could not alter daysToMaturity (see server log)."))
+            source.sendError(Text.literal("[Memento] could not alter daysToMaturity (see server log)."))
             0
         }
     }
@@ -540,29 +540,48 @@ object CommandHandlers {
         }
 
         val scannerStatus = worldScanner?.statusView()
-        if (scannerStatus != null) {
-            val providerLifecycle = scannerStatus.providerStatus?.lifecycle?.name?.lowercase(Locale.ROOT) ?: "none"
-            lines += "Scanner: active=${scannerStatus.active}, planned=${scannerStatus.plannedChunks}, queuedFacts=${scannerStatus.pendingQueuedFacts}, filePhase=$providerLifecycle"
+        val projection = renewalProjection
+        val projectionStatus = projection?.statusView()
 
-            if (scannerStatus.worldMapTotal > 0) {
-                lines += "WorldMap: total=${scannerStatus.worldMapTotal}, scanned=${scannerStatus.worldMapScanned}, missing=${scannerStatus.worldMapMissing}"
+        val schedulerLine = when {
+            scannerStatus?.active == true -> {
+                val durationText = scannerStatus.runningDurationMs?.let { " for ${formatDuration(it)}" } ?: ""
+                "Scheduler: surveying the world$durationText."
             }
+
+            projectionStatus != null && projectionStatus.state == RenewalAnalysisState.STABILIZING -> {
+                val durationText = projectionStatus.runningDurationMs?.let { " for ${formatDuration(it)}" } ?: ""
+                "Scheduler: evaluating renewal options$durationText."
+            }
+
+            projectionStatus?.blockedOnGate == true -> {
+                "Scheduler: waiting for the world survey to finish."
+            }
+
+            projectionStatus?.lastCompletedReason == "SCAN_COMPLETED" && projectionStatus.lastCompletedDurationMs != null -> {
+                "Scheduler: renewal evaluation completed after ${formatDuration(projectionStatus.lastCompletedDurationMs)}."
+            }
+
+            scannerStatus?.lastCompletedDurationMs != null -> {
+                "Scheduler: world survey completed after ${formatDuration(scannerStatus.lastCompletedDurationMs)}."
+            }
+
+            else -> "Scheduler: idle."
+        }
+        lines += schedulerLine
+
+        if (scannerStatus != null && scannerStatus.worldMapTotal > 0) {
+            lines += "World memory: ${scannerStatus.worldMapScanned}/${scannerStatus.worldMapTotal} chunks confirmed, ${scannerStatus.worldMapMissing} still uncertain"
         }
 
-        val projection = renewalProjection
-        if (projection != null) {
-            val status = projection.statusView()
-            lines += "Renewal projection: state=${status.state.name.lowercase(Locale.ROOT)}, workSet=${status.pendingWorkSetSize}, tracked=${status.trackedChunks}"
-
-            if (status.state == RenewalAnalysisState.STABLE) {
-                when (val d = projection.decisionView()) {
-                    is RenewalDecision.Region ->
-                        lines += "Renewal decision: region ${d.region.worldId} r(${d.region.regionX},${d.region.regionZ})"
-                    is RenewalDecision.ChunkBatch ->
-                        lines += "Renewal decision: chunk batch size=${d.chunks.size}"
-                    null ->
-                        lines += "Renewal decision: none"
-                }
+        if (projectionStatus != null && projectionStatus.state == RenewalAnalysisState.STABLE) {
+            when (val d = projection.decisionView()) {
+                is RenewalDecision.Region ->
+                    lines += "Renewal target: region ${d.region.worldId} r(${d.region.regionX},${d.region.regionZ})"
+                is RenewalDecision.ChunkBatch ->
+                    lines += "Renewal target: ${d.chunks.size} chunks"
+                null ->
+                    lines += "Renewal target: none"
             }
         }
 
@@ -632,6 +651,13 @@ object CommandHandlers {
             RenewalBatchState.RENEWAL_COMPLETE ->
                 "waiting: none (renewal complete)"
         }
+
+    private fun formatDuration(durationMs: Long): String {
+        val totalSeconds = (durationMs / 1000L).coerceAtLeast(0L)
+        val minutes = totalSeconds / 60L
+        val seconds = totalSeconds % 60L
+        return if (minutes > 0L) "${minutes}m ${seconds}s" else "${seconds}s"
+    }
 
     private data class UnloadBlockers(
         val players: List<String>,
