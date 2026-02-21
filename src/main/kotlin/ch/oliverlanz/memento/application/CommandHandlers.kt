@@ -847,7 +847,7 @@ object CommandHandlers {
 
     private fun forceRegionRenew(source: ServerCommandSource, decision: RenewalDecision.Region): Int {
         MementoLog.info(
-            MementoConcept.RENEWAL,
+            MementoConcept.PRUNING,
             "renew force request grain=region world={} region=({}, {}) by={}",
             decision.region.worldId,
             decision.region.regionX,
