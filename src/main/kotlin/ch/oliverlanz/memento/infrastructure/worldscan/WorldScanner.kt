@@ -14,6 +14,7 @@ import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import ch.oliverlanz.memento.infrastructure.observability.OperatorMessages
 import ch.oliverlanz.memento.infrastructure.worldscan.FileMetadataProvider
 import java.lang.Math
+import java.nio.file.Files
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -136,6 +137,99 @@ class WorldScanner : ChunkAvailabilityListener {
         val plan = pendingProviderStartPlan ?: return
         val scanTick = pendingProviderStartScanTick ?: return
         attemptStartFileProvider(plan = plan, scanTick = scanTick, fromRetry = true)
+    }
+
+    /**
+     * Region-scoped file rescan entrypoint used by renew-force prune completion.
+     *
+     * Contract:
+     * - no transition into active scan mode,
+     * - no retry scheduling,
+     * - emits normal metadata facts through existing ingestion pathways.
+     */
+    fun startRegionRescan(
+        world: net.minecraft.registry.RegistryKey<net.minecraft.world.World>,
+        regionX: Int,
+        regionZ: Int,
+        reason: String,
+        scanTick: Long,
+    ): Boolean {
+        val srv = server ?: return false
+        val provider = fileMetadataProvider ?: return false
+
+        val root = srv.getSavePath(net.minecraft.util.WorldSavePath.ROOT)
+        val regionFile = RegionDiscovery.resolveRegionFile(root, world, regionX, regionZ)
+
+        if (!Files.exists(regionFile)) {
+            emitMissingRegionFacts(world, regionX, regionZ, scanTick)
+            MementoLog.info(
+                MementoConcept.SCANNER,
+                "region rescan skipped missing-file world={} region=({}, {}) reason={}",
+                world.value,
+                regionX,
+                regionZ,
+                reason,
+            )
+            return true
+        }
+
+        val plan =
+            WorldDiscoveryPlan(
+                worlds =
+                    listOf(
+                        DiscoveredWorld(
+                            world = world,
+                            regions =
+                                listOf(
+                                    RegionRef(
+                                        x = regionX,
+                                        z = regionZ,
+                                        file = regionFile.toAbsolutePath(),
+                                    )
+                                ),
+                        )
+                    ),
+            )
+        val discoveredChunks = ChunkDiscovery().discover(plan)
+        val chunksToScan =
+            discoveredChunks.worlds.firstOrNull()?.regions?.firstOrNull()?.chunks?.size ?: 0
+
+        if (chunksToScan == 0) {
+            emitMissingRegionFacts(world, regionX, regionZ, scanTick)
+            MementoLog.info(
+                MementoConcept.SCANNER,
+                "region rescan completed empty-region world={} region=({}, {}) reason={}",
+                world.value,
+                regionX,
+                regionZ,
+                reason,
+            )
+            return true
+        }
+
+        val started = provider.start(discoveredChunks, scanTick)
+        if (!started) {
+            MementoLog.info(
+                MementoConcept.SCANNER,
+                "region rescan rejected busy world={} region=({}, {}) reason={}",
+                world.value,
+                regionX,
+                regionZ,
+                reason,
+            )
+            return false
+        }
+
+        MementoLog.info(
+            MementoConcept.SCANNER,
+            "region rescan started world={} region=({}, {}) chunks={} reason={}",
+            world.value,
+            regionX,
+            regionZ,
+            chunksToScan,
+            reason,
+        )
+        return true
     }
 
     /** Application ingestion boundary for future providers (e.g. file-based readers). */
@@ -565,5 +659,32 @@ class WorldScanner : ChunkAvailabilityListener {
                 .joinToString(prefix = "[", postfix = "]", separator = ",") { reason ->
                     "${reason.name}=${counts[reason] ?: 0}"
                 }
+    }
+
+    private fun emitMissingRegionFacts(
+        world: net.minecraft.registry.RegistryKey<net.minecraft.world.World>,
+        regionX: Int,
+        regionZ: Int,
+        scanTick: Long,
+    ) {
+        val map = mapSnapshot() ?: return
+        val keys =
+            map.snapshot()
+                .asSequence()
+                .map { it.key }
+                .filter { it.world == world && it.regionX == regionX && it.regionZ == regionZ }
+                .toList()
+
+        for (key in keys) {
+            scannerQueueIngestionPort.ingest(
+                ScanMetadataFact(
+                    key = key,
+                    source = ChunkScanProvenance.FILE_PRIMARY,
+                    unresolvedReason = ChunkScanUnresolvedReason.FILE_MISSING,
+                    signals = null,
+                    scanTick = scanTick,
+                )
+            )
+        }
     }
 }

@@ -25,6 +25,7 @@ import ch.oliverlanz.memento.domain.stones.StoneAuthority
 import ch.oliverlanz.memento.domain.stones.StoneAuthorityWiring
 import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
 import ch.oliverlanz.memento.infrastructure.renewal.RenewalProjectionCsvExporter
+import ch.oliverlanz.memento.infrastructure.pruning.WorldPruningService
 import ch.oliverlanz.memento.infrastructure.async.GlobalAsyncExclusionGate
 import ch.oliverlanz.memento.infrastructure.pulse.PulseCadence
 import ch.oliverlanz.memento.infrastructure.pulse.PulseClock
@@ -83,6 +84,7 @@ object Memento : ModInitializer {
     private val onMediumPulse: (PulseClock) -> Unit = {
         worldScanner?.onMediumPulse()
         renewalProjection?.onMediumPulse()
+        WorldPruningService.tickThreadProcess()
     }
 
     private val onLowPulse: (PulseClock) -> Unit = {
@@ -198,6 +200,7 @@ object Memento : ModInitializer {
             RenewalProjectionCsvExporter.attach(server, checkNotNull(worldMapService))
 
             worldScanner = scanner
+            WorldPruningService.attach(server, scanner)
             CommandHandlers.attachWorldScanner(scanner)
             CommandHandlers.attachRenewalProjection(checkNotNull(renewalProjection))
 
@@ -262,6 +265,7 @@ object Memento : ModInitializer {
 
             worldScanner?.detach()
             worldScanner = null
+            WorldPruningService.detach()
 
             RenewalProjectionCsvExporter.detach()
 
