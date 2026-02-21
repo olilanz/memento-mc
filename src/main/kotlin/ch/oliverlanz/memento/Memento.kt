@@ -13,6 +13,7 @@ import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
 import ch.oliverlanz.memento.domain.worldmap.WorldMapService
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalProjection
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalProjectionEvents
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalProjectionStableListener
 import ch.oliverlanz.memento.domain.renewal.projection.WorldMapFactAppliedListener
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchLifecycleTransition
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
@@ -34,6 +35,7 @@ import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanCsvExporter
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
 import ch.oliverlanz.memento.infrastructure.worldscan.TwoPassRegionFileMetadataProvider
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanListener
+import ch.oliverlanz.memento.infrastructure.observability.OperatorMessages
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents
@@ -51,6 +53,7 @@ object Memento : ModInitializer {
     private var worldScanner: WorldScanner? = null
     private var worldMapService: WorldMapService? = null
     private var renewalProjection: RenewalProjection? = null
+    private var projectionOperatorListener: RenewalProjectionStableListener? = null
     private val pulseGenerator = PulseGenerator()
 
     private val onWorldMapFactApplied = WorldMapFactAppliedListener {
@@ -78,6 +81,8 @@ object Memento : ModInitializer {
     }
 
     private val onMediumPulse: (PulseClock) -> Unit = {
+        worldScanner?.onMediumPulse()
+        renewalProjection?.onMediumPulse()
     }
 
     private val onLowPulse: (PulseClock) -> Unit = {
@@ -130,6 +135,23 @@ object Memento : ModInitializer {
             renewalProjection = RenewalProjection().also { projection ->
                 projection.attach(checkNotNull(worldMapService))
                 projection.addStableListener(RenewalProjectionCsvExporter)
+
+                val operatorListener = RenewalProjectionStableListener {
+                    val status = projection.statusView()
+                    if (status.lastCompletedReason != "SCAN_COMPLETED") return@RenewalProjectionStableListener
+
+                    val durationText = status.lastCompletedDurationMs
+                        ?.let { " in ${formatDuration(it)}" }
+                        ?: ""
+                    val outcome = when (projection.decisionView()) {
+                        is ch.oliverlanz.memento.domain.renewal.projection.RenewalDecision.Region -> "a renewal area"
+                        is ch.oliverlanz.memento.domain.renewal.projection.RenewalDecision.ChunkBatch -> "renewal chunks"
+                        null -> "no safe renewal target"
+                    }
+                    OperatorMessages.info(server, "Renewal evaluation finished$durationText and found $outcome.")
+                }
+                projection.addStableListener(operatorListener)
+                projectionOperatorListener = operatorListener
             }
 
             RenewalProjectionEvents.subscribeFactApplied(onWorldMapFactApplied)
@@ -244,6 +266,8 @@ object Memento : ModInitializer {
             RenewalProjectionCsvExporter.detach()
 
             renewalProjection?.removeStableListener(RenewalProjectionCsvExporter)
+            projectionOperatorListener?.let { renewalProjection?.removeStableListener(it) }
+            projectionOperatorListener = null
             renewalProjection?.detach()
             renewalProjection = null
 
@@ -259,5 +283,12 @@ object Memento : ModInitializer {
         ServerTickEvents.END_SERVER_TICK.register {
             pulseGenerator.onServerTick()
         }
+    }
+
+    private fun formatDuration(durationMs: Long): String {
+        val totalSeconds = (durationMs / 1000L).coerceAtLeast(0L)
+        val minutes = totalSeconds / 60L
+        val seconds = totalSeconds % 60L
+        return if (minutes > 0L) "${minutes}m ${seconds}s" else "${seconds}s"
     }
 }

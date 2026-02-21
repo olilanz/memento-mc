@@ -21,6 +21,10 @@ data class RenewalProjectionStatusView(
     val trackedChunks: Int,
     val hasStableDecision: Boolean,
     val blockedOnGate: Boolean = false,
+    val runningDurationMs: Long? = null,
+    val lastCompletedDurationMs: Long? = null,
+    val lastCompletedAtMs: Long? = null,
+    val lastCompletedReason: String? = null,
 )
 
 /**
