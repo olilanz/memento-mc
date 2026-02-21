@@ -65,4 +65,34 @@ class WorldMapService {
             RenewalProjectionEvents.emitFactApplied(fact)
         }
     }
+
+    /**
+     * Removes all map entries for one world-region tuple on the tick thread.
+     *
+     * Projection recomputation is explicitly triggered for each removed key so derived renewal
+     * decisions can drop stale region evidence immediately.
+     */
+    fun expungeRegionOnTickThread(
+        world: net.minecraft.registry.RegistryKey<net.minecraft.world.World>,
+        regionX: Int,
+        regionZ: Int,
+        scanTick: Long,
+    ): Int {
+        if (!attached) return 0
+        val removed = map.expungeRegion(world, regionX, regionZ)
+        if (removed.isEmpty()) return 0
+
+        removed.forEach { key ->
+            RenewalProjectionEvents.emitFactApplied(
+                ChunkMetadataFact(
+                    key = key,
+                    source = ChunkScanProvenance.FILE_PRIMARY,
+                    unresolvedReason = ChunkScanUnresolvedReason.FILE_MISSING,
+                    signals = null,
+                    scanTick = scanTick,
+                )
+            )
+        }
+        return removed.size
+    }
 }
