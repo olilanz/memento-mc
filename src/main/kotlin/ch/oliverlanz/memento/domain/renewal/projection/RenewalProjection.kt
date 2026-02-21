@@ -2,23 +2,47 @@ package ch.oliverlanz.memento.domain.renewal.projection
 
 import ch.oliverlanz.memento.MementoConstants
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
+import ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry
 import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
 import ch.oliverlanz.memento.domain.worldmap.WorldMapService
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import net.minecraft.registry.RegistryKey
+import net.minecraft.world.World
 
 fun interface RenewalProjectionStableListener {
     fun onProjectionStable(snapshot: RenewalStableSnapshot)
 }
 
+/**
+ * Hybrid projection authority model.
+ *
+ * Authority boundaries:
+ * - Tick thread owns mutable projection state, snapshot capture, generation assignment, and commit.
+ * - Worker thread performs pure computation on immutable snapshot input.
+ * - Worker output is generation-tagged and must pass generation/supersession checks before commit.
+ */
 class RenewalProjection {
     private var worldMapService: WorldMapService? = null
 
-    private val workSet = linkedSetOf<ChunkKey>()
+    private val dirtySet = linkedSetOf<ChunkKey>()
     private val metricsByChunk = ConcurrentHashMap<ChunkKey, RenewalChunkMetrics>()
     private val stableListeners = CopyOnWriteArrayList<RenewalProjectionStableListener>()
+    private val computeExecutor: ExecutorService =
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "memento-renewal-projection").apply { isDaemon = true }
+        }
+
+    private var dirtySinceMs: Long? = null
+    private var generationHead: Long = 0L
+    private var appliedGeneration: Long = 0L
+    private var inFlight: InFlightJob? = null
+    private var supersededDuringInFlight: Boolean = false
+    private var scanRecomputeRequested: Boolean = false
 
     @Volatile
     private var analysisState: RenewalAnalysisState = RenewalAnalysisState.COMPUTING
@@ -29,6 +53,23 @@ class RenewalProjection {
     @Volatile
     private var attached: Boolean = false
 
+    private data class InFlightJob(
+        val generation: Long,
+        val future: java.util.concurrent.Future<WorkerResult>,
+    )
+
+    private enum class TriggerReason {
+        DIRTY_THRESHOLD,
+        DEBOUNCE,
+        SCAN_COMPLETED,
+    }
+
+    private data class WorkerResult(
+        val generation: Long,
+        val metricsByChunk: Map<ChunkKey, RenewalChunkMetrics>,
+        val decision: RenewalDecision?,
+    )
+
     fun attach(service: WorldMapService) {
         worldMapService = service
         attached = true
@@ -38,13 +79,20 @@ class RenewalProjection {
     fun detach() {
         attached = false
         worldMapService = null
-        synchronized(workSet) {
-            workSet.clear()
+        synchronized(dirtySet) {
+            dirtySet.clear()
+            dirtySinceMs = null
         }
+        inFlight = null
+        supersededDuringInFlight = false
+        scanRecomputeRequested = false
+        generationHead = 0L
+        appliedGeneration = 0L
         metricsByChunk.clear()
         decision = null
         analysisState = RenewalAnalysisState.COMPUTING
         stableListeners.clear()
+        computeExecutor.shutdownNow()
     }
 
     fun addStableListener(listener: RenewalProjectionStableListener) {
@@ -56,12 +104,12 @@ class RenewalProjection {
     }
 
     fun statusView(): RenewalProjectionStatusView {
-        val pending = synchronized(workSet) { workSet.size }
+        val pending = synchronized(dirtySet) { dirtySet.size }
         return RenewalProjectionStatusView(
             state = analysisState,
             pendingWorkSetSize = pending,
             trackedChunks = metricsByChunk.size,
-            hasStableDecision = decision != null,
+            hasStableDecision = analysisState == RenewalAnalysisState.STABLE && decision != null,
         )
     }
 
@@ -77,17 +125,26 @@ class RenewalProjection {
 
     fun observeFactApplied(fact: ChunkMetadataFact) {
         if (!attached) return
-        synchronized(workSet) {
-            workSet += fact.key
+        val now = System.currentTimeMillis()
+        synchronized(dirtySet) {
+            val added = dirtySet.add(fact.key)
+            if (added && dirtySinceMs == null) dirtySinceMs = now
         }
-        if (analysisState == RenewalAnalysisState.STABLE) {
+        if (inFlight != null) {
+            supersededDuringInFlight = true
+        }
+        if (analysisState == RenewalAnalysisState.STABLE || analysisState == RenewalAnalysisState.STABILIZING) {
             analysisState = RenewalAnalysisState.COMPUTING
         }
     }
 
     fun observeWorldScanCompleted() {
         if (!attached) return
-        if (analysisState == RenewalAnalysisState.STABLE) {
+        scanRecomputeRequested = true
+        if (inFlight != null) {
+            supersededDuringInFlight = true
+        }
+        if (analysisState == RenewalAnalysisState.STABLE || analysisState == RenewalAnalysisState.STABILIZING) {
             analysisState = RenewalAnalysisState.COMPUTING
         }
     }
@@ -95,142 +152,225 @@ class RenewalProjection {
     fun tick() {
         if (!attached) return
 
-        if (analysisState == RenewalAnalysisState.COMPUTING) {
-            processComputeWorkSet()
-            val remaining = synchronized(workSet) { workSet.size }
-            if (remaining == 0) {
-                analysisState = RenewalAnalysisState.STABILIZING
-            }
-        }
+        maybeFinalizeInFlight()
 
-        if (analysisState == RenewalAnalysisState.STABILIZING) {
-            runStabilizationAndDecision()
-            analysisState = RenewalAnalysisState.STABLE
-
-            val stable = RenewalStableSnapshot(metricsByChunk.toMap(), decision)
-            stableListeners.forEach { listener ->
-                try {
-                    listener.onProjectionStable(stable)
-                } catch (t: Throwable) {
-                    MementoLog.error(MementoConcept.RENEWAL, "projection stable-listener failed", t)
-                }
+        if (inFlight == null) {
+            val reason = nextTriggerReason(System.currentTimeMillis())
+            if (reason != null) {
+                dispatchWorker(reason)
             }
         }
     }
 
+    private fun maybeFinalizeInFlight() {
+        val job = inFlight ?: return
+        if (!job.future.isDone) return
+        inFlight = null
+
+        val result = try {
+            job.future.get()
+        } catch (t: Throwable) {
+            MementoLog.error(
+                MementoConcept.PROJECTION,
+                "worker failed generation={} (state->COMPUTING)",
+                t,
+                job.generation,
+            )
+            analysisState = RenewalAnalysisState.COMPUTING
+            return
+        }
+
+        if (result.generation != generationHead || supersededDuringInFlight) {
+            MementoLog.debug(
+                MementoConcept.PROJECTION,
+                "worker discard generation={} head={} superseded={} pendingDirty={}",
+                result.generation,
+                generationHead,
+                supersededDuringInFlight,
+                synchronized(dirtySet) { dirtySet.size },
+            )
+            analysisState = RenewalAnalysisState.COMPUTING
+            supersededDuringInFlight = false
+            return
+        }
+
+        metricsByChunk.clear()
+        metricsByChunk.putAll(result.metricsByChunk)
+        decision = result.decision
+        appliedGeneration = result.generation
+        analysisState = RenewalAnalysisState.STABLE
+        supersededDuringInFlight = false
+
+        MementoLog.debug(
+            MementoConcept.PROJECTION,
+            "worker apply generation={} tracked={} hasDecision={}",
+            appliedGeneration,
+            metricsByChunk.size,
+            decision != null,
+        )
+
+        val stable = RenewalStableSnapshot(metricsByChunk.toMap(), decision)
+        stableListeners.forEach { listener ->
+            try {
+                listener.onProjectionStable(stable)
+            } catch (t: Throwable) {
+                MementoLog.error(MementoConcept.RENEWAL, "projection stable-listener failed", t)
+            }
+        }
+    }
+
+    private fun nextTriggerReason(nowMs: Long): TriggerReason? {
+        if (scanRecomputeRequested) return TriggerReason.SCAN_COMPLETED
+
+        val dirtyCount: Int
+        val firstDirtyAt: Long?
+        synchronized(dirtySet) {
+            dirtyCount = dirtySet.size
+            firstDirtyAt = dirtySinceMs
+        }
+
+        if (dirtyCount == 0) return null
+        if (dirtyCount >= MementoConstants.MEMENTO_RENEWAL_PROJECTION_DIRTY_THRESHOLD) {
+            return TriggerReason.DIRTY_THRESHOLD
+        }
+
+        if (firstDirtyAt != null && nowMs - firstDirtyAt >= MementoConstants.MEMENTO_RENEWAL_PROJECTION_DIRTY_DEBOUNCE_MS) {
+            return TriggerReason.DEBOUNCE
+        }
+
+        return null
+    }
+
+    private fun dispatchWorker(reason: TriggerReason) {
+        val service = worldMapService ?: return
+        val snapshot = service.substrate().snapshot()
+
+        val generation = generationHead + 1L
+        generationHead = generation
+
+        val dirtySeedCount = synchronized(dirtySet) {
+            val count = dirtySet.size
+            dirtySet.clear()
+            dirtySinceMs = null
+            count
+        }
+
+        scanRecomputeRequested = false
+        supersededDuringInFlight = false
+        analysisState = RenewalAnalysisState.STABILIZING
+
+        MementoLog.debug(
+            MementoConcept.PROJECTION,
+            "worker start generation={} reason={} dirtySeed={} snapshot={}",
+            generation,
+            reason.name,
+            dirtySeedCount,
+            snapshot.size,
+        )
+
+        val future = computeExecutor.submit<WorkerResult> {
+            computeWorkerResult(generation, snapshot)
+        }
+        inFlight = InFlightJob(generation = generation, future = future)
+    }
+
+    private fun computeWorkerResult(
+        generation: Long,
+        snapshot: List<ChunkScanSnapshotEntry>,
+    ): WorkerResult {
+        if (snapshot.isEmpty()) {
+            return WorkerResult(
+                generation = generation,
+                metricsByChunk = emptyMap(),
+                decision = null,
+            )
+        }
+
+        val index = buildSnapshotIndex(snapshot)
+        val forgettableByChunk = snapshot.associate { entry ->
+            entry.key to (computeForgettability(entry.key, index) >= 1.0)
+        }
+
+        val maxTicks = snapshot.asSequence()
+            .mapNotNull { it.signals?.inhabitedTimeTicks }
+            .maxOrNull() ?: 0L
+        val threshold = maxTicks.toDouble() * 0.8
+        val livelyChunkSet = linkedSetOf<ChunkKey>()
+        val metrics = linkedMapOf<ChunkKey, RenewalChunkMetrics>()
+
+        snapshot.forEach { entry ->
+            val key = entry.key
+            val lively = when (val ticks = entry.signals?.inhabitedTimeTicks) {
+                null -> 1.0
+                else -> if (maxTicks == 0L) 0.0 else if (ticks.toDouble() >= threshold) 1.0 else 0.0
+            }
+            if (lively > 0.0) livelyChunkSet += key
+
+            metrics[key] = RenewalChunkMetrics(
+                forgettabilityIndex = if (forgettableByChunk[key] == true) 1.0 else 0.0,
+                livelinessIndex = lively,
+            )
+        }
+
+        val decision = computeDecision(
+            snapshot = snapshot,
+            livelyChunkSet = livelyChunkSet,
+            forgettableByChunk = forgettableByChunk,
+        )
+
+        when (decision) {
+            is RenewalDecision.Region -> {
+                metrics.replaceAll { key, value ->
+                    if (key.world.value.toString() == decision.region.worldId &&
+                        key.regionX == decision.region.regionX &&
+                        key.regionZ == decision.region.regionZ
+                    ) {
+                        value.copy(eligibleByRegionCandidateIndex = 1.0)
+                    } else {
+                        value
+                    }
+                }
+            }
+
+            is RenewalDecision.ChunkBatch -> {
+                decision.chunks.forEach { key ->
+                    val value = metrics[key] ?: RenewalChunkMetrics()
+                    metrics[key] = value.copy(eligibleByChunkCandidateIndex = 1.0)
+                }
+            }
+
+            null -> Unit
+        }
+
+        return WorkerResult(
+            generation = generation,
+            metricsByChunk = metrics,
+            decision = decision,
+        )
+    }
+
     private data class SnapshotIndex(
-        val entries: List<ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>,
-        val byKey: Map<ChunkKey, ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>,
-        val keysByWorld: Map<net.minecraft.registry.RegistryKey<net.minecraft.world.World>, List<ChunkKey>>,
+        val byKey: Map<ChunkKey, ChunkScanSnapshotEntry>,
+        val keysByWorld: Map<RegistryKey<World>, List<ChunkKey>>,
     )
 
-    private fun buildSnapshotIndex(): SnapshotIndex? {
-        val service = worldMapService ?: return null
-        val entries = service.substrate().snapshot()
-        if (entries.isEmpty()) return null
-
+    private fun buildSnapshotIndex(entries: List<ChunkScanSnapshotEntry>): SnapshotIndex {
         val byKey = entries.associateBy { it.key }
         val keysByWorld = entries
             .groupBy { it.key.world }
             .mapValues { (_, list) -> list.map { it.key } }
 
         return SnapshotIndex(
-            entries = entries,
             byKey = byKey,
             keysByWorld = keysByWorld,
         )
     }
 
-    private fun processComputeWorkSet() {
-        val index = buildSnapshotIndex() ?: return
-
-        var processed = 0
-        while (processed < MementoConstants.MEMENTO_RENEWAL_PROJECTION_MAX_PER_TICK) {
-            val key = synchronized(workSet) {
-                val first = workSet.firstOrNull()
-                if (first != null) workSet.remove(first)
-                first
-            } ?: break
-
-            processed++
-            val previous = metricsByChunk[key] ?: RenewalChunkMetrics()
-            val nextForgettability = computeForgettability(key, index)
-            val next = previous.copy(forgettabilityIndex = nextForgettability)
-
-            metricsByChunk[key] = next
-            if (previous.forgettabilityIndex != nextForgettability) {
-                enqueueNeighborhood(key, 32, index)
-            }
-        }
-    }
-
-    private fun runStabilizationAndDecision() {
-        val index = buildSnapshotIndex()
-
-        if (index == null) {
-            metricsByChunk.clear()
-            decision = null
-            return
-        }
-
-        val snapshot = index.entries
-
-        val maxTicks = snapshot.asSequence()
-            .mapNotNull { it.signals?.inhabitedTimeTicks }
-            .maxOrNull() ?: 0L
-
-        val threshold = maxTicks.toDouble() * 0.8
-        val livelyChunkSet = linkedSetOf<ChunkKey>()
-
-        snapshot.forEach { entry ->
-            val key = entry.key
-            val prior = metricsByChunk[key] ?: RenewalChunkMetrics()
-
-            val lively = when (val ticks = entry.signals?.inhabitedTimeTicks) {
-                null -> 1.0
-                else -> if (maxTicks == 0L) 0.0 else if (ticks.toDouble() >= threshold) 1.0 else 0.0
-            }
-
-            val updated = prior.copy(
-                livelinessIndex = lively,
-                eligibleByRegionCandidateIndex = 0.0,
-                eligibleByChunkCandidateIndex = 0.0,
-            )
-            metricsByChunk[key] = updated
-            if (lively > 0.0) livelyChunkSet += key
-        }
-
-        decision = computeDecision(snapshot, livelyChunkSet)
-
-        when (val d = decision) {
-            is RenewalDecision.Region -> {
-                metricsByChunk.entries.forEach { (key, value) ->
-                    if (key.world.value.toString() == d.region.worldId && key.regionX == d.region.regionX && key.regionZ == d.region.regionZ) {
-                        metricsByChunk[key] = value.copy(eligibleByRegionCandidateIndex = 1.0)
-                    }
-                }
-            }
-
-            is RenewalDecision.ChunkBatch -> {
-                d.chunks.forEach { key ->
-                    val value = metricsByChunk[key] ?: RenewalChunkMetrics()
-                    metricsByChunk[key] = value.copy(eligibleByChunkCandidateIndex = 1.0)
-                }
-            }
-
-            null -> Unit
-        }
-    }
-
     private fun computeDecision(
-        snapshot: List<ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>,
+        snapshot: List<ChunkScanSnapshotEntry>,
         livelyChunkSet: Set<ChunkKey>,
+        forgettableByChunk: Map<ChunkKey, Boolean>,
     ): RenewalDecision? {
-        val forgettableByChunk = snapshot.associate { entry ->
-            val metric = metricsByChunk[entry.key] ?: RenewalChunkMetrics()
-            entry.key to (metric.forgettabilityIndex >= 1.0)
-        }
-
         val chunksByRegion = snapshot.groupBy { Triple(it.key.world.value.toString(), it.key.regionX, it.key.regionZ) }
         val regionCandidates = linkedSetOf<RegionKey>()
 
@@ -335,22 +475,5 @@ class RenewalProjection {
             }
 
         return if (hasNeighborWithActivity) 0.0 else 1.0
-    }
-
-    private fun enqueueNeighborhood(
-        center: ChunkKey,
-        radius: Int,
-        index: SnapshotIndex,
-    ) {
-        val worldKeys = index.keysByWorld[center.world] ?: return
-        synchronized(workSet) {
-            worldKeys.asSequence()
-                .filter {
-                    val dx = kotlin.math.abs(it.chunkX - center.chunkX)
-                    val dz = kotlin.math.abs(it.chunkZ - center.chunkZ)
-                    kotlin.math.max(dx, dz) <= radius
-                }
-                .forEach { workSet += it }
-        }
     }
 }
