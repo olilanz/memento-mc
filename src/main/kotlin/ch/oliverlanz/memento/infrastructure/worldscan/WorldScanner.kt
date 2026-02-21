@@ -157,6 +157,17 @@ class WorldScanner : ChunkAvailabilityListener {
     ): Boolean {
         val srv = server ?: return false
         val provider = fileMetadataProvider ?: return false
+        if (activeScan.get()) {
+            MementoLog.info(
+                MementoConcept.SCANNER,
+                "region rescan rejected active-scan-running world={} region=({}, {}) reason={}",
+                world.value,
+                regionX,
+                regionZ,
+                reason,
+            )
+            return false
+        }
 
         val root = srv.getSavePath(net.minecraft.util.WorldSavePath.ROOT)
         val triple = WorldStorageService.resolveRegionTriple(root, world, regionX, regionZ)
