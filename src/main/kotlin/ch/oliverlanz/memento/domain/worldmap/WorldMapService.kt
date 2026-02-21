@@ -60,8 +60,8 @@ class WorldMapService {
             )
         }
 
-        // Projection recomputation trigger is factual-change based, not publication-frequency based.
-        if (signalsChanged || firstScannedMark) {
+        // Projection recomputation trigger is strictly signal-change based, not scan-discovery based.
+        if (signalsChanged) {
             RenewalProjectionEvents.emitFactApplied(fact)
         }
     }
