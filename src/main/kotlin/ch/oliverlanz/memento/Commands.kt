@@ -74,12 +74,17 @@ object Commands {
                 )
 
                 /* ======================
-                 * RENEW (simulation only)
+                 * RENEW
                  * ====================== */
                 .then(literal("renew")
                     .executes { ctx ->
                         CommandHandlers.renew(ctx.source)
                     }
+                    .then(literal("force")
+                        .executes { ctx ->
+                            CommandHandlers.renewForce(ctx.source)
+                        }
+                    )
                 )
                 /* ======================
                  * ADD

@@ -11,6 +11,7 @@ import ch.oliverlanz.memento.domain.events.StoneLifecycleTrigger
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchSnapshot
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchState
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
+import ch.oliverlanz.memento.domain.renewal.RenewalTrigger
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalAnalysisState
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalDecision
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalProjection
@@ -35,6 +36,7 @@ import net.minecraft.util.math.Box
 import net.minecraft.util.math.BlockPos
 import net.minecraft.util.math.ChunkPos
 import ch.oliverlanz.memento.application.visualization.EffectsHost
+import ch.oliverlanz.memento.infrastructure.pruning.WorldPruningService
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
@@ -296,23 +298,7 @@ object CommandHandlers {
     }
 
     fun renew(source: ServerCommandSource): Int {
-        val projection = renewalProjection
-        if (projection == null) {
-            source.sendError(Text.literal("Renewal projection is not ready yet."))
-            return 0
-        }
-
-        val status = projection.statusView()
-        if (status.state != RenewalAnalysisState.STABLE) {
-            source.sendError(Text.literal("[Memento] renewal analysis is not stable yet."))
-            return 0
-        }
-
-        val decision = projection.decisionView()
-        if (decision == null) {
-            source.sendError(Text.literal("[Memento] no eligible area for renewal could be identified."))
-            return 0
-        }
+        val decision = stableDecisionOrSendError(source) ?: return 0
 
         when (decision) {
             is RenewalDecision.Region -> {
@@ -345,6 +331,15 @@ object CommandHandlers {
         }
 
         return 1
+    }
+
+    fun renewForce(source: ServerCommandSource): Int {
+        val decision = stableDecisionOrSendError(source) ?: return 0
+
+        return when (decision) {
+            is RenewalDecision.Region -> forceRegionRenew(source, decision)
+            is RenewalDecision.ChunkBatch -> forceChunkBatchRenew(source, decision)
+        }
     }
 
     fun addWitherstone(source: ServerCommandSource, name: String, radius: Int, daysToMaturity: Int): Int {
@@ -827,5 +822,104 @@ object CommandHandlers {
             { Text.literal("Suggestion stale for '$name' during $command. Try tab completion again.").formatted(Formatting.GRAY) },
             false
         )
+    }
+
+    private fun stableDecisionOrSendError(source: ServerCommandSource): RenewalDecision? {
+        val projection = renewalProjection
+        if (projection == null) {
+            source.sendError(Text.literal("Renewal projection is not ready yet."))
+            return null
+        }
+
+        val status = projection.statusView()
+        if (status.state != RenewalAnalysisState.STABLE) {
+            source.sendError(Text.literal("[Memento] renewal analysis is not stable yet."))
+            return null
+        }
+
+        val decision = projection.decisionView()
+        if (decision == null) {
+            source.sendError(Text.literal("[Memento] no eligible area for renewal could be identified."))
+            return null
+        }
+        return decision
+    }
+
+    private fun forceRegionRenew(source: ServerCommandSource, decision: RenewalDecision.Region): Int {
+        MementoLog.info(
+            MementoConcept.RENEWAL,
+            "renew force request grain=region world={} region=({}, {}) by={}",
+            decision.region.worldId,
+            decision.region.regionX,
+            decision.region.regionZ,
+            source.name,
+        )
+
+        return when (val result = WorldPruningService.submit(decision.region)) {
+            is WorldPruningService.SubmitResult.Submitted -> {
+                source.sendFeedback(
+                    {
+                        Text.literal(
+                            "[Memento] renew force submitted for region ${result.target.worldId} r(${result.target.regionX},${result.target.regionZ})."
+                        ).formatted(Formatting.YELLOW)
+                    },
+                    false
+                )
+                1
+            }
+
+            is WorldPruningService.SubmitResult.Completed -> {
+                val c = result.completion
+                source.sendFeedback(
+                    {
+                        Text.literal(
+                            "[Memento] renew force outcome=${c.outcome.name} world=${c.target.worldId} r(${c.target.regionX},${c.target.regionZ})"
+                        ).formatted(if (c.outcome == WorldPruningService.Outcome.success || c.outcome == WorldPruningService.Outcome.pruned_with_residual_backup) Formatting.YELLOW else Formatting.RED)
+                    },
+                    false
+                )
+                if (c.outcome == WorldPruningService.Outcome.success || c.outcome == WorldPruningService.Outcome.pruned_with_residual_backup) 1 else 0
+            }
+        }
+    }
+
+    private fun forceChunkBatchRenew(source: ServerCommandSource, decision: RenewalDecision.ChunkBatch): Int {
+        val chunksByWorld = decision.chunks.groupBy { it.world }
+        if (chunksByWorld.isEmpty()) {
+            source.sendError(Text.literal("[Memento] no chunks available for force renewal."))
+            return 0
+        }
+
+        var submitted = 0
+        chunksByWorld.entries.sortedBy { it.key.value.toString() }.forEach { (world, chunks) ->
+            val scope = chunks.map { ChunkPos(it.chunkX, it.chunkZ) }.toSet()
+            val minX = chunks.minOf { it.chunkX }
+            val minZ = chunks.minOf { it.chunkZ }
+            val maxX = chunks.maxOf { it.chunkX }
+            val maxZ = chunks.maxOf { it.chunkZ }
+            val batchName =
+                "${ch.oliverlanz.memento.MementoConstants.MEMENTO_RENEW_FORCE_BATCH_PREFIX}${world.value}_${minX}_${minZ}_${maxX}_${maxZ}_${scope.size}"
+
+            RenewalTracker.upsertBatchDefinition(
+                name = batchName,
+                dimension = world,
+                chunks = scope,
+                trigger = RenewalTrigger.MANUAL,
+            )
+            submitted += scope.size
+        }
+
+        MementoLog.info(
+            MementoConcept.RENEWAL,
+            "renew force decision grain=chunk count={} groups={} by={}",
+            submitted,
+            chunksByWorld.size,
+            source.name,
+        )
+        source.sendFeedback(
+            { Text.literal("[Memento] force-renew queued ${submitted} chunks across ${chunksByWorld.size} renewal group(s). ").formatted(Formatting.YELLOW) },
+            false
+        )
+        return 1
     }
 }
