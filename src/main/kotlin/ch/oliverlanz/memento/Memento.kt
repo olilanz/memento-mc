@@ -24,6 +24,7 @@ import ch.oliverlanz.memento.domain.stones.StoneAuthority
 import ch.oliverlanz.memento.domain.stones.StoneAuthorityWiring
 import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
 import ch.oliverlanz.memento.infrastructure.renewal.RenewalProjectionCsvExporter
+import ch.oliverlanz.memento.infrastructure.async.GlobalAsyncExclusionGate
 import ch.oliverlanz.memento.infrastructure.pulse.PulseCadence
 import ch.oliverlanz.memento.infrastructure.pulse.PulseClock
 import ch.oliverlanz.memento.infrastructure.pulse.PulseEvents
@@ -113,6 +114,8 @@ object Memento : ModInitializer {
         ChunkLoadDriver.installEngineHooks()
 
         ServerLifecycleEvents.SERVER_STARTED.register { server: MinecraftServer ->
+
+            GlobalAsyncExclusionGate.attach()
 
             pulseGenerator.reset()
             PulseEvents.subscribe(PulseCadence.REALTIME, onRealtimePulse)
@@ -248,6 +251,8 @@ object Memento : ModInitializer {
             worldMapService = null
 
             effectsHost = null
+
+            GlobalAsyncExclusionGate.detach()
         }
 
         // Transport tick only

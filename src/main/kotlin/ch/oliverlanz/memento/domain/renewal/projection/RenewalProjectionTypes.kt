@@ -20,6 +20,7 @@ data class RenewalProjectionStatusView(
     val pendingWorkSetSize: Int,
     val trackedChunks: Int,
     val hasStableDecision: Boolean,
+    val blockedOnGate: Boolean = false,
 )
 
 /**
