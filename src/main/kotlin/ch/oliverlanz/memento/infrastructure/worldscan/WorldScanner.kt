@@ -12,6 +12,7 @@ import ch.oliverlanz.memento.infrastructure.chunk.ChunkAvailabilityListener
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import ch.oliverlanz.memento.infrastructure.observability.OperatorMessages
+import ch.oliverlanz.memento.infrastructure.worldstorage.WorldStorageService
 import ch.oliverlanz.memento.infrastructure.worldscan.FileMetadataProvider
 import java.lang.Math
 import java.nio.file.Files
@@ -158,16 +159,23 @@ class WorldScanner : ChunkAvailabilityListener {
         val provider = fileMetadataProvider ?: return false
 
         val root = srv.getSavePath(net.minecraft.util.WorldSavePath.ROOT)
-        val regionFile = RegionDiscovery.resolveRegionFile(root, world, regionX, regionZ)
+        val triple = WorldStorageService.resolveRegionTriple(root, world, regionX, regionZ)
+        val regionFile = triple.region
+        val missingKinds = buildList {
+            if (!Files.exists(triple.region)) add(WorldStorageService.RegionDataKind.REGION.name)
+            if (!Files.exists(triple.entities)) add(WorldStorageService.RegionDataKind.ENTITIES.name)
+            if (!Files.exists(triple.poi)) add(WorldStorageService.RegionDataKind.POI.name)
+        }
 
-        if (!Files.exists(regionFile)) {
+        if (missingKinds.isNotEmpty()) {
             emitMissingRegionFacts(world, regionX, regionZ, scanTick)
             MementoLog.info(
                 MementoConcept.SCANNER,
-                "region rescan skipped missing-file world={} region=({}, {}) reason={}",
+                "region rescan skipped missing-region-triple world={} region=({}, {}) missingKinds={} reason={}",
                 world.value,
                 regionX,
                 regionZ,
+                missingKinds.joinToString(","),
                 reason,
             )
             return true

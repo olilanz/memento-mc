@@ -1,5 +1,6 @@
 package ch.oliverlanz.memento.infrastructure.worldscan
 
+import ch.oliverlanz.memento.infrastructure.worldstorage.WorldStorageService
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
 import net.minecraft.util.WorldSavePath
@@ -23,7 +24,12 @@ class RegionDiscovery {
         val root = server.getSavePath(WorldSavePath.ROOT)
 
         val discovered = worlds.map { worldKey ->
-            val regionDir = resolveRegionDirectory(root, worldKey)
+            val regionDir =
+                WorldStorageService.resolveRegionDataDirectory(
+                    root = root,
+                    worldKey = worldKey,
+                    kind = WorldStorageService.RegionDataKind.REGION,
+                )
             val regions = discoverRegions(regionDir)
             MementoLog.debug(MementoConcept.SCANNER, "discovered world={} regions={}", worldKey.value, regions.size)
             DiscoveredWorld(world = worldKey, regions = regions)
@@ -31,9 +37,6 @@ class RegionDiscovery {
 
         return WorldDiscoveryPlan(worlds = discovered)
     }
-
-    private fun resolveRegionDirectory(root: Path, worldKey: RegistryKey<World>): Path =
-        Companion.resolveRegionDirectory(root, worldKey)
 
     private fun discoverRegions(regionDir: Path): List<RegionRef> {
         if (!Files.isDirectory(regionDir)) {
@@ -57,24 +60,5 @@ class RegionDiscovery {
 
         // Deterministic ordering.
         return regions.sortedWith(compareBy<RegionRef> { it.x }.thenBy { it.z })
-    }
-
-    companion object {
-        fun resolveRegionDirectory(root: Path, worldKey: RegistryKey<World>): Path {
-            // Canonical Minecraft save layout (design-time decision).
-            return when (worldKey) {
-                World.OVERWORLD -> root.resolve("region")
-                World.NETHER -> root.resolve("DIM-1").resolve("region")
-                World.END -> root.resolve("DIM1").resolve("region")
-                else -> {
-                    val id = worldKey.value
-                    root.resolve("dimensions").resolve(id.namespace).resolve(id.path).resolve("region")
-                }
-            }
-        }
-
-        fun resolveRegionFile(root: Path, worldKey: RegistryKey<World>, regionX: Int, regionZ: Int): Path {
-            return resolveRegionDirectory(root, worldKey).resolve("r.${regionX}.${regionZ}.mca")
-        }
     }
 }
