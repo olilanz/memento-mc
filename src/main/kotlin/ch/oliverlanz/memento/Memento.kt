@@ -148,7 +148,7 @@ object Memento : ModInitializer {
                         is ch.oliverlanz.memento.domain.renewal.projection.RenewalDecision.ChunkBatch -> "renewal chunks"
                         null -> "no safe renewal target"
                     }
-                    OperatorMessages.info(server, "Renewal evaluation finished$durationText and found $outcome.")
+                    OperatorMessages.info(server, "Renewal analysis finished$durationText and found $outcome.")
                 }
                 projection.addStableListener(operatorListener)
                 projectionOperatorListener = operatorListener

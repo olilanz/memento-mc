@@ -310,7 +310,7 @@ object CommandHandlers {
 
         val decision = projection.decisionView()
         if (decision == null) {
-            source.sendError(Text.literal("[Memento] no eligible renewal target identified."))
+            source.sendError(Text.literal("[Memento] no eligible area for renewal could be identified."))
             return 0
         }
 
@@ -559,7 +559,7 @@ object CommandHandlers {
             }
 
             projectionStatus?.lastCompletedReason == "SCAN_COMPLETED" && projectionStatus.lastCompletedDurationMs != null -> {
-                "Scheduler: renewal evaluation completed after ${formatDuration(projectionStatus.lastCompletedDurationMs)}."
+                "Scheduler: renewal analysis completed after ${formatDuration(projectionStatus.lastCompletedDurationMs)}."
             }
 
             scannerStatus?.lastCompletedDurationMs != null -> {
