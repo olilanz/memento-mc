@@ -26,6 +26,10 @@ fun interface RenewalProjectionStableListener {
  * - Worker output is generation-tagged and must pass generation/supersession checks before commit.
  */
 class RenewalProjection {
+    private companion object {
+        private const val NEIGHBOR_RADIUS = 32
+    }
+
     private var worldMapService: WorldMapService? = null
 
     private val dirtySet = linkedSetOf<ChunkKey>()
@@ -378,18 +382,24 @@ class RenewalProjection {
 
     private data class SnapshotIndex(
         val byKey: Map<ChunkKey, ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>,
-        val keysByWorld: Map<RegistryKey<World>, List<ChunkKey>>,
+        val byPackedChunkByWorld: Map<RegistryKey<World>, Map<Long, ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>>,
     )
 
     private fun buildSnapshotIndex(entries: List<ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>): SnapshotIndex {
         val byKey = entries.associateBy { it.key }
-        val keysByWorld = entries
+        val byPackedChunkByWorld = entries
             .groupBy { it.key.world }
-            .mapValues { (_, list) -> list.map { it.key } }
+            .mapValues { (_, list) ->
+                linkedMapOf<Long, ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>().apply {
+                    list.forEach { entry ->
+                        this[packChunk(entry.key.chunkX, entry.key.chunkZ)] = entry
+                    }
+                }
+            }
 
         return SnapshotIndex(
             byKey = byKey,
-            keysByWorld = keysByWorld,
+            byPackedChunkByWorld = byPackedChunkByWorld,
         )
     }
 
@@ -402,19 +412,24 @@ class RenewalProjection {
         if (currentTicks == null) return 0.0
         if (currentTicks > 0L) return 0.0
 
-        val worldKeys = index.keysByWorld[key.world] ?: return 0.0
-        val hasNeighborWithActivity = worldKeys.asSequence()
-            .filter {
-                val dx = kotlin.math.abs(it.chunkX - key.chunkX)
-                val dz = kotlin.math.abs(it.chunkZ - key.chunkZ)
-                kotlin.math.max(dx, dz) <= 32
-            }
-            .any { neighborKey ->
-                val neighbor = index.byKey[neighborKey]
+        val worldByPackedChunk = index.byPackedChunkByWorld[key.world] ?: return 0.0
+        var hasNeighborWithActivity = false
+        for (dx in -NEIGHBOR_RADIUS..NEIGHBOR_RADIUS) {
+            if (hasNeighborWithActivity) break
+            for (dz in -NEIGHBOR_RADIUS..NEIGHBOR_RADIUS) {
+                val neighbor = worldByPackedChunk[packChunk(key.chunkX + dx, key.chunkZ + dz)]
                 val t = neighbor?.signals?.inhabitedTimeTicks
-                t == null || t > 0L
+                if (t == null || t > 0L) {
+                    hasNeighborWithActivity = true
+                    break
+                }
             }
+        }
 
         return if (hasNeighborWithActivity) 0.0 else 1.0
+    }
+
+    private fun packChunk(x: Int, z: Int): Long {
+        return (x.toLong() shl 32) xor (z.toLong() and 0xffffffffL)
     }
 }
