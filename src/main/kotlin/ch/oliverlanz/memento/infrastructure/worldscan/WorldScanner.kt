@@ -12,8 +12,10 @@ import ch.oliverlanz.memento.infrastructure.chunk.ChunkAvailabilityListener
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import ch.oliverlanz.memento.infrastructure.observability.OperatorMessages
+import ch.oliverlanz.memento.infrastructure.worldstorage.WorldStorageService
 import ch.oliverlanz.memento.infrastructure.worldscan.FileMetadataProvider
 import java.lang.Math
+import java.nio.file.Files
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -136,6 +138,117 @@ class WorldScanner : ChunkAvailabilityListener {
         val plan = pendingProviderStartPlan ?: return
         val scanTick = pendingProviderStartScanTick ?: return
         attemptStartFileProvider(plan = plan, scanTick = scanTick, fromRetry = true)
+    }
+
+    /**
+     * Region-scoped file rescan entrypoint used by renew-force prune completion.
+     *
+     * Contract:
+     * - no transition into active scan mode,
+     * - no retry scheduling,
+     * - emits normal metadata facts through existing ingestion pathways.
+     */
+    fun startRegionRescan(
+        world: net.minecraft.registry.RegistryKey<net.minecraft.world.World>,
+        regionX: Int,
+        regionZ: Int,
+        reason: String,
+        scanTick: Long,
+    ): Boolean {
+        val srv = server ?: return false
+        val provider = fileMetadataProvider ?: return false
+        if (activeScan.get()) {
+            MementoLog.info(
+                MementoConcept.SCANNER,
+                "region rescan rejected active-scan-running world={} region=({}, {}) reason={}",
+                world.value,
+                regionX,
+                regionZ,
+                reason,
+            )
+            return false
+        }
+
+        val root = srv.getSavePath(net.minecraft.util.WorldSavePath.ROOT)
+        val triple = WorldStorageService.resolveRegionTriple(root, world, regionX, regionZ)
+        val regionFile = triple.region
+        val missingKinds = buildList {
+            if (!Files.exists(triple.region)) add(WorldStorageService.RegionDataKind.REGION.name)
+            if (!Files.exists(triple.entities)) add(WorldStorageService.RegionDataKind.ENTITIES.name)
+            if (!Files.exists(triple.poi)) add(WorldStorageService.RegionDataKind.POI.name)
+        }
+
+        if (missingKinds.isNotEmpty()) {
+            emitMissingRegionFacts(world, regionX, regionZ, scanTick)
+            MementoLog.info(
+                MementoConcept.SCANNER,
+                "region rescan skipped missing-region-triple world={} region=({}, {}) missingKinds={} reason={}",
+                world.value,
+                regionX,
+                regionZ,
+                missingKinds.joinToString(","),
+                reason,
+            )
+            return true
+        }
+
+        val plan =
+            WorldDiscoveryPlan(
+                worlds =
+                    listOf(
+                        DiscoveredWorld(
+                            world = world,
+                            regions =
+                                listOf(
+                                    RegionRef(
+                                        x = regionX,
+                                        z = regionZ,
+                                        file = regionFile.toAbsolutePath(),
+                                    )
+                                ),
+                        )
+                    ),
+            )
+        val discoveredChunks = ChunkDiscovery().discover(plan)
+        val chunksToScan =
+            discoveredChunks.worlds.firstOrNull()?.regions?.firstOrNull()?.chunks?.size ?: 0
+
+        if (chunksToScan == 0) {
+            emitMissingRegionFacts(world, regionX, regionZ, scanTick)
+            MementoLog.info(
+                MementoConcept.SCANNER,
+                "region rescan completed empty-region world={} region=({}, {}) reason={}",
+                world.value,
+                regionX,
+                regionZ,
+                reason,
+            )
+            return true
+        }
+
+        val started = provider.start(discoveredChunks, scanTick)
+        if (!started) {
+            MementoLog.info(
+                MementoConcept.SCANNER,
+                "region rescan rejected busy world={} region=({}, {}) reason={}",
+                world.value,
+                regionX,
+                regionZ,
+                reason,
+            )
+            return false
+        }
+
+        MementoLog.info(
+            MementoConcept.SCANNER,
+            "region rescan started world={} region=({}, {}) chunks={} reason={}",
+            world.value,
+            regionX,
+            regionZ,
+            chunksToScan,
+            reason,
+        )
+        return true
     }
 
     /** Application ingestion boundary for future providers (e.g. file-based readers). */
@@ -565,5 +678,22 @@ class WorldScanner : ChunkAvailabilityListener {
                 .joinToString(prefix = "[", postfix = "]", separator = ",") { reason ->
                     "${reason.name}=${counts[reason] ?: 0}"
                 }
+    }
+
+    private fun emitMissingRegionFacts(
+        world: net.minecraft.registry.RegistryKey<net.minecraft.world.World>,
+        regionX: Int,
+        regionZ: Int,
+        scanTick: Long,
+    ) {
+        val removed = worldMapService?.expungeRegionOnTickThread(world, regionX, regionZ, scanTick) ?: 0
+        MementoLog.info(
+            MementoConcept.SCANNER,
+            "region rescan missing-region expunge world={} region=({}, {}) removedChunkRecords={}",
+            world.value,
+            regionX,
+            regionZ,
+            removed,
+        )
     }
 }

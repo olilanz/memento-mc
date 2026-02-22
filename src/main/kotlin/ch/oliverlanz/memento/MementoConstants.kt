@@ -210,4 +210,10 @@ object MementoConstants {
      * If dirty threshold is not reached, worker starts once this debounce interval elapses.
      */
     const val MEMENTO_RENEWAL_PROJECTION_DIRTY_DEBOUNCE_MS: Long = 250L
+
+    /** Backup suffix used by force-prune region file cut-over (`r.x.z.mca` -> `r.x.z.mca.memento.backup`). */
+    const val MEMENTO_RENEW_FORCE_BACKUP_SUFFIX: String = ".memento.backup"
+
+    /** Synthetic batch name prefix used for force-renew chunk-batch execution path. */
+    const val MEMENTO_RENEW_FORCE_BATCH_PREFIX: String = "__memento_force_batch_"
 }

@@ -2,7 +2,6 @@ package ch.oliverlanz.memento.domain.renewal.projection
 
 import ch.oliverlanz.memento.MementoConstants
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
-import ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry
 import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
 import ch.oliverlanz.memento.domain.worldmap.WorldMapService
 import ch.oliverlanz.memento.infrastructure.async.GlobalAsyncExclusionGate
@@ -27,6 +26,10 @@ fun interface RenewalProjectionStableListener {
  * - Worker output is generation-tagged and must pass generation/supersession checks before commit.
  */
 class RenewalProjection {
+    private companion object {
+        private const val NEIGHBOR_RADIUS = 32
+    }
+
     private var worldMapService: WorldMapService? = null
 
     private val dirtySet = linkedSetOf<ChunkKey>()
@@ -48,9 +51,6 @@ class RenewalProjection {
     private var analysisState: RenewalAnalysisState = RenewalAnalysisState.COMPUTING
 
     @Volatile
-    private var decision: RenewalDecision? = null
-
-    @Volatile
     private var attached: Boolean = false
 
     private data class InFlightJob(
@@ -68,8 +68,8 @@ class RenewalProjection {
 
     private data class WorkerResult(
         val generation: Long,
+        val snapshotEntries: List<ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>,
         val metricsByChunk: Map<ChunkKey, RenewalChunkMetrics>,
-        val decision: RenewalDecision?,
     )
 
     fun attach(service: WorldMapService) {
@@ -96,7 +96,6 @@ class RenewalProjection {
         generationHead = 0L
         appliedGeneration = 0L
         metricsByChunk.clear()
-        decision = null
         analysisState = RenewalAnalysisState.COMPUTING
         stableListeners.clear()
     }
@@ -117,7 +116,8 @@ class RenewalProjection {
             state = analysisState,
             pendingWorkSetSize = pending,
             trackedChunks = metricsByChunk.size,
-            hasStableDecision = analysisState == RenewalAnalysisState.STABLE && decision != null,
+            hasStableSnapshot = analysisState == RenewalAnalysisState.STABLE,
+            stableGeneration = if (analysisState == RenewalAnalysisState.STABLE) appliedGeneration else null,
             blockedOnGate = blockedOnGate,
             runningDurationMs = runningDuration,
             lastCompletedDurationMs = lastCompletedDurationMs,
@@ -126,13 +126,13 @@ class RenewalProjection {
         )
     }
 
-    fun decisionView(): RenewalDecision? = decision
-
     fun stableSnapshotOrNull(): RenewalStableSnapshot? {
         if (analysisState != RenewalAnalysisState.STABLE) return null
+        val service = worldMapService ?: return null
         return RenewalStableSnapshot(
+            generation = appliedGeneration,
+            snapshotEntries = service.substrate().snapshot(),
             metricsByChunk = metricsByChunk.toMap(),
-            decision = decision,
         )
     }
 
@@ -225,7 +225,6 @@ class RenewalProjection {
 
         metricsByChunk.clear()
         metricsByChunk.putAll(result.metricsByChunk)
-        decision = result.decision
         appliedGeneration = result.generation
         analysisState = RenewalAnalysisState.STABLE
         supersededDuringInFlight = false
@@ -233,15 +232,18 @@ class RenewalProjection {
 
         MementoLog.debug(
             MementoConcept.PROJECTION,
-            "worker apply generation={} reason={} durationMs={} tracked={} hasDecision={}",
+            "worker apply generation={} reason={} durationMs={} tracked={}",
             appliedGeneration,
             job.reason.name,
             durationMs,
             metricsByChunk.size,
-            decision != null,
         )
 
-        val stable = RenewalStableSnapshot(metricsByChunk.toMap(), decision)
+        val stable = RenewalStableSnapshot(
+            generation = result.generation,
+            snapshotEntries = result.snapshotEntries,
+            metricsByChunk = metricsByChunk.toMap(),
+        )
         stableListeners.forEach { listener ->
             try {
                 listener.onProjectionStable(stable)
@@ -335,13 +337,13 @@ class RenewalProjection {
 
     private fun computeWorkerResult(
         generation: Long,
-        snapshot: List<ChunkScanSnapshotEntry>,
+        snapshot: List<ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>,
     ): WorkerResult {
         if (snapshot.isEmpty()) {
             return WorkerResult(
                 generation = generation,
+                snapshotEntries = emptyList(),
                 metricsByChunk = emptyMap(),
-                decision = null,
             )
         }
 
@@ -371,144 +373,34 @@ class RenewalProjection {
             )
         }
 
-        val decision = computeDecision(
-            snapshot = snapshot,
-            livelyChunkSet = livelyChunkSet,
-            forgettableByChunk = forgettableByChunk,
-        )
-
-        when (decision) {
-            is RenewalDecision.Region -> {
-                metrics.replaceAll { key, value ->
-                    if (key.world.value.toString() == decision.region.worldId &&
-                        key.regionX == decision.region.regionX &&
-                        key.regionZ == decision.region.regionZ
-                    ) {
-                        value.copy(eligibleByRegionCandidateIndex = 1.0)
-                    } else {
-                        value
-                    }
-                }
-            }
-
-            is RenewalDecision.ChunkBatch -> {
-                decision.chunks.forEach { key ->
-                    val value = metrics[key] ?: RenewalChunkMetrics()
-                    metrics[key] = value.copy(eligibleByChunkCandidateIndex = 1.0)
-                }
-            }
-
-            null -> Unit
-        }
-
         return WorkerResult(
             generation = generation,
+            snapshotEntries = snapshot,
             metricsByChunk = metrics,
-            decision = decision,
         )
     }
 
     private data class SnapshotIndex(
-        val byKey: Map<ChunkKey, ChunkScanSnapshotEntry>,
-        val keysByWorld: Map<RegistryKey<World>, List<ChunkKey>>,
+        val byKey: Map<ChunkKey, ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>,
+        val byPackedChunkByWorld: Map<RegistryKey<World>, Map<Long, ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>>,
     )
 
-    private fun buildSnapshotIndex(entries: List<ChunkScanSnapshotEntry>): SnapshotIndex {
+    private fun buildSnapshotIndex(entries: List<ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>): SnapshotIndex {
         val byKey = entries.associateBy { it.key }
-        val keysByWorld = entries
+        val byPackedChunkByWorld = entries
             .groupBy { it.key.world }
-            .mapValues { (_, list) -> list.map { it.key } }
+            .mapValues { (_, list) ->
+                linkedMapOf<Long, ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>().apply {
+                    list.forEach { entry ->
+                        this[packChunk(entry.key.chunkX, entry.key.chunkZ)] = entry
+                    }
+                }
+            }
 
         return SnapshotIndex(
             byKey = byKey,
-            keysByWorld = keysByWorld,
+            byPackedChunkByWorld = byPackedChunkByWorld,
         )
-    }
-
-    private fun computeDecision(
-        snapshot: List<ChunkScanSnapshotEntry>,
-        livelyChunkSet: Set<ChunkKey>,
-        forgettableByChunk: Map<ChunkKey, Boolean>,
-    ): RenewalDecision? {
-        val chunksByRegion = snapshot.groupBy { Triple(it.key.world.value.toString(), it.key.regionX, it.key.regionZ) }
-        val regionCandidates = linkedSetOf<RegionKey>()
-
-        chunksByRegion.forEach { (region, entries) ->
-            val allRegionForgettable = entries.all { forgettableByChunk[it.key] == true }
-            if (!allRegionForgettable) return@forEach
-
-            val okNeighbors = neighborRegions8(region.second, region.third).all { (rx, rz) ->
-                val neighborEntries = chunksByRegion[Triple(region.first, rx, rz)]
-                if (neighborEntries == null) return@all true
-                neighborEntries.all { forgettableByChunk[it.key] == true }
-            }
-
-            if (okNeighbors) {
-                regionCandidates += RegionKey(region.first, region.second, region.third)
-            }
-        }
-
-        if (regionCandidates.isNotEmpty()) {
-            val livelyRegions = livelyChunkSet
-                .map { RegionKey(it.world.value.toString(), it.regionX, it.regionZ) }
-                .toSet()
-
-            return regionCandidates
-                .sortedWith(
-                    compareByDescending<RegionKey> { candidate ->
-                        minChebyshevDistanceToLivelyRegions(candidate, livelyRegions)
-                    }.thenBy { it.worldId }
-                        .thenBy { it.regionZ }
-                        .thenBy { it.regionX }
-                )
-                .firstOrNull()
-                ?.let { RenewalDecision.Region(it) }
-        }
-
-        val livelyChunks = livelyChunkSet.toList()
-        val chunkCandidates = snapshot
-            .asSequence()
-            .map { it.key }
-            .filter { forgettableByChunk[it] == true }
-            .sortedWith(
-                compareByDescending<ChunkKey> { candidate ->
-                    minChebyshevDistanceToLivelyChunks(candidate, livelyChunks)
-                }.thenBy { it.world.value.toString() }
-                    .thenBy { it.chunkZ }
-                    .thenBy { it.chunkX }
-            )
-            .take(64)
-            .toList()
-
-        if (chunkCandidates.isEmpty()) return null
-        return RenewalDecision.ChunkBatch(chunkCandidates)
-    }
-
-    private fun minChebyshevDistanceToLivelyRegions(candidate: RegionKey, lively: Set<RegionKey>): Int {
-        if (lively.isEmpty()) return Int.MAX_VALUE
-        return lively.asSequence()
-            .filter { it.worldId == candidate.worldId }
-            .map { kotlin.math.max(kotlin.math.abs(candidate.regionX - it.regionX), kotlin.math.abs(candidate.regionZ - it.regionZ)) }
-            .minOrNull() ?: Int.MAX_VALUE
-    }
-
-    private fun minChebyshevDistanceToLivelyChunks(candidate: ChunkKey, lively: List<ChunkKey>): Int {
-        if (lively.isEmpty()) return Int.MAX_VALUE
-        return lively.asSequence()
-            .filter { it.world == candidate.world }
-            .map { kotlin.math.max(kotlin.math.abs(candidate.chunkX - it.chunkX), kotlin.math.abs(candidate.chunkZ - it.chunkZ)) }
-            .minOrNull() ?: Int.MAX_VALUE
-    }
-
-    private fun neighborRegions8(regionX: Int, regionZ: Int): List<Pair<Int, Int>> {
-        val out = ArrayList<Pair<Int, Int>>(8)
-        for (dx in -1..1) {
-            for (dz in -1..1) {
-                if (dx == 0 && dz == 0) continue
-                out += (regionX + dx) to (regionZ + dz)
-            }
-        }
-        return out
     }
 
     private fun computeForgettability(
@@ -520,19 +412,24 @@ class RenewalProjection {
         if (currentTicks == null) return 0.0
         if (currentTicks > 0L) return 0.0
 
-        val worldKeys = index.keysByWorld[key.world] ?: return 0.0
-        val hasNeighborWithActivity = worldKeys.asSequence()
-            .filter {
-                val dx = kotlin.math.abs(it.chunkX - key.chunkX)
-                val dz = kotlin.math.abs(it.chunkZ - key.chunkZ)
-                kotlin.math.max(dx, dz) <= 32
-            }
-            .any { neighborKey ->
-                val neighbor = index.byKey[neighborKey]
+        val worldByPackedChunk = index.byPackedChunkByWorld[key.world] ?: return 0.0
+        var hasNeighborWithActivity = false
+        for (dx in -NEIGHBOR_RADIUS..NEIGHBOR_RADIUS) {
+            if (hasNeighborWithActivity) break
+            for (dz in -NEIGHBOR_RADIUS..NEIGHBOR_RADIUS) {
+                val neighbor = worldByPackedChunk[packChunk(key.chunkX + dx, key.chunkZ + dz)]
                 val t = neighbor?.signals?.inhabitedTimeTicks
-                t == null || t > 0L
+                if (t == null || t > 0L) {
+                    hasNeighborWithActivity = true
+                    break
+                }
             }
+        }
 
         return if (hasNeighborWithActivity) 0.0 else 1.0
+    }
+
+    private fun packChunk(x: Int, z: Int): Long {
+        return (x.toLong() shl 32) xor (z.toLong() and 0xffffffffL)
     }
 }

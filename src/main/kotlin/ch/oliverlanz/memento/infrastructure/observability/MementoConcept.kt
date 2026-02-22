@@ -8,6 +8,7 @@ package ch.oliverlanz.memento.infrastructure.observability
 enum class MementoConcept {
     STONE,
     RENEWAL,
+    PRUNING,
     PROJECTION,
     SCANNER,
     DRIVER,
