@@ -24,7 +24,6 @@ import ch.oliverlanz.memento.domain.events.StoneLifecycleTrigger
 import ch.oliverlanz.memento.domain.stones.StoneAuthority
 import ch.oliverlanz.memento.domain.stones.StoneAuthorityWiring
 import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
-import ch.oliverlanz.memento.infrastructure.renewal.RenewalProjectionCsvExporter
 import ch.oliverlanz.memento.infrastructure.pruning.WorldPruningService
 import ch.oliverlanz.memento.infrastructure.async.GlobalAsyncExclusionGate
 import ch.oliverlanz.memento.infrastructure.pulse.PulseCadence
@@ -62,7 +61,6 @@ object Memento : ModInitializer {
     }
 
     private val onWorldScanCompleted = WorldScanListener { _, _ ->
-        RenewalProjectionCsvExporter.armForNextStableAfterScan()
         renewalProjection?.observeWorldScanCompleted()
     }
 
@@ -136,19 +134,13 @@ object Memento : ModInitializer {
 
             renewalProjection = RenewalProjection().also { projection ->
                 projection.attach(checkNotNull(worldMapService))
-                projection.addStableListener(RenewalProjectionCsvExporter)
 
                 val operatorListener = RenewalProjectionStableListener {
                     val status = projection.statusView()
                     val durationText = status.lastCompletedDurationMs
                         ?.let { " in ${formatDuration(it)}" }
                         ?: ""
-                    val outcome = when (projection.decisionView()) {
-                        is ch.oliverlanz.memento.domain.renewal.projection.RenewalDecision.Region -> "a renewal area"
-                        is ch.oliverlanz.memento.domain.renewal.projection.RenewalDecision.ChunkBatch -> "renewal chunks"
-                        null -> "no safe renewal target"
-                    }
-                    OperatorMessages.info(server, "Renewal analysis finished$durationText and found $outcome.")
+                    OperatorMessages.info(server, "Renewal analysis finished$durationText and refreshed world-view metrics.")
                 }
                 projection.addStableListener(operatorListener)
                 projectionOperatorListener = operatorListener
@@ -194,8 +186,6 @@ object Memento : ModInitializer {
                 it.attachFileMetadataProvider(TwoPassRegionFileMetadataProvider(it.metadataIngestionPort()))
                 it.addListener(onWorldScanCompleted)
             }
-
-            RenewalProjectionCsvExporter.attach(server, checkNotNull(worldMapService))
 
             worldScanner = scanner
             WorldPruningService.attach(server, scanner)
@@ -265,9 +255,6 @@ object Memento : ModInitializer {
             worldScanner = null
             WorldPruningService.detach()
 
-            RenewalProjectionCsvExporter.detach()
-
-            renewalProjection?.removeStableListener(RenewalProjectionCsvExporter)
             projectionOperatorListener?.let { renewalProjection?.removeStableListener(it) }
             projectionOperatorListener = null
             renewalProjection?.detach()
