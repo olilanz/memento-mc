@@ -165,9 +165,23 @@ It owns:
 
 * recomputation state (`COMPUTING`, `STABILIZING`, `STABLE`)
 * generation-scoped snapshot evaluation
-* materialized renewal decision for read-only surfaces
+* materialized world-view metrics for read-only surfaces
 
 `RenewalProjection` is fully recomputable from `WorldMap` facts and must not persist derived projection metrics into factual world memory.
+
+### Eligibility evaluation service
+
+Renewal target selection is owned by a dedicated eligibility boundary (ADR‑020), not by `RenewalProjection`.
+
+It owns:
+
+* command-time evaluation of region/chunk eligibility from a **stable** projection snapshot
+* deterministic candidate ordering and final executable target selection
+* eligibility-transaction observability surfaces, including CSV export timing
+* pure eligibility derivation output (value-object result only)
+
+It does not own projection lifecycle and does not mutate `WorldMap` directly.
+It must be side-effect free: no world mutation, no projection mutation, no scheduling, no event emission.
 
 ### WorldMap
 
@@ -278,7 +292,8 @@ flowchart TB
     StoneAuthority --> StoneMap
     StoneMap --> Renewal
     WorldMap --> Projection
-    Projection --> Decision
+    Projection --> EligibilityService
+    EligibilityService --> Decision
     Decision --> Inspect
     Driver --> Engine
     Engine --> Driver
@@ -307,7 +322,13 @@ The following properties must remain true:
 * No central orchestrator
 * Pulse generator is cadence transport only, never semantic orchestration
 * No internal load scheduler
-* RenewalProjection is a formal derived boundary: ephemeral, recomputable, and generation-guarded on apply
+* RenewalProjection is a formal derived boundary: ephemeral, recomputable, generation-guarded on apply, and limited to derived world-view metrics
+* Executable renewal decision selection is forbidden inside RenewalProjection
+* Eligibility evaluation is command-time only and requires `RenewalProjection` state `STABLE`
+* Eligibility evaluation must run against a generation-bound stable projection snapshot and carry that generation id in its result
+* Dependency direction is one-way: command layer calls eligibility service; projection does not depend on eligibility service
+* CSV eligibility export is bound to the same eligibility evaluation transaction that produced command output
+* Eligibility CSV includes projection generation id and reflects the exact eligibility result consumed by command handling
 * Derived renewal metrics/decisions must not be persisted into WorldMap factual memory
 * Global async exclusion gate is infra-only: one background slot, reject-while-busy, no queue/fairness/prioritization semantics
 * Busy retry ownership is caller-side and cadence-driven (current policy: MEDIUM cadence), not gate-owned
@@ -469,7 +490,7 @@ Cadence tier values are centralized in `MementoConstants` and currently locked t
 
 ---
 
-### ADR-017: Renewal projection is a derived boundary
+### ADR-017: Renewal projection is a derived boundary (superseded by ADR-020)
 
 Renewal evaluation is isolated into a dedicated projection layer that is fully derived from `WorldMementoMap`.
 
@@ -493,3 +514,23 @@ All background work (world scanning, renewal projection evaluation, and future r
 
 Only one background task may run at a time. Concurrent submissions are rejected while the slot is busy. Retry responsibility remains with the caller.  
 → Without serialized background execution, scanning and renewal processing could overlap, compete for resources, or introduce race conditions when renewal begins mutating world data.
+
+---
+
+### ADR-020: Projection world-view boundary and command-time eligibility authority
+
+`RenewalProjection` is restricted to derived world-view state and lifecycle only. It may compute and expose derived chunk/region metrics, but it must not materialize executable renewal decisions.
+
+Executable renewal target selection is owned by a dedicated eligibility boundary that runs only at command execution time and only when projection state is `STABLE`.
+
+Eligibility boundary behavior is pure: it returns an immutable result object and performs no side effects.
+
+Eligibility evaluation must be deterministic over the exact stable projection snapshot used for the command transaction.
+
+The eligibility result carries projection generation id and candidate sets, so command handling and observability are bound to one stable snapshot generation.
+
+Eligibility CSV export is bound to that same evaluation transaction. CSV no longer depends on scan-completion timing. Schema carries boolean eligibility flags (`eligible_as_region`, `eligible_as_chunk`) rather than projection-owned index fields.
+
+Projection does not depend on eligibility service. Direction is command layer → eligibility service → projection read-only snapshot.
+
+This keeps detection/evaluation state separate from execution-time intent and preserves clear authority boundaries between projection lifecycle and operator-invoked action selection.
