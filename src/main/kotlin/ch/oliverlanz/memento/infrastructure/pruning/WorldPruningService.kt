@@ -105,6 +105,16 @@ object WorldPruningService {
 
     fun statusView(): Pair<OperationState, Completion?> = state to lastCompletion
 
+    /**
+     * Hot-path guard for command-layer force queueing.
+     *
+     * true => no prune operation is currently in-flight.
+     */
+    fun isIdle(): Boolean = state != OperationState.SUBMITTED
+
+    /** Latest completed prune outcome (if any). */
+    fun lastCompletionOrNull(): Completion? = lastCompletion
+
     fun submit(dimension: RegistryKey<World>, region: RegionKey): SubmitResult {
         val srv = server
         if (srv == null) {

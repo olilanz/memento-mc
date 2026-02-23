@@ -49,6 +49,7 @@ import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import ch.oliverlanz.memento.infrastructure.worldscan.MementoCsvWriter
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
 import java.util.Locale
+import kotlin.collections.ArrayDeque
 
 /**
  * Application-layer command handlers.
@@ -63,6 +64,23 @@ object CommandHandlers {
         val storedGeneration: Long,
         val storedItems: List<RenewalRankedCandidate>,
     )
+
+    private data class ForceQueue(
+        val owner: String,
+        val baseGeneration: Long,
+        val pending: ArrayDeque<RenewalRankedCandidate>,
+        val total: Int,
+        var submitted: Int = 0,
+        var skippedStale: Int = 0,
+        var lastWaitReason: String? = null,
+        var lastSeenPruneCompletionKey: String? = null,
+    )
+
+    private enum class QueueSubmitResult {
+        SUBMITTED,
+        WAIT_RETRY,
+        HARD_FAIL,
+    }
 
     private const val INSPECT_MAX_CHUNK_PROBES = 4
     private const val INSPECT_MAX_OTHER_IDENTIFIERS = 7
@@ -94,6 +112,9 @@ object CommandHandlers {
     @Volatile
     private var renewPreviewBinding: PreviewBinding? = null
 
+    @Volatile
+    private var renewForceQueue: ForceQueue? = null
+
     fun attachVisualizationEngine(engine: EffectsHost) {
         effectsHost = engine
     }
@@ -116,6 +137,10 @@ object CommandHandlers {
 
     fun detachRenewalProjection() {
         renewalProjection = null
+    }
+
+    fun onMediumPulse() {
+        processRenewForceQueue()
     }
 
     fun attachStoneNameSuggestions() {
@@ -372,6 +397,11 @@ object CommandHandlers {
             return 0
         }
 
+        if (renewForceQueue != null) {
+            source.sendError(Text.literal("[Memento] a force queue is already running; wait for completion."))
+            return 0
+        }
+
         val preview = renewPreviewBinding
         if (preview == null) {
             source.sendError(Text.literal("[Memento] no preview stored. Run /memento renew first."))
@@ -386,17 +416,6 @@ object CommandHandlers {
             return 0
         }
 
-        if (projection.hasPendingChanges()) {
-            source.sendError(Text.literal("[Memento] Plan may be stale while renewal analysis is updating; run /memento renew again shortly."))
-            MementoLog.info(
-                MementoConcept.RENEWAL,
-                "renew force rejected reason=projection_pending_changes generation={} by={}",
-                snapshot.generation,
-                source.name,
-            )
-            return 0
-        }
-
         val requested = preview.storedItems.take(count)
         if (requested.isEmpty()) {
             source.sendError(Text.literal("[Memento] no stored preview items available for force renewal."))
@@ -406,33 +425,45 @@ object CommandHandlers {
         if (snapshot.generation != preview.storedGeneration) {
             MementoLog.info(
                 MementoConcept.RENEWAL,
-                "renew force drift detected storedGeneration={} currentGeneration={} requested={} by={}",
+                "renew force queue generation drift-at-enqueue storedGeneration={} currentGeneration={} requested={} by={}",
                 preview.storedGeneration,
                 snapshot.generation,
                 requested.size,
                 source.name,
             )
-
-            val invalid = requested.firstOrNull { !projection.isStillEligible(snapshot, it.id) }
-            if (invalid != null) {
-                source.sendError(Text.literal("[Memento] Plan changed; run /memento renew again."))
-                MementoLog.info(
-                    MementoConcept.RENEWAL,
-                    "renew force drift revalidation failed candidate={} by={}",
-                    invalid.id,
-                    source.name,
-                )
-                return 0
-            }
-            MementoLog.info(
-                MementoConcept.RENEWAL,
-                "renew force drift revalidation passed requested={} by={}",
-                requested.size,
-                source.name,
-            )
         }
 
-        return executeCandidates(source, requested)
+        val pending = ArrayDeque<RenewalRankedCandidate>()
+        requested.forEach { pending.addLast(it) }
+
+        val completion = WorldPruningService.lastCompletionOrNull()
+        renewForceQueue = ForceQueue(
+            owner = source.name,
+            baseGeneration = snapshot.generation,
+            pending = pending,
+            total = requested.size,
+            lastSeenPruneCompletionKey = completion?.let { completionKey(it) },
+        )
+
+        MementoLog.info(
+            MementoConcept.RENEWAL,
+            "renew force queue enqueued generation={} items={} by={}",
+            snapshot.generation,
+            requested.size,
+            source.name,
+        )
+
+        source.sendFeedback(
+            {
+                Text.literal(
+                    "[Memento] force queue started with ${requested.size} item(s). " +
+                        "Execution will continue as pruning/projection gates allow."
+                ).formatted(Formatting.YELLOW)
+            },
+            false,
+        )
+
+        return 1
     }
 
     fun addWitherstone(source: ServerCommandSource, name: String, radius: Int, daysToMaturity: Int): Int {
@@ -1076,6 +1107,225 @@ object CommandHandlers {
         }
 
         return if (successCount > 0) 1 else 0
+    }
+
+    private fun processRenewForceQueue() {
+        // Hot path guard: do not evaluate gate surfaces when there is no queued work.
+        val queue = renewForceQueue ?: return
+
+        val projection = renewalProjection
+        if (projection == null) {
+            abortQueue(queue, "projection_unavailable")
+            return
+        }
+
+        val latestCompletion = WorldPruningService.lastCompletionOrNull()
+        if (latestCompletion != null) {
+            val key = completionKey(latestCompletion)
+            if (queue.lastSeenPruneCompletionKey != key) {
+                queue.lastSeenPruneCompletionKey = key
+                val success = latestCompletion.outcome == WorldPruningService.Outcome.success ||
+                    latestCompletion.outcome == WorldPruningService.Outcome.pruned_with_residual_backup
+                if (!success) {
+                    abortQueue(queue, "prune_completion_failed outcome=${latestCompletion.outcome.name}")
+                    return
+                }
+                MementoLog.info(
+                    MementoConcept.RENEWAL,
+                    "renew force queue prune completion accepted world={} region=({}, {}) outcome={} owner={}",
+                    latestCompletion.target.worldId,
+                    latestCompletion.target.regionX,
+                    latestCompletion.target.regionZ,
+                    latestCompletion.outcome.name,
+                    queue.owner,
+                )
+            }
+        }
+
+        if (queue.pending.isEmpty()) {
+            MementoLog.info(
+                MementoConcept.RENEWAL,
+                "renew force queue completed owner={} total={} submitted={} skippedStale={}",
+                queue.owner,
+                queue.total,
+                queue.submitted,
+                queue.skippedStale,
+            )
+            renewForceQueue = null
+            return
+        }
+
+        if (!WorldPruningService.isIdle()) {
+            logQueueWait(queue, "pruning_busy")
+            return
+        }
+
+        if (projection.hasPendingChanges()) {
+            logQueueWait(queue, "projection_pending")
+            return
+        }
+
+        val snapshot = projection.committedSnapshotOrNull()
+        if (snapshot == null) {
+            abortQueue(queue, "projection_snapshot_unavailable")
+            return
+        }
+
+        val candidate = queue.pending.first()
+        if (!projection.isStillEligible(snapshot, candidate.id)) {
+            queue.pending.removeFirst()
+            queue.skippedStale++
+            queue.lastWaitReason = null
+            MementoLog.info(
+                MementoConcept.RENEWAL,
+                "renew force queue skip reason=stale generation={} rank={} id={} owner={}",
+                snapshot.generation,
+                candidate.rank,
+                candidate.id,
+                queue.owner,
+            )
+            return
+        }
+
+        when (submitQueuedCandidate(candidate, queue.owner)) {
+            QueueSubmitResult.SUBMITTED -> Unit
+            QueueSubmitResult.WAIT_RETRY -> return
+            QueueSubmitResult.HARD_FAIL -> {
+                abortQueue(queue, "submit_failed rank=${candidate.rank} id=${candidate.id}")
+                return
+            }
+        }
+
+        queue.pending.removeFirst()
+        queue.submitted++
+        queue.lastWaitReason = null
+
+        MementoLog.info(
+            MementoConcept.RENEWAL,
+            "renew force queue submit generation={} rank={} id={} owner={} remaining={}",
+            snapshot.generation,
+            candidate.rank,
+            candidate.id,
+            queue.owner,
+            queue.pending.size,
+        )
+    }
+
+    private fun submitQueuedCandidate(candidate: RenewalRankedCandidate, owner: String): QueueSubmitResult {
+        return when (candidate.id.action) {
+            RenewalCandidateAction.REGION_PRUNE -> {
+                val region = RegionKey(
+                    worldId = candidate.id.worldKey,
+                    regionX = candidate.id.regionX ?: return QueueSubmitResult.HARD_FAIL,
+                    regionZ = candidate.id.regionZ ?: return QueueSubmitResult.HARD_FAIL,
+                )
+
+                val dimension = resolveWorldKey(region.worldId) ?: return QueueSubmitResult.HARD_FAIL
+                when (val submit = WorldPruningService.submit(dimension, region)) {
+                    is WorldPruningService.SubmitResult.Submitted -> QueueSubmitResult.SUBMITTED
+                    is WorldPruningService.SubmitResult.Completed -> {
+                        val completion = submit.completion
+                        val temporaryBusy = completion.outcome == WorldPruningService.Outcome.rejected_busy
+                        if (temporaryBusy) {
+                            MementoLog.info(
+                                MementoConcept.RENEWAL,
+                                "renew force queue wait reason=pruning_rejected_busy rank={} id={} owner={} detail={}",
+                                candidate.rank,
+                                candidate.id,
+                                owner,
+                                completion.detail,
+                            )
+                            QueueSubmitResult.WAIT_RETRY
+                        } else {
+                            MementoLog.info(
+                                MementoConcept.RENEWAL,
+                                "renew force queue submit completed-immediate rank={} id={} owner={} outcome={} detail={}",
+                                candidate.rank,
+                                candidate.id,
+                                owner,
+                                completion.outcome.name,
+                                completion.detail,
+                            )
+                            QueueSubmitResult.HARD_FAIL
+                        }
+                    }
+                }
+            }
+
+            RenewalCandidateAction.CHUNK_RENEW -> {
+                val key = candidate.id.toChunkKeyOrNull() ?: return QueueSubmitResult.HARD_FAIL
+                if (forceChunkBatchRenewQueued(owner, listOf(key))) {
+                    QueueSubmitResult.SUBMITTED
+                } else {
+                    QueueSubmitResult.HARD_FAIL
+                }
+            }
+        }
+    }
+
+    private fun forceChunkBatchRenewQueued(owner: String, chunkKeys: List<ch.oliverlanz.memento.domain.worldmap.ChunkKey>): Boolean {
+        val chunksByWorld = chunkKeys.groupBy { it.world }
+        if (chunksByWorld.isEmpty()) return false
+
+        var submitted = 0
+        chunksByWorld.entries.sortedBy { it.key.value.toString() }.forEach { (world, chunks) ->
+            val scope = chunks.map { ChunkPos(it.chunkX, it.chunkZ) }.toSet()
+            val minX = chunks.minOf { it.chunkX }
+            val minZ = chunks.minOf { it.chunkZ }
+            val maxX = chunks.maxOf { it.chunkX }
+            val maxZ = chunks.maxOf { it.chunkZ }
+            val batchName =
+                "${ch.oliverlanz.memento.MementoConstants.MEMENTO_RENEW_FORCE_BATCH_PREFIX}${world.value}_${minX}_${minZ}_${maxX}_${maxZ}_${scope.size}"
+
+            RenewalTracker.upsertBatchDefinition(
+                name = batchName,
+                dimension = world,
+                chunks = scope,
+                trigger = RenewalTrigger.MANUAL,
+            )
+            submitted += scope.size
+        }
+
+        MementoLog.info(
+            MementoConcept.RENEWAL,
+            "renew force queue decision grain=chunk count={} groups={} by={}",
+            submitted,
+            chunksByWorld.size,
+            owner,
+        )
+        return submitted > 0
+    }
+
+    private fun logQueueWait(queue: ForceQueue, reason: String) {
+        if (queue.lastWaitReason == reason) return
+        queue.lastWaitReason = reason
+        MementoLog.info(
+            MementoConcept.RENEWAL,
+            "renew force queue wait reason={} owner={} pending={} submitted={} skippedStale={}",
+            reason,
+            queue.owner,
+            queue.pending.size,
+            queue.submitted,
+            queue.skippedStale,
+        )
+    }
+
+    private fun abortQueue(queue: ForceQueue, reason: String) {
+        MementoLog.info(
+            MementoConcept.RENEWAL,
+            "renew force queue aborted reason={} owner={} total={} submitted={} skippedStale={} remaining={}",
+            reason,
+            queue.owner,
+            queue.total,
+            queue.submitted,
+            queue.skippedStale,
+            queue.pending.size,
+        )
+        renewForceQueue = null
+    }
+
+    private fun completionKey(completion: WorldPruningService.Completion): String {
+        return "${completion.target.worldId}:${completion.target.regionX}:${completion.target.regionZ}:${completion.outcome.name}:${completion.detail ?: ""}"
     }
 
     private fun formatPreviewCandidate(candidate: RenewalRankedCandidate): String {

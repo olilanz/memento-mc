@@ -83,6 +83,7 @@ object Memento : ModInitializer {
         worldScanner?.onMediumPulse()
         renewalProjection?.onMediumPulse()
         WorldPruningService.tickThreadProcess()
+        CommandHandlers.onMediumPulse()
     }
 
     private val onLowPulse: (PulseClock) -> Unit = {
