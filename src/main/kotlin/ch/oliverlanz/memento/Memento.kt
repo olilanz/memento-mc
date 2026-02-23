@@ -130,17 +130,24 @@ object Memento : ModInitializer {
             PulseEvents.subscribe(PulseCadence.VERY_LOW, onUltraLowPulse)
             PulseEvents.subscribe(PulseCadence.ULTRA_LOW, onExtremeLowPulse)
 
-            worldMapService = WorldMapService().also { it.attach() }
+            worldMapService = WorldMapService().also { it.attach(server) }
 
             renewalProjection = RenewalProjection().also { projection ->
                 projection.attach(checkNotNull(worldMapService))
 
                 val operatorListener = RenewalProjectionStableListener {
+                    val reason = projection.statusView().lastCompletedReason
+                    if (reason != "SCAN_COMPLETED") {
+                        return@RenewalProjectionStableListener
+                    }
                     val status = projection.statusView()
                     val durationText = status.lastCompletedDurationMs
                         ?.let { " in ${formatDuration(it)}" }
                         ?: ""
-                    OperatorMessages.info(server, "Renewal analysis finished$durationText and refreshed world-view metrics.")
+                    OperatorMessages.info(
+                        server,
+                        "Renewal analysis finished$durationText and refreshed world-view metrics."
+                    )
                 }
                 projection.addStableListener(operatorListener)
                 projectionOperatorListener = operatorListener

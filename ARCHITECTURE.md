@@ -163,25 +163,44 @@ Renewal eligibility derivation is owned on the renewal side and must use `StoneM
 
 It owns:
 
-* recomputation state (`COMPUTING`, `STABILIZING`, `STABLE`)
-* generation-scoped snapshot evaluation
-* materialized world-view metrics for read-only surfaces
+* commit-based snapshot publication from continuously reacting recomputation
+* generation-scoped snapshot replacement (`generation++` on successful commit)
+* materialized world-view metrics, ranked renewal candidates, and explainability metadata for read-only surfaces
 
 `RenewalProjection` is fully recomputable from `WorldMap` facts and must not persist derived projection metrics into factual world memory.
 
-### Eligibility evaluation service
+Public projection surface doctrine:
 
-Renewal target selection is owned by a dedicated eligibility boundary (ADR‑020), not by `RenewalProjection`.
+* there is always exactly one visible committed snapshot
+* consumers never observe partial recomputation state
+* projection generation is internal binding/tracing data and is not gameplay-facing operator copy
+
+### Renewal command preview and execution binding
+
+Operator commands consume projection snapshots and own operator-facing binding semantics.
 
 It owns:
 
-* command-time evaluation of region/chunk eligibility from a **stable** projection snapshot
-* deterministic candidate ordering and final executable target selection
-* eligibility-transaction observability surfaces, including CSV export timing
-* pure eligibility derivation output (value-object result only)
+* `/memento renew` preview binding to the latest committed snapshot
+* storage of exactly what was shown to the operator (bound generation + ordered items)
+* `/memento renew force [N]` execution gating against that preview binding
+* fail-closed revalidation when projection generation changed since preview
+* enforcement of an initial-scan-completed gate for operator preview/force commands
 
 It does not own projection lifecycle and does not mutate `WorldMap` directly.
-It must be side-effect free: no world mutation, no projection mutation, no scheduling, no event emission.
+It must not introduce hidden queueing, backfill, substitution, or scheduler behavior.
+
+Operator preview trust gate:
+
+* `/memento renew` and `/memento renew force [N]` are rejected until first full scan completion is recorded
+* projection may continue commit/recompute before first scan completion, but those commits are non-authoritative for operator preview semantics
+
+Force revalidation doctrine on generation drift:
+
+* revalidation is item-based for the first `N` stored preview items only
+* revalidation uses the same projection-owned eligibility logic used by ranking
+* no ranking-list identity comparison is required
+* any failed item revalidation fails the entire force command
 
 ### WorldMap
 
@@ -322,13 +341,19 @@ The following properties must remain true:
 * No central orchestrator
 * Pulse generator is cadence transport only, never semantic orchestration
 * No internal load scheduler
-* RenewalProjection is a formal derived boundary: ephemeral, recomputable, generation-guarded on apply, and limited to derived world-view metrics
-* Executable renewal decision selection is forbidden inside RenewalProjection
-* Eligibility evaluation is command-time only and requires `RenewalProjection` state `STABLE`
-* Eligibility evaluation must run against a generation-bound stable projection snapshot and carry that generation id in its result
-* Dependency direction is one-way: command layer calls eligibility service; projection does not depend on eligibility service
-* CSV eligibility export is bound to the same eligibility evaluation transaction that produced command output
-* Eligibility CSV includes projection generation id and reflects the exact eligibility result consumed by command handling
+* RenewalProjection is a formal derived boundary: ephemeral, recomputable, commit-published, and authoritative for ranked renewal candidates and explainability metadata
+* RenewalProjection exposes commit-only snapshots: no public `COMPUTING`/`STABILIZING`/`STABLE` state
+* There is always exactly one visible committed projection snapshot; consumers never observe partial recomputation
+* Projection generation increments only on successful commit and is internal binding/tracing data, not gameplay-facing operator copy
+* Command dependency direction is one-way: command layer reads committed projection snapshot; projection does not depend on command layer
+* `/memento renew` stores operator preview binding as shown-items + bound generation from committed projection snapshot
+* `/memento renew force [N]` executes only from stored preview items; when generation changed, force revalidates each requested item and fails the whole command if any item is no longer eligible
+* `/memento renew` and `/memento renew force [N]` are rejected until initial full scan completion is recorded
+* No queueing/backfill/substitution is allowed in command execution binding; commands must not execute a plan the operator has not seen
+* Generation drift handling is item-eligibility revalidation only, not ranking-list identity comparison
+* Revalidation failure is fail-closed: no partial execution
+* CSV eligibility export is bound to the same projection-derived command transaction and reflects the exact ordered candidate set consumed by command handling
+* Eligibility CSV schema exposes `renewal_rank` (nullable integer) and `renewal_by_region_prune` (boolean)
 * Derived renewal metrics/decisions must not be persisted into WorldMap factual memory
 * Global async exclusion gate is infra-only: one background slot, reject-while-busy, no queue/fairness/prioritization semantics
 * Busy retry ownership is caller-side and cadence-driven (current policy: MEDIUM cadence), not gate-owned
@@ -352,6 +377,7 @@ The following properties must remain true:
 * Active scan may complete with unresolved leftovers recorded explicitly
 * Observability must explain stalling and progress
 * Inspect/operator-facing scheduler status remains human-facing; internal state fields remain diagnostic-level, not operator-copy contracts
+* Diagnostic observability surfaces must include initial scan completion, projection commit generation increment, preview binding creation, force generation-drift detection, revalidation pass/fail, and per-item execution outcomes
 
 Violating these invariants requires an explicit architectural decision.
 
@@ -517,11 +543,11 @@ Only one background task may run at a time. Concurrent submissions are rejected 
 
 ---
 
-### ADR-020: Projection world-view boundary and command-time eligibility authority
+### ADR-020: Projection world-view boundary and command-time eligibility authority (superseded by ADR-021)
 
 `RenewalProjection` is restricted to derived world-view state and lifecycle only. It may compute and expose derived chunk/region metrics, but it must not materialize executable renewal decisions.
 
-Executable renewal target selection is owned by a dedicated eligibility boundary that runs only at command execution time and only when projection state is `STABLE`.
+Executable renewal target selection was owned by a dedicated eligibility boundary that ran only at command execution time and only when projection state was `STABLE`.
 
 Eligibility boundary behavior is pure: it returns an immutable result object and performs no side effects.
 
@@ -534,3 +560,40 @@ Eligibility CSV export is bound to that same evaluation transaction. CSV no long
 Projection does not depend on eligibility service. Direction is command layer → eligibility service → projection read-only snapshot.
 
 This keeps detection/evaluation state separate from execution-time intent and preserves clear authority boundaries between projection lifecycle and operator-invoked action selection.
+
+---
+
+### ADR-021: Commit-only projection publication and projection-owned ranking authority
+
+`RenewalProjection` remains the derived world-view boundary but now also owns eligibility ordering/ranking authority.
+
+Projection behavior is commit-only:
+
+* recomputation may run continuously, but consumers see only fully committed snapshots
+* every successful commit atomically replaces the previous snapshot
+* `generation` increments on commit and is internal for traceability/binding
+
+Command semantics are binding-based:
+
+* `/memento renew` previews top ranked candidates from the latest committed snapshot and stores the exact shown list with bound generation
+* `/memento renew force [N]` executes only from stored preview items
+* if generation changed, each requested stored item must revalidate as eligible against current projection snapshot; any failed revalidation fails the whole command
+* no queue, no backfill, no silent substitution, no hidden scheduler
+
+Operator trust gate:
+
+* preview and force commands are rejected until initial full scan completion is recorded
+* projection commits before first full scan completion remain valid internal derived work but are not authoritative for operator preview
+
+Revalidation precision:
+
+* generation drift uses item-based eligibility revalidation for requested stored items only
+* no ranking-list identity comparison is required
+* no partial execution on revalidation failure
+
+CSV contract is updated for projection-owned ranking surfaces:
+
+* `renewal_rank` (nullable integer)
+* `renewal_by_region_prune` (boolean)
+
+This preserves detection/execution separation, keeps projection as the single derived algorithmic authority, and prevents execution of unseen operator plans.

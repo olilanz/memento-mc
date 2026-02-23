@@ -1,6 +1,7 @@
 package ch.oliverlanz.memento.domain.renewal.projection
 
 import ch.oliverlanz.memento.MementoConstants
+import ch.oliverlanz.memento.domain.renewal.eligibility.EligibilityService
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
 import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
 import ch.oliverlanz.memento.domain.worldmap.WorldMapService
@@ -14,15 +15,15 @@ import net.minecraft.registry.RegistryKey
 import net.minecraft.world.World
 
 fun interface RenewalProjectionStableListener {
-    fun onProjectionStable(snapshot: RenewalStableSnapshot)
+    fun onProjectionStable(snapshot: RenewalCommittedSnapshot)
 }
 
 /**
  * Hybrid projection authority model.
  *
  * Authority boundaries:
- * - Tick thread owns mutable projection state, snapshot capture, generation assignment, and commit.
- * - Worker thread performs pure computation on immutable snapshot input.
+ * - Tick thread owns mutable projection state, generation assignment, and commit publication.
+ * - Worker thread owns snapshot materialization and pure computation on that snapshot.
  * - Worker output is generation-tagged and must pass generation/supersession checks before commit.
  */
 class RenewalProjection {
@@ -33,12 +34,20 @@ class RenewalProjection {
     private var worldMapService: WorldMapService? = null
 
     private val dirtySet = linkedSetOf<ChunkKey>()
-    private val metricsByChunk = ConcurrentHashMap<ChunkKey, RenewalChunkMetrics>()
     private val stableListeners = CopyOnWriteArrayList<RenewalProjectionStableListener>()
+    private val metricsByChunk = ConcurrentHashMap<ChunkKey, RenewalChunkMetrics>()
+
+    @Volatile
+    private var committedSnapshot: RenewalCommittedSnapshot =
+        RenewalCommittedSnapshot(
+            generation = 0L,
+            snapshotEntries = emptyList(),
+            metricsByChunk = emptyMap(),
+            rankedCandidates = emptyList(),
+        )
 
     private var dirtySinceMs: Long? = null
     private var generationHead: Long = 0L
-    private var appliedGeneration: Long = 0L
     private var inFlight: InFlightJob? = null
     private var supersededDuringInFlight: Boolean = false
     private var scanRecomputeRequested: Boolean = false
@@ -48,10 +57,18 @@ class RenewalProjection {
     private var lastCompletedReason: TriggerReason? = null
 
     @Volatile
-    private var analysisState: RenewalAnalysisState = RenewalAnalysisState.COMPUTING
-
-    @Volatile
     private var attached: Boolean = false
+
+    /**
+     * Read-only safety signal for command surfaces.
+     *
+     * true means the projection has observed world-map changes not yet represented in a committed
+     * snapshot (dirty pending and/or worker running).
+     */
+    fun hasPendingChanges(): Boolean {
+        val hasDirty = synchronized(dirtySet) { dirtySet.isNotEmpty() }
+        return hasDirty || inFlight != null
+    }
 
     private data class InFlightJob(
         val generation: Long,
@@ -70,12 +87,12 @@ class RenewalProjection {
         val generation: Long,
         val snapshotEntries: List<ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>,
         val metricsByChunk: Map<ChunkKey, RenewalChunkMetrics>,
+        val rankedCandidates: List<RenewalRankedCandidate>,
     )
 
     fun attach(service: WorldMapService) {
         worldMapService = service
         attached = true
-        analysisState = RenewalAnalysisState.COMPUTING
     }
 
     fun detach() {
@@ -94,9 +111,13 @@ class RenewalProjection {
         lastCompletedAtMs = null
         lastCompletedReason = null
         generationHead = 0L
-        appliedGeneration = 0L
         metricsByChunk.clear()
-        analysisState = RenewalAnalysisState.COMPUTING
+        committedSnapshot = RenewalCommittedSnapshot(
+            generation = 0L,
+            snapshotEntries = emptyList(),
+            metricsByChunk = emptyMap(),
+            rankedCandidates = emptyList(),
+        )
         stableListeners.clear()
     }
 
@@ -112,12 +133,11 @@ class RenewalProjection {
         val now = System.currentTimeMillis()
         val pending = synchronized(dirtySet) { dirtySet.size }
         val runningDuration = inFlight?.let { now - it.startedAtMs }
+        val committed = committedSnapshot
         return RenewalProjectionStatusView(
-            state = analysisState,
             pendingWorkSetSize = pending,
             trackedChunks = metricsByChunk.size,
-            hasStableSnapshot = analysisState == RenewalAnalysisState.STABLE,
-            stableGeneration = if (analysisState == RenewalAnalysisState.STABLE) appliedGeneration else null,
+            committedGeneration = committed.generation,
             blockedOnGate = blockedOnGate,
             runningDurationMs = runningDuration,
             lastCompletedDurationMs = lastCompletedDurationMs,
@@ -126,14 +146,18 @@ class RenewalProjection {
         )
     }
 
-    fun stableSnapshotOrNull(): RenewalStableSnapshot? {
-        if (analysisState != RenewalAnalysisState.STABLE) return null
-        val service = worldMapService ?: return null
-        return RenewalStableSnapshot(
-            generation = appliedGeneration,
-            snapshotEntries = service.substrate().snapshot(),
-            metricsByChunk = metricsByChunk.toMap(),
-        )
+    fun committedSnapshotOrNull(): RenewalCommittedSnapshot? {
+        if (!attached) return null
+        return committedSnapshot
+    }
+
+    fun topRankedCandidates(limit: Int): List<RenewalRankedCandidate> {
+        if (limit <= 0) return emptyList()
+        return committedSnapshot.rankedCandidates.take(limit)
+    }
+
+    fun isStillEligible(snapshot: RenewalCommittedSnapshot, candidateId: RenewalCandidateId): Boolean {
+        return snapshot.rankedCandidates.any { it.id == candidateId }
     }
 
     fun observeFactApplied(fact: ChunkMetadataFact) {
@@ -146,10 +170,7 @@ class RenewalProjection {
         if (inFlight != null) {
             supersededDuringInFlight = true
         }
-        if (analysisState == RenewalAnalysisState.STABLE || analysisState == RenewalAnalysisState.STABILIZING) {
-            analysisState = RenewalAnalysisState.COMPUTING
-            blockedOnGate = false
-        }
+        blockedOnGate = false
     }
 
     fun observeWorldScanCompleted() {
@@ -158,10 +179,7 @@ class RenewalProjection {
         if (inFlight != null) {
             supersededDuringInFlight = true
         }
-        if (analysisState == RenewalAnalysisState.STABLE || analysisState == RenewalAnalysisState.STABILIZING) {
-            analysisState = RenewalAnalysisState.COMPUTING
-            blockedOnGate = false
-        }
+        blockedOnGate = false
     }
 
     fun tick() {
@@ -195,13 +213,12 @@ class RenewalProjection {
         } catch (t: Throwable) {
             MementoLog.error(
                 MementoConcept.PROJECTION,
-                "worker failed generation={} reason={} durationMs={} (state->COMPUTING)",
+                "worker failed generation={} reason={} durationMs={}",
                 t,
                 job.generation,
                 job.reason.name,
                 durationMs,
             )
-            analysisState = RenewalAnalysisState.COMPUTING
             blockedOnGate = false
             return
         }
@@ -217,7 +234,6 @@ class RenewalProjection {
                 supersededDuringInFlight,
                 synchronized(dirtySet) { dirtySet.size },
             )
-            analysisState = RenewalAnalysisState.COMPUTING
             supersededDuringInFlight = false
             blockedOnGate = false
             return
@@ -225,28 +241,30 @@ class RenewalProjection {
 
         metricsByChunk.clear()
         metricsByChunk.putAll(result.metricsByChunk)
-        appliedGeneration = result.generation
-        analysisState = RenewalAnalysisState.STABLE
         supersededDuringInFlight = false
         blockedOnGate = false
 
+        val committed = RenewalCommittedSnapshot(
+            generation = result.generation,
+            snapshotEntries = result.snapshotEntries,
+            metricsByChunk = result.metricsByChunk,
+            rankedCandidates = result.rankedCandidates,
+        )
+        committedSnapshot = committed
+
         MementoLog.debug(
             MementoConcept.PROJECTION,
-            "worker apply generation={} reason={} durationMs={} tracked={}",
-            appliedGeneration,
+            "worker commit generation={} reason={} durationMs={} tracked={} ranked={}",
+            committed.generation,
             job.reason.name,
             durationMs,
             metricsByChunk.size,
+            committed.rankedCandidates.size,
         )
 
-        val stable = RenewalStableSnapshot(
-            generation = result.generation,
-            snapshotEntries = result.snapshotEntries,
-            metricsByChunk = metricsByChunk.toMap(),
-        )
         stableListeners.forEach { listener ->
             try {
-                listener.onProjectionStable(stable)
+                listener.onProjectionStable(committed)
             } catch (t: Throwable) {
                 MementoLog.error(MementoConcept.RENEWAL, "projection stable-listener failed", t)
             }
@@ -277,7 +295,6 @@ class RenewalProjection {
 
     private fun dispatchWorker(reason: TriggerReason) {
         val service = worldMapService ?: return
-        val snapshot = service.substrate().snapshot()
 
         val generation = generationHead + 1L
         val dirtySeedCount = synchronized(dirtySet) { dirtySet.size }
@@ -287,6 +304,9 @@ class RenewalProjection {
             owner = "renewal-projection",
         ) {
             Callable {
+                // Intentional off-thread snapshot: WorldMementoMap is CHM-backed and snapshot reads
+                // are safe best-effort materialization under concurrent updates.
+                val snapshot = service.substrate().snapshot()
                 computeWorkerResult(generation, snapshot)
             }
         }
@@ -294,7 +314,6 @@ class RenewalProjection {
         when (submit) {
             is GlobalAsyncExclusionGate.SubmitResult.Busy -> {
                 blockedOnGate = true
-                analysisState = RenewalAnalysisState.COMPUTING
                 MementoLog.debug(
                     MementoConcept.PROJECTION,
                     "worker blocked-on-gate reason={} activeOwner={} pendingDirty={} retry=medium-cadence",
@@ -315,15 +334,13 @@ class RenewalProjection {
                 scanRecomputeRequested = false
                 supersededDuringInFlight = false
                 blockedOnGate = false
-                analysisState = RenewalAnalysisState.STABILIZING
 
                 MementoLog.debug(
                     MementoConcept.PROJECTION,
-                    "worker start generation={} reason={} dirtySeed={} snapshot={} retryPolicy=medium-cadence-retained-intent",
+                    "worker start generation={} reason={} dirtySeed={} snapshot=pending-worker-materialization retryPolicy=medium-cadence-retained-intent",
                     generation,
                     reason.name,
                     dirtySeedCount,
-                    snapshot.size,
                 )
                 inFlight = InFlightJob(
                     generation = generation,
@@ -344,6 +361,7 @@ class RenewalProjection {
                 generation = generation,
                 snapshotEntries = emptyList(),
                 metricsByChunk = emptyMap(),
+                rankedCandidates = emptyList(),
             )
         }
 
@@ -373,11 +391,67 @@ class RenewalProjection {
             )
         }
 
+        val rankedCandidates = rankedCandidates(
+            generation = generation,
+            snapshot = snapshot,
+            metrics = metrics,
+        )
+
         return WorkerResult(
             generation = generation,
             snapshotEntries = snapshot,
             metricsByChunk = metrics,
+            rankedCandidates = rankedCandidates,
         )
+    }
+
+    private fun rankedCandidates(
+        generation: Long,
+        snapshot: List<ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>,
+        metrics: Map<ChunkKey, RenewalChunkMetrics>,
+    ): List<RenewalRankedCandidate> {
+        val result = EligibilityService.evaluate(
+            RenewalCommittedSnapshot(
+                generation = generation,
+                snapshotEntries = snapshot,
+                metricsByChunk = metrics,
+                rankedCandidates = emptyList(),
+            )
+        )
+
+        val out = mutableListOf<RenewalRankedCandidate>()
+        var rank = 1
+        result.eligibleRegions.forEach { region ->
+            out += RenewalRankedCandidate(
+                id = RenewalCandidateId(
+                    action = RenewalCandidateAction.REGION_PRUNE,
+                    worldKey = region.worldId,
+                    regionX = region.regionX,
+                    regionZ = region.regionZ,
+                ),
+                rank = rank,
+                byRegionPrune = true,
+            )
+            rank++
+        }
+
+        if (result.eligibleRegions.isEmpty()) {
+            result.eligibleChunks.forEach { chunk ->
+                out += RenewalRankedCandidate(
+                    id = RenewalCandidateId(
+                        action = RenewalCandidateAction.CHUNK_RENEW,
+                        worldKey = chunk.world.value.toString(),
+                        chunkX = chunk.chunkX,
+                        chunkZ = chunk.chunkZ,
+                    ),
+                    rank = rank,
+                    byRegionPrune = false,
+                )
+                rank++
+            }
+        }
+
+        return out
     }
 
     private data class SnapshotIndex(

@@ -3,6 +3,13 @@ package ch.oliverlanz.memento.domain.worldmap
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalProjectionEvents
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
+import com.google.gson.GsonBuilder
+import com.google.gson.JsonParser
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+import net.minecraft.server.MinecraftServer
+import net.minecraft.util.WorldSavePath
 
 /**
  * Domain-owned lifecycle and ingestion authority for the authoritative world map.
@@ -12,17 +19,47 @@ import ch.oliverlanz.memento.infrastructure.observability.MementoLog
  */
 class WorldMapService {
     private val map = WorldMementoMap()
+    private val gson = GsonBuilder().setPrettyPrinting().create()
 
     @Volatile private var attached: Boolean = false
+    @Volatile private var server: MinecraftServer? = null
+    @Volatile private var firstFullScanCompleted: Boolean = false
 
-    fun attach() {
+    private data class PersistedState(
+        val firstFullScanCompleted: Boolean = false,
+    )
+
+    fun attach(server: MinecraftServer) {
+        this.server = server
+        loadState(server)
         attached = true
-        MementoLog.info(MementoConcept.WORLD, "world-map service attached")
+        MementoLog.info(
+            MementoConcept.WORLD,
+            "world-map service attached firstFullScanCompleted={}",
+            firstFullScanCompleted,
+        )
     }
 
     fun detach() {
+        server?.let { saveState(it) }
         attached = false
+        server = null
         MementoLog.info(MementoConcept.WORLD, "world-map service detached")
+    }
+
+    fun hasInitialScanCompleted(): Boolean = firstFullScanCompleted
+
+    fun markInitialScanCompletedOnTickThread(reason: String) {
+        if (!attached) return
+        if (firstFullScanCompleted) return
+
+        firstFullScanCompleted = true
+        server?.let { saveState(it) }
+        MementoLog.info(
+            MementoConcept.SCANNER,
+            "initial scan completion recorded reason={}",
+            reason,
+        )
     }
 
     fun substrate(): WorldMementoMap = map
@@ -94,5 +131,35 @@ class WorldMapService {
             )
         }
         return removed.size
+    }
+
+    private fun statePath(server: MinecraftServer): Path {
+        return server.getSavePath(WorldSavePath.ROOT).resolve("memento_worldmap_state.json")
+    }
+
+    @Synchronized
+    private fun saveState(server: MinecraftServer) {
+        val path = statePath(server)
+        val json = gson.toJson(PersistedState(firstFullScanCompleted = firstFullScanCompleted))
+        Files.write(path, json.toByteArray(StandardCharsets.UTF_8))
+    }
+
+    @Synchronized
+    private fun loadState(server: MinecraftServer) {
+        val path = statePath(server)
+        if (!Files.exists(path)) {
+            firstFullScanCompleted = false
+            return
+        }
+
+        val raw = Files.readString(path, StandardCharsets.UTF_8).trim()
+        if (raw.isEmpty()) {
+            firstFullScanCompleted = false
+            return
+        }
+
+        val element = runCatching { JsonParser.parseString(raw) }.getOrNull()
+        val obj = element?.takeIf { it.isJsonObject }?.asJsonObject
+        firstFullScanCompleted = obj?.get("firstFullScanCompleted")?.asBoolean ?: false
     }
 }
