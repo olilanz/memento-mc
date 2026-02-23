@@ -492,7 +492,11 @@ class RenewalProjection {
             if (hasNeighborWithActivity) break
             for (dz in -NEIGHBOR_RADIUS..NEIGHBOR_RADIUS) {
                 val neighbor = worldByPackedChunk[packChunk(key.chunkX + dx, key.chunkZ + dz)]
-                val t = neighbor?.signals?.inhabitedTimeTicks
+                // Absence in snapshot means "non-existing / not discovered chunk" and must not block
+                // forgettability. Existing chunk entries with unknown ticks remain conservative blockers.
+                if (neighbor == null) continue
+
+                val t = neighbor.signals?.inhabitedTimeTicks
                 if (t == null || t > 0L) {
                     hasNeighborWithActivity = true
                     break
