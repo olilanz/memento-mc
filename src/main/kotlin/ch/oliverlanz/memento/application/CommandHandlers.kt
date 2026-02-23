@@ -12,11 +12,13 @@ import ch.oliverlanz.memento.domain.renewal.RenewalBatchSnapshot
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchState
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
 import ch.oliverlanz.memento.domain.renewal.RenewalTrigger
-import ch.oliverlanz.memento.domain.renewal.eligibility.EligibilityExecutionGrain
-import ch.oliverlanz.memento.domain.renewal.eligibility.EligibilityResult
-import ch.oliverlanz.memento.domain.renewal.eligibility.EligibilityService
-import ch.oliverlanz.memento.domain.renewal.projection.RenewalAnalysisState
+import ch.oliverlanz.memento.domain.renewal.projection.RegionKey
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateAction
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateId
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalCommittedSnapshot
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalRankedCandidate
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalProjection
+import ch.oliverlanz.memento.domain.renewal.projection.toChunkKeyOrNull
 import ch.oliverlanz.memento.domain.stones.Lorestone
 import ch.oliverlanz.memento.domain.stones.LorestoneView
 import ch.oliverlanz.memento.domain.stones.Stone
@@ -57,9 +59,9 @@ import java.util.Locale
  */
 object CommandHandlers {
 
-    private data class EligibilityEvaluation(
-        val stable: ch.oliverlanz.memento.domain.renewal.projection.RenewalStableSnapshot,
-        val result: EligibilityResult,
+    private data class PreviewBinding(
+        val storedGeneration: Long,
+        val storedItems: List<RenewalRankedCandidate>,
     )
 
     private const val INSPECT_MAX_CHUNK_PROBES = 4
@@ -88,6 +90,9 @@ object CommandHandlers {
 
     @Volatile
     private var renewalProjection: RenewalProjection? = null
+
+    @Volatile
+    private var renewPreviewBinding: PreviewBinding? = null
 
     fun attachVisualizationEngine(engine: EffectsHost) {
         effectsHost = engine
@@ -309,62 +314,125 @@ object CommandHandlers {
     }
 
     fun renew(source: ServerCommandSource): Int {
-        val evaluation = stableEligibilityOrSendError(source) ?: return 0
-        val decision = evaluation.result.selectedExecutionGrain
+        val snapshot = committedSnapshotOrSendError(source) ?: return 0
+        val items = snapshot.rankedCandidates.take(10)
+        renewPreviewBinding = PreviewBinding(
+            storedGeneration = snapshot.generation,
+            storedItems = items,
+        )
 
-        when (decision) {
-            is EligibilityExecutionGrain.Region -> {
-                MementoLog.info(
-                    MementoConcept.RENEWAL,
-                    "renew simulation decision grain=region world={} region=({}, {}) by={}",
-                    decision.region.worldId,
-                    decision.region.regionX,
-                    decision.region.regionZ,
-                    source.name,
-                )
-                source.sendFeedback(
-                    { Text.literal("[Memento] simulated region renewal for ${decision.region.worldId} r(${decision.region.regionX},${decision.region.regionZ}).").formatted(Formatting.YELLOW) },
-                    false
-                )
-            }
-
-            is EligibilityExecutionGrain.ChunkBatch -> {
-                MementoLog.info(
-                    MementoConcept.RENEWAL,
-                    "renew simulation decision grain=chunk count={} by={}",
-                    decision.chunks.size,
-                    source.name,
-                )
-                source.sendFeedback(
-                    { Text.literal("[Memento] simulated chunk-batch renewal for ${decision.chunks.size} chunks.").formatted(Formatting.YELLOW) },
-                    false
-                )
-            }
-
-            null -> {
-                MementoLog.info(MementoConcept.RENEWAL, "renew simulation decision grain=none generation={} by={}", evaluation.result.projectionGeneration, source.name)
-                source.sendFeedback(
-                    { Text.literal("[Memento] no eligible area for renewal could be identified.").formatted(Formatting.YELLOW) },
-                    false
-                )
-            }
+        runCatching {
+            MementoCsvWriter.writeEligibilitySnapshot(
+                server = source.server,
+                snapshot = snapshot,
+            )
+        }.onFailure { t ->
+            MementoLog.error(
+                MementoConcept.RENEWAL,
+                "renew preview csv export failed generation={} by={}",
+                t,
+                snapshot.generation,
+                source.name,
+            )
         }
 
+        if (items.isEmpty()) {
+            source.sendFeedback(
+                { Text.literal("[Memento] no eligible renewal candidates found.").formatted(Formatting.YELLOW) },
+                false,
+            )
+            return 1
+        }
+
+        source.sendFeedback(
+            { Text.literal("[Memento] renewal preview (top ${items.size}):").formatted(Formatting.GOLD) },
+            false,
+        )
+        items.forEach { candidate ->
+            source.sendFeedback({ Text.literal(formatPreviewCandidate(candidate)).formatted(Formatting.GRAY) }, false)
+        }
+
+        MementoLog.info(
+            MementoConcept.RENEWAL,
+            "renew preview stored generation={} items={} by={}",
+            snapshot.generation,
+            items.size,
+            source.name,
+        )
         return 1
     }
 
     fun renewForce(source: ServerCommandSource): Int {
-        val evaluation = stableEligibilityOrSendError(source) ?: return 0
-        val decision = evaluation.result.selectedExecutionGrain
+        return renewForce(source, 1)
+    }
 
-        return when (decision) {
-            is EligibilityExecutionGrain.Region -> forceRegionRenew(source, decision)
-            is EligibilityExecutionGrain.ChunkBatch -> forceChunkBatchRenew(source, decision)
-            null -> {
-                source.sendError(Text.literal("[Memento] no eligible area for renewal could be identified."))
-                0
-            }
+    fun renewForce(source: ServerCommandSource, count: Int): Int {
+        if (count <= 0) {
+            source.sendError(Text.literal("[Memento] force count must be > 0."))
+            return 0
         }
+
+        val preview = renewPreviewBinding
+        if (preview == null) {
+            source.sendError(Text.literal("[Memento] no preview stored. Run /memento renew first."))
+            return 0
+        }
+
+        val snapshot = committedSnapshotOrSendError(source) ?: return 0
+
+        val projection = renewalProjection
+        if (projection == null) {
+            source.sendError(Text.literal("Renewal projection is not ready yet."))
+            return 0
+        }
+
+        if (projection.hasPendingChanges()) {
+            source.sendError(Text.literal("[Memento] Plan may be stale while renewal analysis is updating; run /memento renew again shortly."))
+            MementoLog.info(
+                MementoConcept.RENEWAL,
+                "renew force rejected reason=projection_pending_changes generation={} by={}",
+                snapshot.generation,
+                source.name,
+            )
+            return 0
+        }
+
+        val requested = preview.storedItems.take(count)
+        if (requested.isEmpty()) {
+            source.sendError(Text.literal("[Memento] no stored preview items available for force renewal."))
+            return 0
+        }
+
+        if (snapshot.generation != preview.storedGeneration) {
+            MementoLog.info(
+                MementoConcept.RENEWAL,
+                "renew force drift detected storedGeneration={} currentGeneration={} requested={} by={}",
+                preview.storedGeneration,
+                snapshot.generation,
+                requested.size,
+                source.name,
+            )
+
+            val invalid = requested.firstOrNull { !projection.isStillEligible(snapshot, it.id) }
+            if (invalid != null) {
+                source.sendError(Text.literal("[Memento] Plan changed; run /memento renew again."))
+                MementoLog.info(
+                    MementoConcept.RENEWAL,
+                    "renew force drift revalidation failed candidate={} by={}",
+                    invalid.id,
+                    source.name,
+                )
+                return 0
+            }
+            MementoLog.info(
+                MementoConcept.RENEWAL,
+                "renew force drift revalidation passed requested={} by={}",
+                requested.size,
+                source.name,
+            )
+        }
+
+        return executeCandidates(source, requested)
     }
 
     fun addWitherstone(source: ServerCommandSource, name: String, radius: Int, daysToMaturity: Int): Int {
@@ -569,9 +637,8 @@ object CommandHandlers {
                 "Scheduler: surveying the world$durationText."
             }
 
-            projectionStatus != null && projectionStatus.state == RenewalAnalysisState.STABILIZING -> {
-                val durationText = projectionStatus.runningDurationMs?.let { " for ${formatDuration(it)}" } ?: ""
-                "Scheduler: evaluating renewal options$durationText."
+            projectionStatus?.runningDurationMs != null -> {
+                "Scheduler: evaluating renewal options for ${formatDuration(projectionStatus.runningDurationMs)}."
             }
 
             projectionStatus?.blockedOnGate == true -> {
@@ -594,8 +661,8 @@ object CommandHandlers {
             lines += "World memory: ${scannerStatus.worldMapScanned}/${scannerStatus.worldMapTotal} chunks confirmed, ${scannerStatus.worldMapMissing} still uncertain"
         }
 
-        if (projectionStatus != null && projectionStatus.state == RenewalAnalysisState.STABLE) {
-            lines += "Renewal target: evaluated on demand (generation ${projectionStatus.stableGeneration ?: "unknown"})"
+        if (projectionStatus != null) {
+            lines += "Renewal target: evaluated on demand (generation ${projectionStatus.committedGeneration})"
         }
 
         return lines
@@ -842,7 +909,14 @@ object CommandHandlers {
         )
     }
 
-    private fun stableEligibilityOrSendError(source: ServerCommandSource): EligibilityEvaluation? {
+    private fun committedSnapshotOrSendError(source: ServerCommandSource): RenewalCommittedSnapshot? {
+        val scanner = worldScanner
+        if (scanner == null || !scanner.hasInitialScanCompleted()) {
+            MementoLog.info(MementoConcept.OPERATOR, "renew force/renew rejected reason=initial_scan_not_completed by={}", source.name)
+            source.sendError(Text.literal("[Memento] renewal preview is unavailable before first full world scan completion."))
+            return null
+        }
+
         val projection = renewalProjection
         if (projection == null) {
             MementoLog.info(MementoConcept.OPERATOR, "renew force/renew rejected reason=projection_not_ready by={}", source.name)
@@ -850,85 +924,39 @@ object CommandHandlers {
             return null
         }
 
-        val status = projection.statusView()
-        if (status.state != RenewalAnalysisState.STABLE) {
-            MementoLog.info(
-                MementoConcept.OPERATOR,
-                "renew force/renew rejected reason=projection_not_stable state={} by={}",
-                status.state.name,
-                source.name,
-            )
-            source.sendError(Text.literal("[Memento] renewal analysis is not stable yet."))
-            return null
-        }
-
-        val stable = projection.stableSnapshotOrNull()
-        if (stable == null) {
+        val committed = projection.committedSnapshotOrNull()
+        if (committed == null) {
             MementoLog.info(MementoConcept.OPERATOR, "renew force/renew rejected reason=projection_snapshot_unavailable by={}", source.name)
             source.sendError(Text.literal("[Memento] renewal analysis snapshot is unavailable."))
             return null
         }
 
-        val result = EligibilityService.evaluate(stable)
-
-        MementoLog.info(
-            MementoConcept.RENEWAL,
-            "eligibility evaluated generation={} transaction={} eligibleRegions={} eligibleChunks={} selectedGrain={} by={}",
-            result.projectionGeneration,
-            result.transactionId,
-            result.eligibleRegions.size,
-            result.eligibleChunks.size,
-            result.selectedExecutionGrain?.javaClass?.simpleName ?: "NONE",
-            source.name,
-        )
-
-        runCatching {
-            MementoCsvWriter.writeEligibilitySnapshot(
-                server = source.server,
-                snapshot = stable.snapshotEntries,
-                metricsByChunk = stable.metricsByChunk,
-                result = result,
-            )
-        }.onFailure { t ->
-            MementoLog.error(
-                MementoConcept.RENEWAL,
-                "eligibility csv export failed generation={} by={}",
-                t,
-                result.projectionGeneration,
-                source.name,
-            )
-            source.sendFeedback(
-                { Text.literal("[Memento] eligibility was evaluated, but CSV export failed (see server log). ").formatted(Formatting.GRAY) },
-                false,
-            )
-        }
-
-        return EligibilityEvaluation(stable = stable, result = result)
+        return committed
     }
 
-    private fun forceRegionRenew(source: ServerCommandSource, decision: EligibilityExecutionGrain.Region): Int {
+    private fun forceRegionRenew(source: ServerCommandSource, decision: RegionKey): Int {
         MementoLog.info(
             MementoConcept.PRUNING,
             "renew force request grain=region world={} region=({}, {}) by={}",
-            decision.region.worldId,
-            decision.region.regionX,
-            decision.region.regionZ,
+            decision.worldId,
+            decision.regionX,
+            decision.regionZ,
             source.name,
         )
 
-        val dimension = resolveWorldKey(decision.region.worldId)
+        val dimension = resolveWorldKey(decision.worldId)
         if (dimension == null) {
             MementoLog.info(
                 MementoConcept.PRUNING,
                 "renew force rejected reason=invalid_decision_world world={} by={}",
-                decision.region.worldId,
+                decision.worldId,
                 source.name,
             )
             source.sendError(Text.literal("[Memento] projection returned an invalid world id for force renewal."))
             return 0
         }
 
-        return when (val result = WorldPruningService.submit(dimension, decision.region)) {
+        return when (val result = WorldPruningService.submit(dimension, decision)) {
             is WorldPruningService.SubmitResult.Submitted -> {
                 source.sendFeedback(
                     {
@@ -962,8 +990,8 @@ object CommandHandlers {
         }.getOrNull()
     }
 
-    private fun forceChunkBatchRenew(source: ServerCommandSource, decision: EligibilityExecutionGrain.ChunkBatch): Int {
-        val chunksByWorld = decision.chunks.groupBy { it.world }
+    private fun forceChunkBatchRenew(source: ServerCommandSource, chunkKeys: List<ch.oliverlanz.memento.domain.worldmap.ChunkKey>): Int {
+        val chunksByWorld = chunkKeys.groupBy { it.world }
         if (chunksByWorld.isEmpty()) {
             source.sendError(Text.literal("[Memento] no chunks available for force renewal."))
             return 0
@@ -1000,5 +1028,66 @@ object CommandHandlers {
             false
         )
         return 1
+    }
+
+    private fun executeCandidates(source: ServerCommandSource, candidates: List<RenewalRankedCandidate>): Int {
+        var successCount = 0
+        val regions = mutableListOf<RegionKey>()
+        val chunks = mutableListOf<ch.oliverlanz.memento.domain.worldmap.ChunkKey>()
+
+        candidates.forEach { candidate ->
+            when (candidate.id.action) {
+                RenewalCandidateAction.REGION_PRUNE -> {
+                    val region = RegionKey(
+                        worldId = candidate.id.worldKey,
+                        regionX = candidate.id.regionX ?: return@forEach,
+                        regionZ = candidate.id.regionZ ?: return@forEach,
+                    )
+                    regions += region
+                }
+
+                RenewalCandidateAction.CHUNK_RENEW -> {
+                    val key = candidate.id.toChunkKeyOrNull() ?: return@forEach
+                    chunks += key
+                }
+            }
+        }
+
+        regions.forEach { region ->
+            val ok = forceRegionRenew(source, region)
+            if (ok == 0) return 0
+            successCount++
+        }
+
+        if (chunks.isNotEmpty()) {
+            val ok = forceChunkBatchRenew(source, chunks)
+            if (ok == 0) return 0
+            successCount += chunks.size
+        }
+
+        candidates.forEach { candidate ->
+            MementoLog.info(
+                MementoConcept.RENEWAL,
+                "renew force item outcome=submitted rank={} id={} by={}",
+                candidate.rank,
+                candidate.id,
+                source.name,
+            )
+        }
+
+        return if (successCount > 0) 1 else 0
+    }
+
+    private fun formatPreviewCandidate(candidate: RenewalRankedCandidate): String {
+        val prefix = "#${candidate.rank}"
+        return when (candidate.id.action) {
+            RenewalCandidateAction.REGION_PRUNE -> {
+                "$prefix region prune world=${candidate.id.worldKey} r(${candidate.id.regionX},${candidate.id.regionZ})"
+            }
+
+            RenewalCandidateAction.CHUNK_RENEW -> {
+                "$prefix chunk renew world=${candidate.id.worldKey} c(${candidate.id.chunkX},${candidate.id.chunkZ})"
+            }
+        }
     }
 }

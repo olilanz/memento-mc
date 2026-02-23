@@ -84,6 +84,14 @@ object Commands {
                         .executes { ctx ->
                             CommandHandlers.renewForce(ctx.source)
                         }
+                        .then(argument("count", IntegerArgumentType.integer(1))
+                            .executes { ctx ->
+                                CommandHandlers.renewForce(
+                                    ctx.source,
+                                    IntegerArgumentType.getInteger(ctx, "count")
+                                )
+                            }
+                        )
                     )
                 )
                 /* ======================

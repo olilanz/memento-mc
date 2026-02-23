@@ -3,6 +3,8 @@ package ch.oliverlanz.memento.infrastructure.worldscan
 import ch.oliverlanz.memento.domain.renewal.eligibility.EligibilityExecutionGrain
 import ch.oliverlanz.memento.domain.renewal.eligibility.EligibilityResult
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalChunkMetrics
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateAction
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalCommittedSnapshot
 import ch.oliverlanz.memento.domain.worldmap.WorldMementoTopology
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
@@ -66,6 +68,83 @@ object MementoCsvWriter {
 
         Files.writeString(path, sb.toString(), StandardCharsets.UTF_8)
         MementoLog.info(MementoConcept.SCANNER, "Wrote scan CSV: {}", path)
+    }
+
+    fun writeEligibilitySnapshot(
+        server: MinecraftServer,
+        snapshot: RenewalCommittedSnapshot,
+    ) {
+        val path = server.getSavePath(WorldSavePath.ROOT)
+            .resolve(MementoConstants.MEMENTO_SCAN_CSV_FILE)
+
+        Files.createDirectories(path.parent)
+
+        val regionCandidates = snapshot.rankedCandidates
+            .filter { it.id.action == RenewalCandidateAction.REGION_PRUNE }
+            .associateBy { "${it.id.worldKey}:${it.id.regionX}:${it.id.regionZ}" }
+
+        val chunkCandidates = snapshot.rankedCandidates
+            .filter { it.id.action == RenewalCandidateAction.CHUNK_RENEW }
+            .associateBy { "${it.id.worldKey}:${it.id.chunkX}:${it.id.chunkZ}" }
+
+        val sb = StringBuilder()
+        sb.append("projection_generation,dimension,chunk_x,chunk_z,scan_tick,inhabited_ticks,dominant_stone,surface_y,biome_id,is_spawn_chunk,source,status,forgettability_index,liveliness_index,renewal_rank,renewal_by_region_prune\n")
+
+        val dominantByWorld = linkedMapOf<net.minecraft.registry.RegistryKey<net.minecraft.world.World>, Map<ChunkPos, kotlin.reflect.KClass<out ch.oliverlanz.memento.domain.stones.Stone>>>()
+
+        snapshot.snapshotEntries.forEach { entry ->
+            val key = entry.key
+            val signals = entry.signals
+            val metrics = snapshot.metricsByChunk[key] ?: RenewalChunkMetrics()
+
+            val dominantByChunk = dominantByWorld.getOrPut(key.world) {
+                StoneMapService.dominantByChunk(key.world)
+            }
+            val dominant = dominantByChunk[ChunkPos(key.chunkX, key.chunkZ)]?.simpleName ?: ""
+
+            val dim = key.world.value.toString()
+            val inhabited = signals?.inhabitedTimeTicks?.toString() ?: ""
+            val surfaceY = signals?.surfaceY?.toString() ?: ""
+            val biome = signals?.biomeId ?: ""
+            val isSpawn = signals?.isSpawnChunk?.toString() ?: ""
+            val source = projectSource(entry)
+            val status = projectStatus(entry)
+
+            val regionKey = "$dim:${key.regionX}:${key.regionZ}"
+            val chunkKey = "$dim:${key.chunkX}:${key.chunkZ}"
+            val regionCandidate = regionCandidates[regionKey]
+            val chunkCandidate = chunkCandidates[chunkKey]
+            val selected = regionCandidate ?: chunkCandidate
+            val renewalRank = selected?.rank?.toString() ?: ""
+            val renewalByRegionPrune = if (regionCandidate != null) "true" else "false"
+
+            sb.append(snapshot.generation)
+                .append(',').append(dim)
+                .append(',').append(key.chunkX)
+                .append(',').append(key.chunkZ)
+                .append(',').append(entry.scanTick)
+                .append(',').append(inhabited)
+                .append(',').append(dominant)
+                .append(',').append(surfaceY)
+                .append(',').append(biome)
+                .append(',').append(isSpawn)
+                .append(',').append(source)
+                .append(',').append(status)
+                .append(',').append(metrics.forgettabilityIndex)
+                .append(',').append(metrics.livelinessIndex)
+                .append(',').append(renewalRank)
+                .append(',').append(renewalByRegionPrune)
+                .append('\n')
+        }
+
+        Files.writeString(path, sb.toString(), StandardCharsets.UTF_8)
+        MementoLog.info(
+            MementoConcept.RENEWAL,
+            "Wrote eligibility CSV: {} generation={} rankedCandidates={}",
+            path,
+            snapshot.generation,
+            snapshot.rankedCandidates.size,
+        )
     }
 
     fun writeEligibilitySnapshot(

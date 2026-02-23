@@ -32,6 +32,14 @@ object EligibilityService {
 
     private const val MAX_REGION_DISTANCE_RING: Int = 64
     private const val MAX_CHUNK_DISTANCE_RING: Int = 96
+    /**
+     * Bound chunk fallback list size retained in projection ranking.
+     *
+     * Drift revalidation for `/memento renew force <N>` is membership-based against
+     * projection-ranked candidates, so this bound should stay comfortably above operator preview
+     * and expected force counts.
+     */
+    private const val MAX_CHUNK_FALLBACK_CANDIDATES: Int = 256
 
     private val evaluationCounter = java.util.concurrent.atomic.AtomicLong(0L)
 
@@ -141,7 +149,7 @@ object EligibilityService {
                         .thenBy { it.chunkZ }
                         .thenBy { it.chunkX }
                 )
-                .take(64)
+                .take(MAX_CHUNK_FALLBACK_CANDIDATES)
                 .toList()
         } else {
             emptyList()

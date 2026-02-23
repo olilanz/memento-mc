@@ -278,6 +278,10 @@ class WorldScanner : ChunkAvailabilityListener {
         )
     }
 
+    fun hasInitialScanCompleted(): Boolean {
+        return worldMapService?.hasInitialScanCompleted() == true
+    }
+
     fun detach() {
         val providerStatus = fileMetadataProvider?.status()
         val pendingFacts = pendingFileFacts.size
@@ -599,6 +603,11 @@ class WorldScanner : ChunkAvailabilityListener {
                     formatUnresolvedReasonCounts(event.unresolvedReasonCounts),
                     event.unresolvedWithoutReasonCount,
             )
+        }
+
+        val shouldMarkInitialScanCompleted = map.isComplete() || (plannedChunks == 0 && event.scannedChunks == 0)
+        if (shouldMarkInitialScanCompleted) {
+            worldMapService?.markInitialScanCompletedOnTickThread(reason)
         }
 
         val durationText = durationMs?.let { " after ${formatDuration(it)}" } ?: ""
