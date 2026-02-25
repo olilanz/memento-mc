@@ -67,11 +67,10 @@ object CommandHandlers {
 
     private data class ForceQueue(
         val owner: String,
-        val baseGeneration: Long,
+        var generation: Long,
         val pending: ArrayDeque<RenewalRankedCandidate>,
         val total: Int,
         var submitted: Int = 0,
-        var skippedStale: Int = 0,
         var lastWaitReason: String? = null,
         var lastSeenPruneCompletionKey: String? = null,
     )
@@ -398,7 +397,7 @@ object CommandHandlers {
         }
 
         if (renewForceQueue != null) {
-            source.sendError(Text.literal("[Memento] a force queue is already running; wait for completion."))
+            source.sendError(Text.literal("[Memento] a force sequence is already running; wait for completion."))
             return 0
         }
 
@@ -425,7 +424,7 @@ object CommandHandlers {
         if (snapshot.generation != preview.storedGeneration) {
             MementoLog.info(
                 MementoConcept.RENEWAL,
-                "renew force queue generation drift-at-enqueue storedGeneration={} currentGeneration={} requested={} by={}",
+                "renew force sequence generation drift-at-enqueue storedGeneration={} currentGeneration={} requested={} by={}",
                 preview.storedGeneration,
                 snapshot.generation,
                 requested.size,
@@ -433,13 +432,16 @@ object CommandHandlers {
             )
         }
 
+        // Capture an immutable copy of preview items for this sequence execution.
+        // Later `/memento renew` preview refreshes may replace renewPreviewBinding,
+        // but must not alter the in-flight force sequence worklist.
         val pending = ArrayDeque<RenewalRankedCandidate>()
         requested.forEach { pending.addLast(it) }
 
         val completion = WorldPruningService.lastCompletionOrNull()
         renewForceQueue = ForceQueue(
             owner = source.name,
-            baseGeneration = snapshot.generation,
+            generation = snapshot.generation,
             pending = pending,
             total = requested.size,
             lastSeenPruneCompletionKey = completion?.let { completionKey(it) },
@@ -447,7 +449,7 @@ object CommandHandlers {
 
         MementoLog.info(
             MementoConcept.RENEWAL,
-            "renew force queue enqueued generation={} items={} by={}",
+            "renew force sequence enqueued generation={} items={} by={}",
             snapshot.generation,
             requested.size,
             source.name,
@@ -456,7 +458,7 @@ object CommandHandlers {
         source.sendFeedback(
             {
                 Text.literal(
-                    "[Memento] force queue started with ${requested.size} item(s). " +
+                    "[Memento] force sequence started with ${requested.size} item(s). " +
                         "Execution will continue as pruning/projection gates allow."
                 ).formatted(Formatting.YELLOW)
             },
@@ -1132,7 +1134,7 @@ object CommandHandlers {
                 }
                 MementoLog.info(
                     MementoConcept.RENEWAL,
-                    "renew force queue prune completion accepted world={} region=({}, {}) outcome={} owner={}",
+                    "renew force sequence prune completion accepted world={} region=({}, {}) outcome={} owner={}",
                     latestCompletion.target.worldId,
                     latestCompletion.target.regionX,
                     latestCompletion.target.regionZ,
@@ -1142,14 +1144,53 @@ object CommandHandlers {
             }
         }
 
+        val snapshot = projection.committedSnapshotOrNull()
+        if (snapshot == null) {
+            abortQueue(queue, "projection_snapshot_unavailable")
+            return
+        }
+
+        if (snapshot.generation != queue.generation) {
+            MementoLog.info(
+                MementoConcept.RENEWAL,
+                "renew force sequence drift detected storedGeneration={} currentGeneration={} pending={} owner={}",
+                queue.generation,
+                snapshot.generation,
+                queue.pending.size,
+                queue.owner,
+            )
+
+            val invalid = queue.pending.firstOrNull { !projection.isStillEligible(snapshot, it.id) }
+            if (invalid != null) {
+                MementoLog.info(
+                    MementoConcept.RENEWAL,
+                    "renew force sequence revalidation failed generation={} rank={} id={} owner={}",
+                    snapshot.generation,
+                    invalid.rank,
+                    invalid.id,
+                    queue.owner,
+                )
+                abortQueue(queue, "drift_revalidation_failed rank=${invalid.rank} id=${invalid.id}")
+                return
+            }
+
+            MementoLog.info(
+                MementoConcept.RENEWAL,
+                "renew force sequence revalidation passed generation={} count={} owner={}",
+                snapshot.generation,
+                queue.pending.size,
+                queue.owner,
+            )
+            queue.generation = snapshot.generation
+        }
+
         if (queue.pending.isEmpty()) {
             MementoLog.info(
                 MementoConcept.RENEWAL,
-                "renew force queue completed owner={} total={} submitted={} skippedStale={}",
+                "renew force sequence completed owner={} total={} submitted={}",
                 queue.owner,
                 queue.total,
                 queue.submitted,
-                queue.skippedStale,
             )
             renewForceQueue = null
             return
@@ -1165,25 +1206,17 @@ object CommandHandlers {
             return
         }
 
-        val snapshot = projection.committedSnapshotOrNull()
-        if (snapshot == null) {
-            abortQueue(queue, "projection_snapshot_unavailable")
-            return
-        }
-
         val candidate = queue.pending.first()
         if (!projection.isStillEligible(snapshot, candidate.id)) {
-            queue.pending.removeFirst()
-            queue.skippedStale++
-            queue.lastWaitReason = null
             MementoLog.info(
                 MementoConcept.RENEWAL,
-                "renew force queue skip reason=stale generation={} rank={} id={} owner={}",
+                "renew force sequence revalidation failed generation={} rank={} id={} owner={}",
                 snapshot.generation,
                 candidate.rank,
                 candidate.id,
                 queue.owner,
             )
+            abortQueue(queue, "item_revalidation_failed rank=${candidate.rank} id=${candidate.id}")
             return
         }
 
@@ -1202,7 +1235,7 @@ object CommandHandlers {
 
         MementoLog.info(
             MementoConcept.RENEWAL,
-            "renew force queue submit generation={} rank={} id={} owner={} remaining={}",
+            "renew force sequence submit generation={} rank={} id={} owner={} remaining={}",
             snapshot.generation,
             candidate.rank,
             candidate.id,
@@ -1229,7 +1262,7 @@ object CommandHandlers {
                         if (temporaryBusy) {
                             MementoLog.info(
                                 MementoConcept.RENEWAL,
-                                "renew force queue wait reason=pruning_rejected_busy rank={} id={} owner={} detail={}",
+                                "renew force sequence wait reason=pruning_rejected_busy rank={} id={} owner={} detail={}",
                                 candidate.rank,
                                 candidate.id,
                                 owner,
@@ -1239,7 +1272,7 @@ object CommandHandlers {
                         } else {
                             MementoLog.info(
                                 MementoConcept.RENEWAL,
-                                "renew force queue submit completed-immediate rank={} id={} owner={} outcome={} detail={}",
+                                "renew force sequence submit completed-immediate rank={} id={} owner={} outcome={} detail={}",
                                 candidate.rank,
                                 candidate.id,
                                 owner,
@@ -1288,7 +1321,7 @@ object CommandHandlers {
 
         MementoLog.info(
             MementoConcept.RENEWAL,
-            "renew force queue decision grain=chunk count={} groups={} by={}",
+            "renew force sequence decision grain=chunk count={} groups={} by={}",
             submitted,
             chunksByWorld.size,
             owner,
@@ -1301,24 +1334,22 @@ object CommandHandlers {
         queue.lastWaitReason = reason
         MementoLog.info(
             MementoConcept.RENEWAL,
-            "renew force queue wait reason={} owner={} pending={} submitted={} skippedStale={}",
+            "renew force sequence wait reason={} owner={} pending={} submitted={}",
             reason,
             queue.owner,
             queue.pending.size,
             queue.submitted,
-            queue.skippedStale,
         )
     }
 
     private fun abortQueue(queue: ForceQueue, reason: String) {
         MementoLog.info(
             MementoConcept.RENEWAL,
-            "renew force queue aborted reason={} owner={} total={} submitted={} skippedStale={} remaining={}",
+            "renew force sequence aborted reason={} owner={} total={} submitted={} remaining={}",
             reason,
             queue.owner,
             queue.total,
             queue.submitted,
-            queue.skippedStale,
             queue.pending.size,
         )
         renewForceQueue = null
