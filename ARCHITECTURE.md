@@ -350,6 +350,9 @@ The following properties must remain true:
 * `/memento do renew [N]` consumes the current committed projection snapshot at submit-time; it does not store preview bindings or plan lifecycle state
 * Region-prune execution is submitted as a single bounded batch operation (max 10 targets) in deterministic ranked order
 * Batch prune is continue-on-failure per region and emits aggregate plus per-region outcomes
+* Region-prune must run preflight filesystem safety checks for each targeted region member before rename/delete operations begin
+* If prune rename fails and rollback succeeds, that region outcome is treated as skipped due to error and batch execution continues
+* If rollback fails, operator guidance must remain calm and include exact region member file paths plus two recovery options: manual cleanup while server is down or restore from backup
 * If pruning is busy at submit-time, the whole requested batch is rejected; no queueing/backfill/substitution is introduced
 * CSV eligibility export is bound to the same projection-derived command transaction and reflects the exact ordered candidate set consumed by command handling
 * Eligibility CSV schema exposes `renewal_rank` (nullable integer) and `renewal_by_region_prune` (boolean)
@@ -376,7 +379,7 @@ The following properties must remain true:
 * Active scan may complete with unresolved leftovers recorded explicitly
 * Observability must explain stalling and progress
 * Inspect/operator-facing scheduler status remains human-facing; internal state fields remain diagnostic-level, not operator-copy contracts
-* Diagnostic observability surfaces must include initial scan completion, projection commit generation increment, do-renew batch submit acceptance/rejection, aggregate batch completion, and per-region execution outcomes
+* Diagnostic observability surfaces must include initial scan completion, projection commit generation increment, do-renew batch submit acceptance/rejection, aggregate batch completion, per-region execution outcomes, preflight filesystem-check failures, rollback success/failure outcomes, and manual-guidance emission on rollback failure
 
 Violating these invariants requires an explicit architectural decision.
 

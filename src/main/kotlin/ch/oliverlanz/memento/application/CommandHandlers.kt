@@ -47,6 +47,7 @@ import ch.oliverlanz.memento.application.visualization.EffectsHost
 import ch.oliverlanz.memento.infrastructure.pruning.WorldPruningService
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
+import ch.oliverlanz.memento.infrastructure.observability.OperatorMessages
 import ch.oliverlanz.memento.infrastructure.worldscan.MementoCsvWriter
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
 import java.util.Locale
@@ -231,7 +232,15 @@ object CommandHandlers {
 
             source.sendFeedback({ Text.literal("1) Top eligible candidates").formatted(Formatting.YELLOW) }, false)
             if (topCandidates.isEmpty()) {
-                source.sendFeedback({ Text.literal("none").formatted(Formatting.GRAY) }, false)
+                val waitingInitialScan = worldScanner?.hasInitialScanCompleted() != true
+                if (waitingInitialScan) {
+                    source.sendFeedback(
+                        { Text.literal("waiting: initial world scan must complete before operator renewal eligibility is authoritative").formatted(Formatting.GRAY) },
+                        false,
+                    )
+                } else {
+                    source.sendFeedback({ Text.literal("none").formatted(Formatting.GRAY) }, false)
+                }
             } else {
                 topCandidates.forEach { candidate ->
                     source.sendFeedback({ Text.literal(formatCandidateForExplain(candidate)).formatted(Formatting.GRAY) }, false)
@@ -531,28 +540,48 @@ object CommandHandlers {
                 }
 
                 is WorldPruningService.BatchSubmitResult.Completed -> {
-                    val successOutcomes = setOf(
-                        WorldPruningService.Outcome.success,
-                        WorldPruningService.Outcome.pruned_with_residual_backup,
-                    )
-                    val succeeded = batch.completions.count { it.outcome in successOutcomes }
+                    val succeeded = batch.completions.count {
+                        it.category == WorldPruningService.OutcomeCategory.SUCCESS
+                    }
                     val failed = batch.completions.size - succeeded
+                    val partialStateCount = batch.completions.count {
+                        it.category == WorldPruningService.OutcomeCategory.PARTIAL_STATE_REQUIRES_MANUAL_ACTION
+                    }
 
                     source.sendFeedback(
                         {
                             Text.literal(
-                                "[Memento] renewal batch outcome: requested=${batch.requested}, succeeded=$succeeded, failed=$failed (${batch.detail})."
-                            ).formatted(if (failed == 0) Formatting.YELLOW else Formatting.RED)
+                                "[Memento] renewal batch outcome: requested=${batch.requested}, succeeded=$succeeded, failed=$failed, partialState=$partialStateCount (${batch.detail})."
+                            ).formatted(
+                                if (partialStateCount > 0 || failed > 0) Formatting.RED else Formatting.YELLOW,
+                            )
                         },
                         false,
                     )
 
+                    batch.completions
+                        .filter { it.category == WorldPruningService.OutcomeCategory.PARTIAL_STATE_REQUIRES_MANUAL_ACTION }
+                        .forEach { completion ->
+                            source.sendFeedback(
+                                {
+                                    Text.literal(
+                                        "[Memento] region ${completion.target.worldId} r(${completion.target.regionX},${completion.target.regionZ}) requires manual action guidance below."
+                                    ).formatted(Formatting.RED)
+                                },
+                                false,
+                            )
+                            completion.operatorGuidance.forEach { line ->
+                                source.sendFeedback({ Text.literal(line).formatted(Formatting.RED) }, false)
+                            }
+                        }
+
                     MementoLog.info(
                         MementoConcept.RENEWAL,
-                        "do renewal batch completed requested={} succeeded={} failed={} detail={} invalidTargets={} by={}",
+                        "do renewal batch completed requested={} succeeded={} failed={} partialState={} detail={} invalidTargets={} by={}",
                         batch.requested,
                         succeeded,
                         failed,
+                        partialStateCount,
                         batch.detail,
                         invalidTargets,
                         source.name,
@@ -562,15 +591,26 @@ object CommandHandlers {
             }
         }
 
+        val chunkGroups = orderedChunks.groupBy { it.world }.size
         val submittedChunks = submitChunkBatchNow(source.name, orderedChunks)
         source.sendFeedback(
             {
                 Text.literal(
-                    "[Memento] renewal chunk action submitted=$submittedChunks requested=${requestedCandidates.size}."
+                    "[Memento] renewal chunk batch submitted: requested=${requestedCandidates.size}, submitted=$submittedChunks, groups=$chunkGroups."
                 ).formatted(Formatting.YELLOW)
             },
             false,
         )
+        OperatorMessages.info(
+            source.server,
+            "renewal chunk batch submitted: requested=${requestedCandidates.size}, submitted=$submittedChunks, groups=$chunkGroups.",
+        )
+        if (submittedChunks > 0) {
+            OperatorMessages.info(
+                source.server,
+                "renewal chunk execution is asynchronous; completion is reported by renewal lifecycle events.",
+            )
+        }
         if (invalidTargets > 0) {
             source.sendFeedback(
                 { Text.literal("[Memento] ignored $invalidTargets invalid candidate target(s). ").formatted(Formatting.GRAY) },
@@ -1166,12 +1206,17 @@ object CommandHandlers {
                 source.sendFeedback(
                     {
                         Text.literal(
-                            "[Memento] renewal action outcome=${c.outcome.name} world=${c.target.worldId} r(${c.target.regionX},${c.target.regionZ})"
-                        ).formatted(if (c.outcome == WorldPruningService.Outcome.success || c.outcome == WorldPruningService.Outcome.pruned_with_residual_backup) Formatting.YELLOW else Formatting.RED)
+                            "[Memento] renewal action outcome=${c.outcome.name} class=${c.category.name} world=${c.target.worldId} r(${c.target.regionX},${c.target.regionZ})"
+                        ).formatted(if (c.category == WorldPruningService.OutcomeCategory.SUCCESS) Formatting.YELLOW else Formatting.RED)
                     },
                     false
                 )
-                if (c.outcome == WorldPruningService.Outcome.success || c.outcome == WorldPruningService.Outcome.pruned_with_residual_backup) 1 else 0
+                if (c.category == WorldPruningService.OutcomeCategory.PARTIAL_STATE_REQUIRES_MANUAL_ACTION) {
+                    c.operatorGuidance.forEach { line ->
+                        source.sendFeedback({ Text.literal(line).formatted(Formatting.RED) }, false)
+                    }
+                }
+                if (c.category == WorldPruningService.OutcomeCategory.SUCCESS) 1 else 0
             }
         }
     }

@@ -5,6 +5,7 @@ import ch.oliverlanz.memento.domain.renewal.projection.RegionKey
 import ch.oliverlanz.memento.infrastructure.async.GlobalAsyncExclusionGate
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
+import ch.oliverlanz.memento.infrastructure.observability.OperatorMessages
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
 import ch.oliverlanz.memento.infrastructure.worldstorage.WorldStorageService
 import java.nio.file.Files
@@ -32,6 +33,12 @@ import net.minecraft.world.chunk.ChunkStatus
 object WorldPruningService {
     private const val MAX_BATCH_TARGETS: Int = 10
 
+    enum class OutcomeCategory {
+        SUCCESS,
+        SKIPPED_ERROR_RECOVERED,
+        PARTIAL_STATE_REQUIRES_MANUAL_ACTION,
+    }
+
     enum class OperationState {
         IDLE,
         SUBMITTED,
@@ -44,6 +51,8 @@ object WorldPruningService {
         rejected_loaded,
         rejected_busy,
         rejected_dimension_mismatch,
+        preflight_failed,
+        aborted_due_to_partial_state,
         rename_failed,
         partial_rollback_failed,
         pruned_with_residual_backup,
@@ -51,9 +60,16 @@ object WorldPruningService {
 
     data class Completion(
         val target: RegionKey,
+        val category: OutcomeCategory,
         val outcome: Outcome,
         val detail: String? = null,
+        val operatorGuidance: List<String> = emptyList(),
     )
+
+    private sealed interface PreflightResult {
+        data class Ready(val toRename: List<RenameMember>) : PreflightResult
+        data class Failed(val completion: Completion) : PreflightResult
+    }
 
     data class BatchCompletion(
         val requested: Int,
@@ -162,7 +178,7 @@ object WorldPruningService {
     fun submit(dimension: RegistryKey<World>, region: RegionKey): SubmitResult {
         val srv = server
         if (srv == null) {
-            val completion = Completion(region, Outcome.rename_failed, "server detached")
+            val completion = Completion(region, OutcomeCategory.SKIPPED_ERROR_RECOVERED, Outcome.rename_failed, "server detached")
             state = OperationState.COMPLETED_FAILED
             lastCompletion = completion
             return SubmitResult.Completed(completion)
@@ -171,13 +187,14 @@ object WorldPruningService {
         if (state == OperationState.SUBMITTED) {
             // Busy is an operator-visible command outcome only. It must not corrupt the in-flight
             // operation truth by transitioning state or overwriting completion records.
-            val completion = Completion(region, Outcome.rejected_busy, "operation already submitted")
+            val completion = Completion(region, OutcomeCategory.SKIPPED_ERROR_RECOVERED, Outcome.rejected_busy, "operation already submitted")
             return SubmitResult.Completed(completion)
         }
 
         if (dimension.value.toString() != region.worldId) {
             val completion = Completion(
                 region,
+                OutcomeCategory.SKIPPED_ERROR_RECOVERED,
                 Outcome.rejected_dimension_mismatch,
                 "requestedDimension=${dimension.value} decisionWorld=${region.worldId}",
             )
@@ -188,14 +205,14 @@ object WorldPruningService {
 
         val world = srv.getWorld(dimension)
         if (world == null) {
-            val completion = Completion(region, Outcome.rename_failed, "unknown world='${dimension.value}'")
+            val completion = Completion(region, OutcomeCategory.SKIPPED_ERROR_RECOVERED, Outcome.rename_failed, "unknown world='${dimension.value}'")
             state = OperationState.COMPLETED_FAILED
             lastCompletion = completion
             return SubmitResult.Completed(completion)
         }
 
         if (hasAnyLoadedChunk(world, region.regionX, region.regionZ)) {
-            val completion = Completion(region, Outcome.rejected_loaded)
+            val completion = Completion(region, OutcomeCategory.SKIPPED_ERROR_RECOVERED, Outcome.rejected_loaded)
             state = OperationState.COMPLETED_FAILED
             lastCompletion = completion
             return SubmitResult.Completed(completion)
@@ -213,7 +230,7 @@ object WorldPruningService {
 
         return when (submit) {
             is GlobalAsyncExclusionGate.SubmitResult.Busy -> {
-                val completion = Completion(region, Outcome.rejected_busy, "activeOwner=${submit.activeOwner}")
+                val completion = Completion(region, OutcomeCategory.SKIPPED_ERROR_RECOVERED, Outcome.rejected_busy, "activeOwner=${submit.activeOwner}")
                 SubmitResult.Completed(completion)
             }
 
@@ -246,7 +263,7 @@ object WorldPruningService {
             return BatchSubmitResult.Completed(
                 requested = requested,
                 completions = targets.map { (_, region) ->
-                    Completion(region, Outcome.rejected_busy, "operation already submitted")
+                    Completion(region, OutcomeCategory.SKIPPED_ERROR_RECOVERED, Outcome.rejected_busy, "operation already submitted")
                 },
                 detail = "busy",
             )
@@ -258,7 +275,7 @@ object WorldPruningService {
             return BatchSubmitResult.Completed(
                 requested = requested,
                 completions = boundedTargets.map { (_, region) ->
-                    Completion(region, Outcome.rename_failed, "server detached")
+                    Completion(region, OutcomeCategory.SKIPPED_ERROR_RECOVERED, Outcome.rename_failed, "server detached")
                 },
                 detail = "server_detached",
             )
@@ -278,7 +295,7 @@ object WorldPruningService {
                 BatchSubmitResult.Completed(
                     requested = requested,
                     completions = boundedTargets.map { (_, region) ->
-                        Completion(region, Outcome.rejected_busy, "activeOwner=${submit.activeOwner}")
+                        Completion(region, OutcomeCategory.SKIPPED_ERROR_RECOVERED, Outcome.rejected_busy, "activeOwner=${submit.activeOwner}")
                     },
                     detail = "busy",
                 )
@@ -320,7 +337,7 @@ object WorldPruningService {
                     succeeded = 0,
                     failed = batch.submitted,
                     completions = batch.acceptedTargets.map { (_, region) ->
-                        Completion(region, Outcome.rename_failed, t.message)
+                        Completion(region, OutcomeCategory.SKIPPED_ERROR_RECOVERED, Outcome.rename_failed, t.message)
                     },
                 )
             }
@@ -338,6 +355,36 @@ object WorldPruningService {
                 result.succeeded,
                 result.failed,
             )
+
+            if (result.failed == 0) {
+                OperatorMessages.info(
+                    server,
+                    "renewal batch completed: submitted=${result.submitted}, succeeded=${result.succeeded}, failed=${result.failed}.",
+                )
+            } else {
+                OperatorMessages.warn(
+                    server,
+                    "renewal batch completed with skipped regions: submitted=${result.submitted}, succeeded=${result.succeeded}, failed=${result.failed}.",
+                )
+            }
+
+            result.completions
+                .filter { it.category != OutcomeCategory.SUCCESS }
+                .forEach { completion ->
+                    val summary =
+                        "renewal region outcome class=${completion.category.name} outcome=${completion.outcome.name} world=${completion.target.worldId} r(${completion.target.regionX},${completion.target.regionZ}) detail=${completion.detail ?: "none"}"
+                    when (completion.category) {
+                        OutcomeCategory.PARTIAL_STATE_REQUIRES_MANUAL_ACTION -> OperatorMessages.warn(server, summary)
+                        OutcomeCategory.SKIPPED_ERROR_RECOVERED -> OperatorMessages.info(server, summary)
+                        OutcomeCategory.SUCCESS -> Unit
+                    }
+
+                    if (completion.category == OutcomeCategory.PARTIAL_STATE_REQUIRES_MANUAL_ACTION) {
+                        completion.operatorGuidance.forEach { line ->
+                            OperatorMessages.warn(server, line.removePrefix("[Memento] ").trim())
+                        }
+                    }
+                }
 
             val scanTick = server?.overworld?.time ?: 0L
             result.completions
@@ -370,10 +417,10 @@ object WorldPruningService {
         val completion = try {
             op.future.get()
         } catch (t: Throwable) {
-            Completion(op.target, Outcome.rename_failed, t.message)
+            Completion(op.target, OutcomeCategory.SKIPPED_ERROR_RECOVERED, Outcome.rename_failed, t.message)
         }
 
-        val success = completion.outcome == Outcome.success || completion.outcome == Outcome.pruned_with_residual_backup
+        val success = completion.category == OutcomeCategory.SUCCESS
         state = if (success) OperationState.COMPLETED_SUCCESS else OperationState.COMPLETED_FAILED
         lastCompletion = completion
 
@@ -386,6 +433,26 @@ object WorldPruningService {
             completion.outcome.name,
             completion.detail,
         )
+
+        if (completion.category == OutcomeCategory.SUCCESS) {
+            OperatorMessages.info(
+                server,
+                "renewal region completed world=${completion.target.worldId} r(${completion.target.regionX},${completion.target.regionZ}) outcome=${completion.outcome.name}.",
+            )
+        } else {
+            val summary =
+                "renewal region outcome class=${completion.category.name} outcome=${completion.outcome.name} world=${completion.target.worldId} r(${completion.target.regionX},${completion.target.regionZ}) detail=${completion.detail ?: "none"}"
+            when (completion.category) {
+                OutcomeCategory.PARTIAL_STATE_REQUIRES_MANUAL_ACTION -> OperatorMessages.warn(server, summary)
+                OutcomeCategory.SKIPPED_ERROR_RECOVERED -> OperatorMessages.info(server, summary)
+                OutcomeCategory.SUCCESS -> Unit
+            }
+            if (completion.category == OutcomeCategory.PARTIAL_STATE_REQUIRES_MANUAL_ACTION) {
+                completion.operatorGuidance.forEach { line ->
+                    OperatorMessages.warn(server, line.removePrefix("[Memento] ").trim())
+                }
+            }
+        }
 
         if (success) {
             val scanTick = server?.overworld?.time ?: 0L
@@ -410,8 +477,29 @@ object WorldPruningService {
         targets.forEach { (dimension, region) ->
             val completion = pruneRegionTriple(root, dimension, region)
             completions += completion
-            val success = completion.outcome == Outcome.success || completion.outcome == Outcome.pruned_with_residual_backup
+            val success = completion.category == OutcomeCategory.SUCCESS
             if (success) succeeded++ else failed++
+
+            if (completion.category == OutcomeCategory.PARTIAL_STATE_REQUIRES_MANUAL_ACTION) {
+                val remaining = targets.drop(completions.size)
+                remaining.forEach { (_, remainingRegion) ->
+                    completions += Completion(
+                        target = remainingRegion,
+                        category = OutcomeCategory.SKIPPED_ERROR_RECOVERED,
+                        outcome = Outcome.aborted_due_to_partial_state,
+                        detail =
+                            "not attempted because previous region entered partial state requiring manual action",
+                    )
+                    failed++
+                }
+                return BatchCompletion(
+                    requested = targets.size,
+                    submitted = completions.size,
+                    succeeded = succeeded,
+                    failed = failed,
+                    completions = completions,
+                )
+            }
         }
 
         return BatchCompletion(
@@ -456,9 +544,10 @@ object WorldPruningService {
             ),
         )
 
-        val toRename = candidates.filter { Files.exists(it.livePath) }
-        if (toRename.isEmpty()) {
-            return Completion(target, Outcome.rename_failed, "region triple missing for world=${target.worldId} region=(${target.regionX},${target.regionZ})")
+        val preflight = preflightRegionMembers(target = target, members = candidates)
+        val toRename = when (preflight) {
+            is PreflightResult.Failed -> return preflight.completion
+            is PreflightResult.Ready -> preflight.toRename
         }
 
         for (member in toRename) {
@@ -468,6 +557,7 @@ object WorldPruningService {
             } catch (t: Throwable) {
                 return Completion(
                     target,
+                    OutcomeCategory.SKIPPED_ERROR_RECOVERED,
                     Outcome.rename_failed,
                     "backup not removable member=${member.label} path=${member.backupPath} error=${t.message}",
                 )
@@ -484,14 +574,18 @@ object WorldPruningService {
                 return if (rollbackFailures.isEmpty()) {
                     Completion(
                         target,
+                        OutcomeCategory.SKIPPED_ERROR_RECOVERED,
                         Outcome.rename_failed,
                         "atomic triple rename failed member=${member.label} path=${member.livePath} error=${t.message}",
                     )
                 } else {
+                    val guidance = buildPartialStateOperatorGuidance(target, candidates)
                     Completion(
                         target,
+                        OutcomeCategory.PARTIAL_STATE_REQUIRES_MANUAL_ACTION,
                         Outcome.partial_rollback_failed,
                         "atomic triple rename failed member=${member.label}; rollback failures=${rollbackFailures.joinToString(";")}",
+                        operatorGuidance = guidance,
                     )
                 }
             }
@@ -518,9 +612,110 @@ object WorldPruningService {
         }
 
         return if (residualBackups.isEmpty()) {
-            Completion(target, Outcome.success)
+            Completion(target, OutcomeCategory.SUCCESS, Outcome.success)
         } else {
-            Completion(target, Outcome.pruned_with_residual_backup, "backup retained paths=${residualBackups.joinToString(",")}")
+            Completion(
+                target,
+                OutcomeCategory.SUCCESS,
+                Outcome.pruned_with_residual_backup,
+                "backup retained paths=${residualBackups.joinToString(",")}",
+            )
+        }
+    }
+
+    private fun preflightRegionMembers(
+        target: RegionKey,
+        members: List<RenameMember>,
+    ): PreflightResult {
+        val toRename = members.filter { Files.exists(it.livePath) }
+        // Missing region members are valid and deterministic: non-existing files do not require
+        // deletion or rollback. Preflight validates only members that currently exist.
+
+        for (member in toRename) {
+            if (!member.livePath.fileSystem.equals(member.backupPath.fileSystem)) {
+                return PreflightResult.Failed(
+                    Completion(
+                        target,
+                        OutcomeCategory.SKIPPED_ERROR_RECOVERED,
+                        Outcome.preflight_failed,
+                        "preflight failed: atomic move requires same filesystem member=${member.label}",
+                    ),
+                )
+            }
+
+            val liveParent = member.livePath.parent
+            val backupParent = member.backupPath.parent
+            if (liveParent == null || backupParent == null) {
+                return PreflightResult.Failed(
+                    Completion(
+                        target,
+                        OutcomeCategory.SKIPPED_ERROR_RECOVERED,
+                        Outcome.preflight_failed,
+                        "preflight failed: missing parent path member=${member.label}",
+                    ),
+                )
+            }
+
+            if (!Files.isWritable(liveParent)) {
+                return PreflightResult.Failed(
+                    Completion(
+                        target,
+                        OutcomeCategory.SKIPPED_ERROR_RECOVERED,
+                        Outcome.preflight_failed,
+                        "preflight failed: live parent not writable member=${member.label} path=$liveParent",
+                    ),
+                )
+            }
+
+            if (!Files.isWritable(backupParent)) {
+                return PreflightResult.Failed(
+                    Completion(
+                        target,
+                        OutcomeCategory.SKIPPED_ERROR_RECOVERED,
+                        Outcome.preflight_failed,
+                        "preflight failed: backup parent not writable member=${member.label} path=$backupParent",
+                    ),
+                )
+            }
+
+            if (!Files.isWritable(member.livePath)) {
+                return PreflightResult.Failed(
+                    Completion(
+                        target,
+                        OutcomeCategory.SKIPPED_ERROR_RECOVERED,
+                        Outcome.preflight_failed,
+                        "preflight failed: live file not writable member=${member.label} path=${member.livePath}",
+                    ),
+                )
+            }
+
+            if (Files.exists(member.backupPath) && !Files.isWritable(member.backupPath)) {
+                return PreflightResult.Failed(
+                    Completion(
+                        target,
+                        OutcomeCategory.SKIPPED_ERROR_RECOVERED,
+                        Outcome.preflight_failed,
+                        "preflight failed: backup file not writable/removable member=${member.label} path=${member.backupPath}",
+                    ),
+                )
+            }
+        }
+
+        return PreflightResult.Ready(toRename)
+    }
+
+    private fun buildPartialStateOperatorGuidance(target: RegionKey, members: List<RenameMember>): List<String> {
+        val sorted = members.sortedBy { it.label }
+        val memberLines = sorted.map { member ->
+            "  ${member.label}: live=${member.livePath} backup=${member.backupPath}"
+        }
+        return buildList {
+            add("[Memento] region ${target.worldId} r(${target.regionX},${target.regionZ}) entered partial file state while pruning.")
+            add("[Memento] If you later observe server issues for this region, use one of these calm recovery options:")
+            add("[Memento] 1) restore from backup files, or")
+            add("[Memento] 2) remove the listed files while server is down.")
+            add("[Memento] affected files:")
+            addAll(memberLines)
         }
     }
 
