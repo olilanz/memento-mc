@@ -25,29 +25,38 @@ object Commands {
                 .requires { it.hasPermissionLevel(MementoConstants.REQUIRED_OP_LEVEL) }
 
                 /* ======================
-                 * LIST
+                 * EXPLAIN
                  * ====================== */
-                .then(literal("list")
-                    .executes { CommandHandlers.list(null, it.source) }
-                    .then(literal("witherstone").executes { CommandHandlers.list(CommandHandlers.StoneKind.WITHERSTONE, it.source) })
-                    .then(literal("lorestone").executes { CommandHandlers.list(CommandHandlers.StoneKind.LORESTONE, it.source) })
-                )
-
-                /* ======================
-                 * INSPECT
-                 * ====================== */
-                .then(literal("inspect")
+                .then(literal("explain")
                     .executes { ctx ->
-                        CommandHandlers.inspect(ctx.source)
+                        CommandHandlers.explain(ctx.source)
                     }
-                    .then(argument("name", StringArgumentType.word())
-                        .suggests(CommandHandlers::suggestAnyStoneName)
+                    .then(literal("stones")
                         .executes { ctx ->
-                            CommandHandlers.inspect(ctx.source, StringArgumentType.getString(ctx, "name"))
+                            CommandHandlers.explainStones(ctx.source, null)
+                        }
+                        .then(literal("witherstone")
+                            .executes { ctx ->
+                                CommandHandlers.explainStones(ctx.source, CommandHandlers.StoneKind.WITHERSTONE)
+                            }
+                        )
+                        .then(literal("lorestone")
+                            .executes { ctx ->
+                                CommandHandlers.explainStones(ctx.source, CommandHandlers.StoneKind.LORESTONE)
+                            }
+                        )
+                    )
+                    .then(literal("renewal")
+                        .executes { ctx ->
+                            CommandHandlers.explainRenewal(ctx.source)
+                        }
+                    )
+                    .then(literal("world")
+                        .executes { ctx ->
+                            CommandHandlers.explainWorld(ctx.source)
                         }
                     )
                 )
-
 
                 /* ======================
                  * VISUALIZE
@@ -64,29 +73,23 @@ object Commands {
                     )
                 )
 
-                /* ======================
-                 * SCAN
-                 * ====================== */
-                .then(literal("scan")
-                    .executes { ctx ->
-                        CommandHandlers.scan(ctx.source)
-                    }
-                )
 
                 /* ======================
-                 * RENEW
+                 * DO
                  * ====================== */
-                .then(literal("renew")
-                    .executes { ctx ->
-                        CommandHandlers.renew(ctx.source)
-                    }
-                    .then(literal("force")
+                .then(literal("do")
+                    .then(literal("scan")
                         .executes { ctx ->
-                            CommandHandlers.renewForce(ctx.source)
+                            CommandHandlers.scan(ctx.source)
+                        }
+                    )
+                    .then(literal("renew")
+                        .executes { ctx ->
+                            CommandHandlers.doRenewal(ctx.source)
                         }
                         .then(argument("count", IntegerArgumentType.integer(1))
                             .executes { ctx ->
-                                CommandHandlers.renewForce(
+                                CommandHandlers.doRenewal(
                                     ctx.source,
                                     IntegerArgumentType.getInteger(ctx, "count")
                                 )

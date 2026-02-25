@@ -175,32 +175,32 @@ Public projection surface doctrine:
 * consumers never observe partial recomputation state
 * projection generation is internal binding/tracing data and is not gameplay-facing operator copy
 
-### Renewal command preview and execution binding
+### Renewal operator command semantics (`/memento explain ...`, `/memento do ...`)
 
-Operator commands consume projection snapshots and own operator-facing binding semantics.
+Operator commands consume projection snapshots as read surfaces and execution-entry points,
+without owning a preview-plan lifecycle.
 
 It owns:
 
-* `/memento renew` preview binding to the latest committed snapshot
-* storage of exactly what was shown to the operator (bound generation + ordered items)
-* `/memento renew force [N]` execution gating against that preview binding
-* fail-closed revalidation when projection generation changed since preview
-* enforcement of an initial-scan-completed gate for operator preview/force commands
+* `/memento explain renewal` read-only explanation of current renewal state
+* `/memento do renew [N]` immediate operator-triggered submission based on current committed snapshot head
+* per-iteration revalidation against current committed snapshot before each submission
+* enforcement of an initial-scan-completed gate for operator renewal action commands
 
 It does not own projection lifecycle and does not mutate `WorldMap` directly.
-It must not introduce hidden queueing, backfill, substitution, or scheduler behavior.
+It must not introduce hidden queueing, stored-plan binding, backfill, substitution, or scheduler behavior.
 
-Operator preview trust gate:
+Operator trust gate:
 
-* `/memento renew` and `/memento renew force [N]` are rejected until first full scan completion is recorded
-* projection may continue commit/recompute before first scan completion, but those commits are non-authoritative for operator preview semantics
+* `/memento do renew [N]` is rejected until first full scan completion is recorded
+* projection may continue commit/recompute before first scan completion, but those commits are non-authoritative for operator-triggered renewal action
 
-Force revalidation doctrine on generation drift:
+Drift semantics doctrine:
 
-* revalidation is item-based for the first `N` stored preview items only
-* revalidation uses the same projection-owned eligibility logic used by ranking
-* no ranking-list identity comparison is required
-* any failed item revalidation fails the entire force command
+* generation remains internal projection binding/tracing data
+* operator commands do not store generation-bound preview worklists
+* drift no longer aborts a stored sequence (no stored sequence exists)
+* action loop uses iterative current-head revalidation/skip semantics with bounded termination guard
 
 ### WorldMap
 
@@ -224,7 +224,7 @@ No infrastructure component mutates `WorldMap` directly.
 
 ### World scanner
 
-The scanner is an infrastructure component that owns **filesystem discovery reconciliation and completion** for `/memento scan`.
+The scanner is an infrastructure component that owns **filesystem discovery reconciliation and completion** for `/memento do scan`.
 
 Active scan is file-primary and two-pass. Chunk metadata is read from region/NBT files off-thread and emitted as metadata facts into `WorldMapService` for tick-thread application. The scanner does not emit proactive engine demand.
 
@@ -346,12 +346,11 @@ The following properties must remain true:
 * There is always exactly one visible committed projection snapshot; consumers never observe partial recomputation
 * Projection generation increments only on successful commit and is internal binding/tracing data, not gameplay-facing operator copy
 * Command dependency direction is one-way: command layer reads committed projection snapshot; projection does not depend on command layer
-* `/memento renew` stores operator preview binding as shown-items + bound generation from committed projection snapshot
-* `/memento renew force [N]` executes only from stored preview items; when generation changed, force revalidates each requested item and fails the whole command if any item is no longer eligible
-* `/memento renew` and `/memento renew force [N]` are rejected until initial full scan completion is recorded
-* No queueing/backfill/substitution is allowed in command execution binding; commands must not execute a plan the operator has not seen
-* Generation drift handling is item-eligibility revalidation only, not ranking-list identity comparison
-* Revalidation failure is fail-closed: no partial execution
+* `/memento do renew [N]` is rejected until initial full scan completion is recorded
+* `/memento do renew [N]` consumes the current committed projection snapshot at submit-time; it does not store preview bindings or plan lifecycle state
+* Region-prune execution is submitted as a single bounded batch operation (max 10 targets) in deterministic ranked order
+* Batch prune is continue-on-failure per region and emits aggregate plus per-region outcomes
+* If pruning is busy at submit-time, the whole requested batch is rejected; no queueing/backfill/substitution is introduced
 * CSV eligibility export is bound to the same projection-derived command transaction and reflects the exact ordered candidate set consumed by command handling
 * Eligibility CSV schema exposes `renewal_rank` (nullable integer) and `renewal_by_region_prune` (boolean)
 * Derived renewal metrics/decisions must not be persisted into WorldMap factual memory
@@ -377,7 +376,7 @@ The following properties must remain true:
 * Active scan may complete with unresolved leftovers recorded explicitly
 * Observability must explain stalling and progress
 * Inspect/operator-facing scheduler status remains human-facing; internal state fields remain diagnostic-level, not operator-copy contracts
-* Diagnostic observability surfaces must include initial scan completion, projection commit generation increment, preview binding creation, force generation-drift detection, revalidation pass/fail, and per-item execution outcomes
+* Diagnostic observability surfaces must include initial scan completion, projection commit generation increment, do-renew batch submit acceptance/rejection, aggregate batch completion, and per-region execution outcomes
 
 Violating these invariants requires an explicit architectural decision.
 

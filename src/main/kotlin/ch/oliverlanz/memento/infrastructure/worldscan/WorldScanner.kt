@@ -612,9 +612,9 @@ class WorldScanner : ChunkAvailabilityListener {
 
         val durationText = durationMs?.let { " after ${formatDuration(it)}" } ?: ""
         val message = if (map.isComplete()) {
-            "The world survey has completed$durationText. ${event.scannedChunks} chunks were confirmed."
+            "The world scan has completed$durationText. ${event.scannedChunks} chunks were confirmed."
         } else {
-            "The world survey pause ended$durationText. ${event.missingChunks} chunks still need confirmation."
+            "The world scan pause ended$durationText. ${event.missingChunks} chunks still need confirmation."
         }
         OperatorMessages.info(srv, message)
     }

@@ -124,21 +124,33 @@ Nothing is forced.
 
 ---
 
-### Inspection
+### Explain and do
 
-* `/naturalrenewal list`
-  List all registered stones.
+* `/memento explain`
+  Show the operator dashboard summary, including stone inventory/state and system status.
 
-* `/naturalrenewal list witherstone`
-  List all Witherstones.
+* `/memento explain world`
+  Explain world knowledge completeness, eligible totals, and projection health.
 
-* `/naturalrenewal list lorestone`
-  List all Lorestones.
+* `/memento explain stones`
+  Explain registered stones (all). Optional filters:
+  * `/memento explain stones witherstone`
+  * `/memento explain stones lorestone`
 
-* `/naturalrenewal inspect <name>`
-  Explain the current state of a stone, including what is preventing renewal.
+* `/memento explain renewal`
+  Explain current renewal state with four sections:
+  1) top eligible candidates,
+  2) stones waiting to mature,
+  3) stones waiting for consumption,
+  4) blocking conditions.
 
-Inspection commands are designed to be **explainable** — they tell you *what the system is waiting for*.
+* `/memento do scan`
+  Start an active world scan.
+
+* `/memento do renew [N]`
+  Submit up to `N` renewal actions immediately from current eligibility (default `N = 1`).
+
+These commands are designed to be **explainable** — they tell you *what the system is waiting for* and allow deliberate action without preview-plan lifecycle handling.
 
 ---
 
