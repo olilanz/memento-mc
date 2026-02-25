@@ -19,16 +19,18 @@ import net.minecraft.world.World
 import net.minecraft.world.chunk.ChunkStatus
 
 /**
- * Single-operation region prune executor for `/memento renew force`.
+ * Region-prune executor for operator-triggered `/memento do renew [N]` region candidates.
  *
  * Design lock:
  * - exactly one in-memory operation state,
  * - no persistence,
  * - no queue and no retry loop,
+ * - submit-time bounded batching for region prune targets,
  * - tick thread decides and emits outcomes,
  * - background thread performs filesystem operations only.
  */
 object WorldPruningService {
+    private const val MAX_BATCH_TARGETS: Int = 10
 
     enum class OperationState {
         IDLE,
@@ -53,9 +55,31 @@ object WorldPruningService {
         val detail: String? = null,
     )
 
+    data class BatchCompletion(
+        val requested: Int,
+        val submitted: Int,
+        val succeeded: Int,
+        val failed: Int,
+        val completions: List<Completion>,
+    )
+
     sealed interface SubmitResult {
         data class Submitted(val target: RegionKey) : SubmitResult
         data class Completed(val completion: Completion) : SubmitResult
+    }
+
+    sealed interface BatchSubmitResult {
+        data class Submitted(
+            val requested: Int,
+            val submitted: Int,
+            val acceptedTargets: List<RegionKey>,
+        ) : BatchSubmitResult
+
+        data class Completed(
+            val requested: Int,
+            val completions: List<Completion>,
+            val detail: String,
+        ) : BatchSubmitResult
     }
 
     private data class SubmittedOperation(
@@ -64,6 +88,13 @@ object WorldPruningService {
         val regionX: Int,
         val regionZ: Int,
         val future: Future<Completion>,
+    )
+
+    private data class SubmittedBatchOperation(
+        val requested: Int,
+        val submitted: Int,
+        val acceptedTargets: List<Pair<RegistryKey<World>, RegionKey>>,
+        val future: Future<BatchCompletion>,
     )
 
     private data class RenameMember(
@@ -79,7 +110,13 @@ object WorldPruningService {
     private var submitted: SubmittedOperation? = null
 
     @Volatile
+    private var submittedBatch: SubmittedBatchOperation? = null
+
+    @Volatile
     private var lastCompletion: Completion? = null
+
+    @Volatile
+    private var lastBatchCompletion: BatchCompletion? = null
 
     @Volatile
     private var server: MinecraftServer? = null
@@ -92,7 +129,9 @@ object WorldPruningService {
         this.scanner = scanner
         state = OperationState.IDLE
         submitted = null
+        submittedBatch = null
         lastCompletion = null
+        lastBatchCompletion = null
     }
 
     fun detach() {
@@ -100,7 +139,9 @@ object WorldPruningService {
         scanner = null
         state = OperationState.IDLE
         submitted = null
+        submittedBatch = null
         lastCompletion = null
+        lastBatchCompletion = null
     }
 
     fun statusView(): Pair<OperationState, Completion?> = state to lastCompletion
@@ -114,6 +155,9 @@ object WorldPruningService {
 
     /** Latest completed prune outcome (if any). */
     fun lastCompletionOrNull(): Completion? = lastCompletion
+
+    /** Latest completed batch prune outcome (if any). */
+    fun lastBatchCompletionOrNull(): BatchCompletion? = lastBatchCompletion
 
     fun submit(dimension: RegistryKey<World>, region: RegionKey): SubmitResult {
         val srv = server
@@ -188,7 +232,136 @@ object WorldPruningService {
         }
     }
 
+    fun submitBatch(targets: List<Pair<RegistryKey<World>, RegionKey>>): BatchSubmitResult {
+        val requested = targets.size
+        if (requested == 0) {
+            return BatchSubmitResult.Completed(
+                requested = 0,
+                completions = emptyList(),
+                detail = "empty_request",
+            )
+        }
+
+        if (state == OperationState.SUBMITTED) {
+            return BatchSubmitResult.Completed(
+                requested = requested,
+                completions = targets.map { (_, region) ->
+                    Completion(region, Outcome.rejected_busy, "operation already submitted")
+                },
+                detail = "busy",
+            )
+        }
+
+        val boundedTargets = targets.take(MAX_BATCH_TARGETS)
+        val srv = server
+        if (srv == null) {
+            return BatchSubmitResult.Completed(
+                requested = requested,
+                completions = boundedTargets.map { (_, region) ->
+                    Completion(region, Outcome.rename_failed, "server detached")
+                },
+                detail = "server_detached",
+            )
+        }
+
+        val submit = GlobalAsyncExclusionGate.submitIfIdle(
+            concept = MementoConcept.PRUNING,
+            owner = "world-pruning",
+        ) {
+            java.util.concurrent.Callable {
+                pruneBatch(root = srv.getSavePath(WorldSavePath.ROOT), targets = boundedTargets)
+            }
+        }
+
+        return when (submit) {
+            is GlobalAsyncExclusionGate.SubmitResult.Busy -> {
+                BatchSubmitResult.Completed(
+                    requested = requested,
+                    completions = boundedTargets.map { (_, region) ->
+                        Completion(region, Outcome.rejected_busy, "activeOwner=${submit.activeOwner}")
+                    },
+                    detail = "busy",
+                )
+            }
+
+            is GlobalAsyncExclusionGate.SubmitResult.Accepted -> {
+                state = OperationState.SUBMITTED
+                lastCompletion = null
+                lastBatchCompletion = null
+                submittedBatch = SubmittedBatchOperation(
+                    requested = requested,
+                    submitted = boundedTargets.size,
+                    acceptedTargets = boundedTargets,
+                    future = submit.future,
+                )
+                BatchSubmitResult.Submitted(
+                    requested = requested,
+                    submitted = boundedTargets.size,
+                    acceptedTargets = boundedTargets.map { it.second },
+                )
+            }
+        }
+    }
+
     fun tickThreadProcess() {
+        val batch = submittedBatch
+        if (batch != null) {
+            if (!batch.future.isDone) return
+
+            submittedBatch = null
+            submitted = null
+
+            val result = try {
+                batch.future.get()
+            } catch (t: Throwable) {
+                BatchCompletion(
+                    requested = batch.requested,
+                    submitted = batch.submitted,
+                    succeeded = 0,
+                    failed = batch.submitted,
+                    completions = batch.acceptedTargets.map { (_, region) ->
+                        Completion(region, Outcome.rename_failed, t.message)
+                    },
+                )
+            }
+
+            val success = result.failed == 0
+            state = if (success) OperationState.COMPLETED_SUCCESS else OperationState.COMPLETED_FAILED
+            lastBatchCompletion = result
+            lastCompletion = result.completions.lastOrNull()
+
+            MementoLog.info(
+                MementoConcept.PRUNING,
+                "world pruning batch result requested={} submitted={} succeeded={} failed={}",
+                result.requested,
+                result.submitted,
+                result.succeeded,
+                result.failed,
+            )
+
+            val scanTick = server?.overworld?.time ?: 0L
+            result.completions
+                .asSequence()
+                .filter { completion ->
+                    completion.outcome == Outcome.success || completion.outcome == Outcome.pruned_with_residual_backup
+                }
+                .forEach { completion ->
+                    val dimension = runCatching {
+                        RegistryKey.of(net.minecraft.registry.RegistryKeys.WORLD, net.minecraft.util.Identifier.of(completion.target.worldId))
+                    }.getOrNull() ?: return@forEach
+
+                    scanner?.startRegionRescan(
+                        world = dimension,
+                        regionX = completion.target.regionX,
+                        regionZ = completion.target.regionZ,
+                        reason = "renew_force_prune",
+                        scanTick = scanTick,
+                    )
+                }
+
+            return
+        }
+
         val op = submitted ?: return
         if (!op.future.isDone) return
 
@@ -224,6 +397,30 @@ object WorldPruningService {
                 scanTick = scanTick,
             )
         }
+    }
+
+    private fun pruneBatch(
+        root: Path,
+        targets: List<Pair<RegistryKey<World>, RegionKey>>,
+    ): BatchCompletion {
+        val completions = mutableListOf<Completion>()
+        var succeeded = 0
+        var failed = 0
+
+        targets.forEach { (dimension, region) ->
+            val completion = pruneRegionTriple(root, dimension, region)
+            completions += completion
+            val success = completion.outcome == Outcome.success || completion.outcome == Outcome.pruned_with_residual_backup
+            if (success) succeeded++ else failed++
+        }
+
+        return BatchCompletion(
+            requested = targets.size,
+            submitted = targets.size,
+            succeeded = succeeded,
+            failed = failed,
+            completions = completions,
+        )
     }
 
     private fun pruneRegionTriple(
