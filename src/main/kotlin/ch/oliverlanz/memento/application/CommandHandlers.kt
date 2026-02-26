@@ -58,6 +58,12 @@ import java.util.Locale
  * Commands.kt defines the authoritative command grammar.
  * This file contains the execution logic and delegates to the domain layer
  * (StoneAuthority + RenewalTracker).
+ *
+ * Local policy ownership:
+ * - `/memento do renew [N]` consumes the current committed projection snapshot at submit-time.
+ * - No command-owned preview queue, stored-plan lifecycle, or generation-bound worklist is kept.
+ * - Per-iteration revalidation happens against current committed snapshot before each submission.
+ * - Region-prune request batching is bounded by `DO_RENEWAL_MAX_REGION_BATCH`.
  */
 object CommandHandlers {
 

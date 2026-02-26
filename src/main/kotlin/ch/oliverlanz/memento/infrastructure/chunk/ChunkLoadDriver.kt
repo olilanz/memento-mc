@@ -39,6 +39,12 @@ import net.minecraft.world.chunk.WorldChunk
  * - Engine callbacks may arrive on non-tick threads.
  * - The DRIVER never propagates outcomes on an engine callback thread.
  * - All propagation and engine access happens on the tick thread.
+ *
+ * Local policy ownership:
+ * - world-map metadata facts are emitted only after full-load accessibility is reached,
+ * - expiry outcomes without full-load accessibility remain lifecycle signals and do not mutate
+ *   world memory,
+ * - ambient observations are best-effort and never create hidden scanner demand.
  */
 class ChunkLoadDriver {
 

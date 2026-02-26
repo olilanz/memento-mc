@@ -29,6 +29,13 @@ import net.minecraft.world.chunk.ChunkStatus
  * - submit-time bounded batching for region prune targets,
  * - tick thread decides and emits outcomes,
  * - background thread performs filesystem operations only.
+ *
+ * Local policy ownership:
+ * - batch processing is continue-on-failure per region and emits aggregate + per-region outcomes,
+ * - each region runs preflight filesystem safety checks before rename/delete operations,
+ * - rename-failed + rollback-succeeded resolves to skipped-with-error and batch continues,
+ * - rollback-failed emits calm operator guidance with concrete file paths and recovery options,
+ * - submit while busy is rejected for the whole requested batch (no queue/backfill/substitution).
  */
 object WorldPruningService {
     private const val MAX_BATCH_TARGETS: Int = 10
