@@ -36,6 +36,12 @@ import net.minecraft.util.math.ChunkPos
  *   ambient enrichment.
  *
  * This class implements [ChunkAvailabilityListener] (driver pushes availability).
+ *
+ * Local policy ownership:
+ * - scanner retry policy for provider-busy/start deferral is scanner-owned and cadence-driven,
+ * - scanner-level observability and completion signaling details are maintained here,
+ * - active scan completion may include unresolved leftovers while preserving authoritative map
+ *   state semantics.
  */
 class WorldScanner : ChunkAvailabilityListener {
 

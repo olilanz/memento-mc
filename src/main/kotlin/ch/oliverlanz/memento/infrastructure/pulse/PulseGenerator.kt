@@ -8,6 +8,11 @@ import ch.oliverlanz.memento.infrastructure.observability.MementoLog
  * Infrastructure pulse generator.
  *
  * Emits cadence transport signals only; never executes semantic domain decisions.
+ *
+ * Local policy ownership:
+ * - cadence constants and phase offsets are consumed from `MementoConstants`,
+ * - non-HIGH cadence phase staggering is enforced by `validateConfiguration()`,
+ * - semantic retry/execution policy remains in subscribers, not in pulse transport.
  */
 class PulseGenerator {
 

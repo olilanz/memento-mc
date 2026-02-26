@@ -19,7 +19,14 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
 
-/** Application-level projection of a topology into a CSV file for analysis. */
+/**
+ * Application-level projection of topology and renewal candidate/election views into CSV files.
+ *
+ * Local policy ownership:
+ * - election CSV export is bound to the same projection-derived command transaction id,
+ * - exported candidate ordering reflects the exact ordered candidate set consumed by command handling,
+ * - schema-level fields such as `renewal_rank` and `renewal_by_region_prune` are owned here.
+ */
 object MementoCsvWriter {
 
 

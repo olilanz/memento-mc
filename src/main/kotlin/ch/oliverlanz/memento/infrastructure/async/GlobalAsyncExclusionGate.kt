@@ -14,6 +14,10 @@ import java.util.concurrent.Future
  * - one background job at a time globally,
  * - reject while busy,
  * - no fairness/priority/queue semantics.
+ *
+ * Local policy ownership:
+ * - retry/backoff cadence is caller-owned (scanner/projection/execution paths),
+ * - gate exposes admission only (accepted vs busy) and no hidden orchestration behavior.
  */
 object GlobalAsyncExclusionGate {
     sealed interface SubmitResult<out T> {
@@ -75,4 +79,3 @@ object GlobalAsyncExclusionGate {
         return SubmitResult.Accepted(future = future, owner = owner)
     }
 }
-
