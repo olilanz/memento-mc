@@ -1,8 +1,8 @@
-# Natural Renewal
+# Memento – Natural Renewal
 
 **Intentional world renewal through remembering and forgetting.**
 
-Natural Renewal is a lightweight, server-side Fabric mod for Minecraft that helps long-lived worlds evolve naturally over time — without wiping the world or interrupting gameplay.
+Memento is a lightweight, server-side Fabric mod for Minecraft that helps long-lived worlds evolve naturally over time — without wiping the world or interrupting gameplay.
 
 Vanilla clients are fully compatible.
 
@@ -14,14 +14,16 @@ Minecraft worlds never forget.
 
 Over time, long-lived worlds become surrounded by vast areas of old, unused terrain. New world features appear farther and farther away, and upgrades or world-generation changes rarely affect the places where players actually live.
 
-Natural Renewal lets the world **move forward naturally**.
+Memento enables **natural renewal**.
 
 It distinguishes between land that is **memorable** — inhabited areas and their surroundings — and land that is **forgettable** — terrain that was explored briefly and then abandoned.
 
-Forgettable areas gradually fade from memory and are **renewed using the current world generation**, starting in the outskirts and working inward.
-Inhabited areas remain stable and untouched.
+Forgettable land is not destroyed.  
+It fades from memory — and only then can it renew.
 
-All of this happens **while the server is running**, without offline tools or manual chunk deletion.
+Renewal begins far from active gameplay and gradually moves inward over time. Inhabited areas remain stable and untouched.
+
+All of this happens while the server is running. No offline tools. No manual region deletion.
 
 ---
 
@@ -29,18 +31,18 @@ All of this happens **while the server is running**, without offline tools or ma
 
 Not all land deserves to last forever.
 
-Natural Renewal models a simple idea:
+Memento models a simple idea:
 
-* **Memorable land**
-  Areas where players live, return to, or spend time — including their immediate surroundings.
+* **Memorable land**  
+  Areas where players live, return to, or spend time — including their surroundings.
 
-* **Forgettable land**
-  Areas no player ever settled in, or terrain that has seen no player presence for a long time.
+* **Forgettable land**  
+  Areas that were explored but never settled, or that have seen no meaningful activity for a long time.
 
-Forgettable land is not destroyed.
-It is allowed to **fade from memory** — and only then can it renew.
+Forgettable land is allowed to fade.  
+Renewal only happens after that fading has occurred.
 
-Renewal happens gradually, beginning far from active gameplay and moving inward over time.
+The world feels stable where it matters — and fresh where it doesn’t.
 
 ---
 
@@ -50,118 +52,98 @@ Most of the time:
 
 * nothing at all
 
-When renewal does happen:
+When renewal happens:
 
 * it occurs away from inhabited areas
-* it happens only when land is abandoned
-* it never causes partial or visible tearing
+* it only affects abandoned land
+* it never causes partial regeneration or visible tearing
 * it does not interrupt gameplay
 
-The world feels stable where it matters — and fresh where it doesn’t.
+Memento prioritizes stability over speed.
 
 ---
 
 ## Stones: guiding memory and renewal
 
-Natural Renewal introduces two conceptual tools to express intent:
+Memento introduces two tools to express operator intent:
 
-* **Witherstone**
-  Marks land for renewal over time. When it matures, it schedules chunks in its area for renewal as soon as the server naturally unloads them.
+* **Witherstone**  
+  Marks land for renewal over time. Once mature, it schedules its area for renewal when chunks naturally unload.
 
-* **Lorestone**
-  Protects land from renewal. Any chunks covered by a Lorestone are guaranteed to never be renewed, even if they overlap a Witherstone.
+* **Lorestone**  
+  Protects land permanently from renewal.
 
-Stones do not force immediate change.
-Renewal only happens when chunks can unload naturally (for example, when players leave an area), keeping the world stable and predictable.
-
----
-
-## Operator control
-
-Natural Renewal is **conservative by default**.
-
-The system avoids coming too close to active gameplay and prioritizes stability over speed. Operator control exists as a **protective and guiding mechanism**, not as the primary driver of renewal.
-
-Operators can:
-
-* explicitly protect important areas
-* guide renewal toward places where change is acceptable
-* take a more deliberate or aggressive stance when desired
-
-Nothing is automatic.
-Nothing is forced.
+Stones do not force immediate change.  
+Renewal only occurs when chunks can unload naturally, keeping the world stable and predictable.
 
 ---
 
-## Operator commands (OP ≥ 2)
+## Operator workflow (OP ≥ 2)
 
-### System
+Memento is conservative by default.
 
-* `/naturalrenewal version`
-  Show the installed mod version.
+Operators typically work in two stages:
 
----
+### 1) Define intent with stones
 
-### Stones
+The primary workflow today is zone-based renewal.
 
-* `/naturalrenewal add witherstone <name> <radius> <daysToMaturity>`
-  Register a new Witherstone.
+* `/memento add witherstone <name> [radius] [daysToMaturity]`
+* `/memento add lorestone <name> [radius]`
+* `/memento remove witherstone <name>`
+* `/memento remove lorestone <name>`
+* `/memento alter witherstone <name> radius <value>`
+* `/memento alter witherstone <name> daysToMaturity <value>`
+* `/memento alter lorestone <name> radius <value>`
 
-* `/naturalrenewal add lorestone <name> <radius>`
-  Register a new Lorestone.
+Witherstones mature over in-game days.  
+Lorestones prevent renewal in protected areas.
 
-* `/naturalrenewal remove witherstone <name>`
-  Remove a Witherstone.
-
-* `/naturalrenewal remove lorestone <name>`
-  Remove a Lorestone.
-
-* `/naturalrenewal set witherstone <name> daysToMaturity <value>`
-  Adjust the maturity time of a Witherstone.
-
-* `/naturalrenewal set witherstone <name> radius <value>`
-  Adjust the radius of a Witherstone.
+This is the primary entry point for new operators.
 
 ---
 
-### Explain and do
+### 2) Observe and act deliberately
 
-* `/memento explain`
-  Show the operator dashboard summary, including stone inventory/state and system status.
+Operators can inspect system state:
 
-* `/memento explain world`
-  Explain world knowledge completeness, eligible totals, and projection health.
+* `/memento explain`  
+  Operator dashboard summary.
 
-* `/memento explain stones`
-  Explain registered stones (all). Optional filters:
-  * `/memento explain stones witherstone`
-  * `/memento explain stones lorestone`
+* `/memento explain world`  
+  World knowledge completeness and renewal health.
 
-* `/memento explain renewal`
-  Explain current renewal state with four sections:
-  1) top eligible candidates,
-  2) stones waiting to mature,
-  3) stones waiting for consumption,
-  4) blocking conditions.
+* `/memento explain stones`  
+  Overview of registered stones.
 
-* `/memento do scan`
-  Start an active world scan.
+* `/memento explain renewal`  
+  Current renewal state, including:
+  1. Top eligible renewal candidates  
+  2. Stones waiting to mature  
+  3. Stones waiting for consumption  
+  4. Blocking conditions  
 
-* `/memento do renew [N]`
-  Submit up to `N` renewal actions immediately from current eligibility (default `N = 1`).
+Operators may also act deliberately:
 
-These commands are designed to be **explainable** — they tell you *what the system is waiting for* and allow deliberate action without preview-plan lifecycle handling.
+* `/memento do scan`  
+  Trigger an active world scan.
+
+* `/memento do renew [N]`  
+  Immediately submit up to `N` renewal actions (default `N = 1`).
+
+These commands are explainable by design.  
+They describe what the system is waiting for and allow controlled intervention without hidden lifecycle state.
 
 ---
 
 ## Safety and compatibility
 
-* Server-side only
-* Vanilla clients fully compatible
-* No forced chunk unloads
-* No partial regeneration
-* Deterministic and explainable behavior
-* Compatible with world-generation mods
+* Server-side only  
+* Vanilla clients fully compatible  
+* No forced chunk unloads  
+* No partial regeneration  
+* Deterministic and explainable behavior  
+* Compatible with world-generation mods  
 
 Renewal only occurs when land is fully abandoned.
 
@@ -169,23 +151,54 @@ Renewal only occurs when land is fully abandoned.
 
 ## Installation
 
-Natural Renewal is a standard Fabric mod.
+Memento is a standard Fabric mod.
 
-1. Install Fabric Loader for your Minecraft version
-2. Drop the mod JAR into your server’s `mods` folder
-3. Start the server
+1. Install Fabric Loader for your Minecraft version  
+2. Place the mod JAR in your server’s `mods` folder  
+3. Start the server  
 
-No client-side installation is required.
+No client installation required.
 
 ---
 
 ## Further documentation
 
-* **RENEWAL_MODEL.md** — in-world explanation of memory and forgetting
-* **ARCHITECTURE.md** — internal design and invariants
-* **DEVELOPMENT.md** — build and development environment
+* **RENEWAL_MODEL.md** — in-world explanation of memory and forgetting  
+* **ARCHITECTURE.md** — internal design and invariants  
+* **DEVELOPMENT.md** — build and development environment  
 
 ---
 
-Natural Renewal does not erase history.
-It makes room for new stories.
+## Open Issues Before General Availability
+
+Memento is approaching general availability.  
+The following architectural gaps are known and will be resolved before GA.
+
+### 1. Renewal Loop Prevention (Chunks & Regions)
+
+Renewed chunks and pruned regions must be marked as “recently renewed” so they do not immediately become eligible again.
+
+Without durable exemption markers, the system may:
+
+* renew the same chunk repeatedly, or  
+* oscillate between region pruning and chunk renewal near region borders.
+
+This applies to both region-level pruning and chunk-level renewal.
+
+---
+
+### 2. Eligibility Queue Freshness vs. World Activity
+
+The eligibility queue is derived from a settled projection snapshot.  
+On very busy servers, the projection may not settle quickly, causing the queue to become stale.
+
+Renewal must never affect newly inhabited areas, even if the queue is old.  
+A stable combination of queue stability and live safety validation is required.
+
+---
+
+### 3. Full Automation Scheduling
+
+Natural renewal (scan → projection → renew) is not yet fully automated on a nightly cadence.
+
+Automation will only be enabled once loop-prevention and queue-freshness safeguards are fully validated.
