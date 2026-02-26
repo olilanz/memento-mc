@@ -1,7 +1,7 @@
 package ch.oliverlanz.memento.domain.renewal.eligibility
 
 import ch.oliverlanz.memento.domain.renewal.projection.RegionKey
-import ch.oliverlanz.memento.domain.renewal.projection.RenewalStableSnapshot
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalEligibilityInput
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
@@ -21,7 +21,7 @@ data class EligibilityResult(
 )
 
 /**
- * Pure eligibility derivation from one stable projection snapshot.
+ * Pure eligibility derivation from one immutable projection evaluation input.
  *
  * Side-effect contract:
  * - no world/projection mutation
@@ -58,10 +58,10 @@ object EligibilityService {
         }
     }
 
-    fun evaluate(stable: RenewalStableSnapshot): EligibilityResult {
-        val transactionId = "elig-${stable.generation}-${evaluationCounter.incrementAndGet()}"
-        val snapshot = stable.snapshotEntries
-        val metricsByChunk = stable.metricsByChunk
+    fun evaluate(input: RenewalEligibilityInput): EligibilityResult {
+        val transactionId = "elig-${input.generation}-${evaluationCounter.incrementAndGet()}"
+        val snapshot = input.snapshotEntries
+        val metricsByChunk = input.metricsByChunk
         val boundedChecks = BoundedCheckCounter()
 
         val forgettableByChunk = snapshot.associate { entry ->
@@ -164,7 +164,7 @@ object EligibilityService {
         MementoLog.info(
             MementoConcept.RENEWAL,
             "eligibility bounded-eval generation={} transaction={} checks={} regionRingMax={} chunkRingMax={} regionCandidates={} chunkFallbackCandidates={} selected={}",
-            stable.generation,
+            input.generation,
             transactionId,
             boundedChecks.checks,
             MAX_REGION_DISTANCE_RING,
@@ -175,7 +175,7 @@ object EligibilityService {
         )
 
         return EligibilityResult(
-            projectionGeneration = stable.generation,
+            projectionGeneration = input.generation,
             transactionId = transactionId,
             eligibleRegions = sortedRegions,
             eligibleChunks = sortedChunks,

@@ -53,16 +53,29 @@ data class RenewalRankedCandidate(
 )
 
 /**
- * Commit snapshot payload.
+ * Projection-owned published view.
+ *
+ * This is the only candidate view that command surfaces are allowed to observe.
  */
-data class RenewalCommittedSnapshot(
+data class RenewalPublishedView(
     val generation: Long,
     val snapshotEntries: List<ChunkScanSnapshotEntry>,
     val metricsByChunk: Map<ChunkKey, RenewalChunkMetrics>,
     val rankedCandidates: List<RenewalRankedCandidate>,
 )
 
-typealias RenewalStableSnapshot = RenewalCommittedSnapshot
+/**
+ * Immutable evaluation input for eligibility derivation.
+ *
+ * Projection materializes this input first, then eligibility computes without side-effects.
+ */
+data class RenewalEligibilityInput(
+    val generation: Long,
+    val snapshotEntries: List<ChunkScanSnapshotEntry>,
+    val metricsByChunk: Map<ChunkKey, RenewalChunkMetrics>,
+)
+
+typealias RenewalCommittedSnapshot = RenewalPublishedView
 
 fun RenewalCandidateId.toChunkKeyOrNull(): ChunkKey? {
     if (action != RenewalCandidateAction.CHUNK_RENEW) return null
