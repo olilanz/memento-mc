@@ -118,7 +118,7 @@ Operators can inspect system state:
 
 * `/memento explain renewal`  
   Current renewal state, including:
-  1. Top eligible renewal candidates  
+  1. Top renewal candidates  
   2. Stones waiting to mature  
   3. Stones waiting for consumption  
   4. Blocking conditions  
@@ -187,13 +187,13 @@ This applies to both region-level pruning and chunk-level renewal.
 
 ---
 
-### 2. Eligibility Queue Freshness vs. World Activity
+### 2. Renewal Candidate Freshness vs. World Activity
 
-The eligibility queue is derived from a settled projection snapshot.  
-On very busy servers, the projection may not settle quickly, causing the queue to become stale.
+The renewal candidate set is derived from a settled projection snapshot.  
+On very busy servers, the projection may not settle quickly, causing candidate information to become stale.
 
-Renewal must never affect newly inhabited areas, even if the queue is old.  
-A stable combination of queue stability and live safety validation is required.
+Renewal must never affect newly inhabited areas, even when candidate information is old.  
+A stable combination of candidate stability and live safety validation is required.
 
 ---
 

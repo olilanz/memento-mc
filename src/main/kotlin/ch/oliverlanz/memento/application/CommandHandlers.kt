@@ -190,7 +190,7 @@ object CommandHandlers {
         return try {
             val projection = renewalProjection
             val snapshot = projection?.committedSnapshotOrNull()
-            val topCandidates = snapshot?.rankedCandidates?.take(DEFAULT_EXPLAIN_TOP_LIMIT).orEmpty()
+            val topCandidates = snapshot?.electionCandidates?.take(DEFAULT_EXPLAIN_TOP_LIMIT).orEmpty()
             val witherstones = StoneAuthority.list().filterIsInstance<Witherstone>().sortedBy { it.name }
             val batchesByName = RenewalTracker.snapshotBatches().associateBy { it.name }
 
@@ -230,12 +230,12 @@ object CommandHandlers {
 
             source.sendFeedback({ Text.literal("Renewal explanation").formatted(Formatting.GOLD) }, false)
 
-            source.sendFeedback({ Text.literal("1) Top eligible candidates").formatted(Formatting.YELLOW) }, false)
+            source.sendFeedback({ Text.literal("1) Top renewal candidates").formatted(Formatting.YELLOW) }, false)
             if (topCandidates.isEmpty()) {
                 val waitingInitialScan = worldScanner?.hasInitialScanCompleted() != true
                 if (waitingInitialScan) {
                     source.sendFeedback(
-                        { Text.literal("waiting: initial world scan must complete before operator renewal eligibility is authoritative").formatted(Formatting.GRAY) },
+                        { Text.literal("waiting: initial world scan must complete before operator renewal candidates are authoritative").formatted(Formatting.GRAY) },
                         false,
                     )
                 } else {
@@ -471,10 +471,10 @@ object CommandHandlers {
 
         val snapshot = committedSnapshotOrSendError(source) ?: return 0
         val boundedRequested = count.coerceAtMost(DO_RENEWAL_MAX_REGION_BATCH)
-        val requestedCandidates = snapshot.rankedCandidates.take(boundedRequested)
+        val requestedCandidates = snapshot.electionCandidates.take(boundedRequested)
         if (requestedCandidates.isEmpty()) {
             source.sendFeedback(
-                { Text.literal("[Memento] no eligible renewal candidates found.").formatted(Formatting.YELLOW) },
+                { Text.literal("[Memento] no renewal candidates found.").formatted(Formatting.YELLOW) },
                 false,
             )
             return 1
@@ -882,11 +882,11 @@ object CommandHandlers {
             }
         }
 
-        val ranked = snapshot?.rankedCandidates.orEmpty()
-        val regionEligible = ranked.count { it.id.action == RenewalCandidateAction.REGION_PRUNE }
-        val chunkEligible = ranked.count { it.id.action == RenewalCandidateAction.CHUNK_RENEW }
-        lines += "Eligible totals: all=${ranked.size}, regions=$regionEligible, chunks=$chunkEligible"
-        lines += "Distribution summary: selection=${if (regionEligible > 0) "region-prune" else if (chunkEligible > 0) "chunk-renew" else "none"}"
+        val candidates = snapshot?.electionCandidates.orEmpty()
+        val regionCandidates = candidates.count { it.id.action == RenewalCandidateAction.REGION_PRUNE }
+        val chunkCandidates = candidates.count { it.id.action == RenewalCandidateAction.CHUNK_RENEW }
+        lines += "Renewal candidate totals: all=${candidates.size}, regions=$regionCandidates, chunks=$chunkCandidates"
+        lines += "Distribution summary: selection=${if (regionCandidates > 0) "region-prune" else if (chunkCandidates > 0) "chunk-renew" else "none"}"
 
         val health = when {
             projection == null -> "projection unavailable"
