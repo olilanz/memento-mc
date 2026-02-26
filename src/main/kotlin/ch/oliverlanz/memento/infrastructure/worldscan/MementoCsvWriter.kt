@@ -1,7 +1,7 @@
 package ch.oliverlanz.memento.infrastructure.worldscan
 
-import ch.oliverlanz.memento.domain.renewal.eligibility.EligibilityExecutionGrain
-import ch.oliverlanz.memento.domain.renewal.eligibility.EligibilityResult
+import ch.oliverlanz.memento.domain.renewal.RenewalExecutionGrain
+import ch.oliverlanz.memento.domain.renewal.election.ElectionResult
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalChunkMetrics
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateAction
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCommittedSnapshot
@@ -70,7 +70,7 @@ object MementoCsvWriter {
         MementoLog.info(MementoConcept.SCANNER, "Wrote scan CSV: {}", path)
     }
 
-    fun writeEligibilitySnapshot(
+    fun writeElectionSnapshot(
         server: MinecraftServer,
         snapshot: RenewalCommittedSnapshot,
     ) {
@@ -79,16 +79,16 @@ object MementoCsvWriter {
 
         Files.createDirectories(path.parent)
 
-        val regionCandidates = snapshot.rankedCandidates
+        val regionCandidates = snapshot.electionCandidates
             .filter { it.id.action == RenewalCandidateAction.REGION_PRUNE }
             .associateBy { "${it.id.worldKey}:${it.id.regionX}:${it.id.regionZ}" }
 
-        val chunkCandidates = snapshot.rankedCandidates
+        val chunkCandidates = snapshot.electionCandidates
             .filter { it.id.action == RenewalCandidateAction.CHUNK_RENEW }
             .associateBy { "${it.id.worldKey}:${it.id.chunkX}:${it.id.chunkZ}" }
 
         val sb = StringBuilder()
-        sb.append("projection_generation,dimension,chunk_x,chunk_z,scan_tick,inhabited_ticks,dominant_stone,surface_y,biome_id,is_spawn_chunk,source,status,forgettability_index,liveliness_index,renewal_rank,renewal_by_region_prune\n")
+        sb.append("projection_generation,dimension,chunk_x,chunk_z,scan_tick,inhabited_ticks,dominant_stone,surface_y,biome_id,is_spawn_chunk,source,status,forgettability_index,memorability_index,renewal_rank,renewal_by_region_prune\n")
 
         val dominantByWorld = linkedMapOf<net.minecraft.registry.RegistryKey<net.minecraft.world.World>, Map<ChunkPos, kotlin.reflect.KClass<out ch.oliverlanz.memento.domain.stones.Stone>>>()
 
@@ -131,7 +131,7 @@ object MementoCsvWriter {
                 .append(',').append(source)
                 .append(',').append(status)
                 .append(',').append(metrics.forgettabilityIndex)
-                .append(',').append(metrics.livelinessIndex)
+                .append(',').append(metrics.memorabilityIndex)
                 .append(',').append(renewalRank)
                 .append(',').append(renewalByRegionPrune)
                 .append('\n')
@@ -140,18 +140,18 @@ object MementoCsvWriter {
         Files.writeString(path, sb.toString(), StandardCharsets.UTF_8)
         MementoLog.info(
             MementoConcept.RENEWAL,
-            "Wrote eligibility CSV: {} generation={} rankedCandidates={}",
+            "Wrote election CSV: {} generation={} candidates={}",
             path,
             snapshot.generation,
-            snapshot.rankedCandidates.size,
+            snapshot.electionCandidates.size,
         )
     }
 
-    fun writeEligibilitySnapshot(
+    fun writeElectionSnapshot(
         server: MinecraftServer,
         snapshot: List<ChunkScanSnapshotEntry>,
         metricsByChunk: Map<ChunkKey, RenewalChunkMetrics>,
-        result: EligibilityResult,
+        result: ElectionResult,
     ) {
         val path = server.getSavePath(WorldSavePath.ROOT)
             .resolve(MementoConstants.MEMENTO_SCAN_CSV_FILE)
@@ -159,11 +159,11 @@ object MementoCsvWriter {
         Files.createDirectories(path.parent)
 
         val sb = StringBuilder()
-        sb.append("projection_generation,eligibility_transaction_id,dimension,chunk_x,chunk_z,scan_tick,inhabited_ticks,dominant_stone,surface_y,biome_id,is_spawn_chunk,source,status,forgettability_index,liveliness_index,eligible_as_region,eligible_as_chunk\n")
+        sb.append("projection_generation,election_transaction_id,dimension,chunk_x,chunk_z,scan_tick,inhabited_ticks,dominant_stone,surface_y,biome_id,is_spawn_chunk,source,status,forgettability_index,memorability_index,elected_as_region,elected_as_chunk\n")
 
-        val eligibleRegionSet = result.eligibleRegions.toSet()
+        val electedRegionSet = result.electedRegions.toSet()
         val selectedChunkSet = when (val selected = result.selectedExecutionGrain) {
-            is EligibilityExecutionGrain.ChunkBatch -> selected.chunks.toSet()
+            is RenewalExecutionGrain.ChunkBatch -> selected.chunks.toSet()
             else -> emptySet()
         }
 
@@ -186,10 +186,10 @@ object MementoCsvWriter {
             val isSpawn = signals?.isSpawnChunk?.toString() ?: ""
             val source = projectSource(entry)
             val status = projectStatus(entry)
-            val eligibleAsRegion = eligibleRegionSet.any {
+            val electedAsRegion = electedRegionSet.any {
                 it.worldId == key.world.value.toString() && it.regionX == key.regionX && it.regionZ == key.regionZ
             }
-            val eligibleAsChunk = key in selectedChunkSet
+            val electedAsChunk = key in selectedChunkSet
 
             sb.append(result.projectionGeneration)
                 .append(',').append(result.transactionId)
@@ -205,21 +205,21 @@ object MementoCsvWriter {
                 .append(',').append(source)
                 .append(',').append(status)
                 .append(',').append(metrics.forgettabilityIndex)
-                .append(',').append(metrics.livelinessIndex)
-                .append(',').append(if (eligibleAsRegion) 1 else 0)
-                .append(',').append(if (eligibleAsChunk) 1 else 0)
+                .append(',').append(metrics.memorabilityIndex)
+                .append(',').append(if (electedAsRegion) 1 else 0)
+                .append(',').append(if (electedAsChunk) 1 else 0)
                 .append('\n')
         }
 
         Files.writeString(path, sb.toString(), StandardCharsets.UTF_8)
         MementoLog.info(
             MementoConcept.RENEWAL,
-            "Wrote eligibility CSV: {} generation={} transaction={} eligibleRegions={} eligibleChunks={} selectedGrain={}",
+            "Wrote election CSV: {} generation={} transaction={} electedRegions={} electedChunks={} selectedGrain={}",
             path,
             result.projectionGeneration,
             result.transactionId,
-            result.eligibleRegions.size,
-            result.eligibleChunks.size,
+            result.electedRegions.size,
+            result.electedChunks.size,
             result.selectedExecutionGrain?.javaClass?.simpleName ?: "NONE",
         )
     }

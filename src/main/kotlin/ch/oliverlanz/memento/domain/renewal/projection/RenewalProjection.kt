@@ -1,7 +1,7 @@
 package ch.oliverlanz.memento.domain.renewal.projection
 
 import ch.oliverlanz.memento.MementoConstants
-import ch.oliverlanz.memento.domain.renewal.eligibility.EligibilityService
+import ch.oliverlanz.memento.domain.renewal.election.RenewalElection
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
 import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
 import ch.oliverlanz.memento.domain.worldmap.WorldMapService
@@ -19,7 +19,18 @@ fun interface RenewalProjectionStableListener {
 }
 
 /**
- * Projection publication authority.
+ * RenewalProjection owns the lifecycle and publication of the immutable
+ * world memory snapshot.
+ *
+ * It computes memorability and forgettability indices and commits
+ * an atomic [RenewalCommittedSnapshot].
+ *
+ * RenewalProjection does not define renewal decision semantics.
+ * Target selection and ranking are owned by [RenewalElection].
+ *
+ * Election output may be stored inside the committed snapshot
+ * for lifecycle convenience, but semantic ownership remains with
+ * [RenewalElection].
  *
  * Local invariants:
  * - Tick thread is the only publisher of operator-visible projection state.
@@ -49,7 +60,7 @@ class RenewalProjection {
             generation = 0L,
             snapshotEntries = emptyList(),
             metricsByChunk = emptyMap(),
-            rankedCandidates = emptyList(),
+            electionCandidates = emptyList(),
         )
 
     private var dirtySinceMs: Long? = null
@@ -93,7 +104,7 @@ class RenewalProjection {
         val generation: Long,
         val snapshotEntries: List<ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>,
         val metricsByChunk: Map<ChunkKey, RenewalChunkMetrics>,
-        val rankedCandidates: List<RenewalRankedCandidate>,
+        val electionCandidates: List<RenewalRankedCandidate>,
     )
 
     fun attach(service: WorldMapService) {
@@ -122,7 +133,7 @@ class RenewalProjection {
             generation = 0L,
             snapshotEntries = emptyList(),
             metricsByChunk = emptyMap(),
-            rankedCandidates = emptyList(),
+            electionCandidates = emptyList(),
         )
         stableListeners.clear()
     }
@@ -159,13 +170,19 @@ class RenewalProjection {
 
     fun committedSnapshotOrNull(): RenewalCommittedSnapshot? = publishedViewOrNull()
 
-    fun topRankedCandidates(limit: Int): List<RenewalRankedCandidate> {
+    fun currentCandidates(limit: Int): List<RenewalRankedCandidate> {
         if (limit <= 0) return emptyList()
-        return publishedView.rankedCandidates.take(limit)
+        return publishedView.electionCandidates.take(limit)
     }
 
-    fun isStillEligible(snapshot: RenewalPublishedView, candidateId: RenewalCandidateId): Boolean {
-        return snapshot.rankedCandidates.any { it.id == candidateId }
+    /**
+     * Returns whether the target is still part of the latest election result derived from
+     * the provided committed snapshot.
+     *
+     * This does not perform execution safety validation.
+     */
+    fun isStillElected(snapshot: RenewalPublishedView, candidateId: RenewalCandidateId): Boolean {
+        return snapshot.electionCandidates.any { it.id == candidateId }
     }
 
     fun observeFactApplied(fact: ChunkMetadataFact) {
@@ -256,7 +273,7 @@ class RenewalProjection {
             generation = result.generation,
             snapshotEntries = result.snapshotEntries,
             metricsByChunk = result.metricsByChunk,
-            rankedCandidates = result.rankedCandidates,
+            electionCandidates = result.electionCandidates,
         )
         publishedView = committed
 
@@ -267,7 +284,7 @@ class RenewalProjection {
             job.reason.name,
             durationMs,
             metricsByChunk.size,
-            committed.rankedCandidates.size,
+            committed.electionCandidates.size,
         )
 
         stableListeners.forEach { listener ->
@@ -370,7 +387,7 @@ class RenewalProjection {
                 generation = generation,
                 snapshotEntries = emptyList(),
                 metricsByChunk = emptyMap(),
-                rankedCandidates = emptyList(),
+                electionCandidates = emptyList(),
             )
         }
 
@@ -383,24 +400,24 @@ class RenewalProjection {
             .mapNotNull { it.signals?.inhabitedTimeTicks }
             .maxOrNull() ?: 0L
         val threshold = maxTicks.toDouble() * 0.8
-        val livelyChunkSet = linkedSetOf<ChunkKey>()
+        val memorableChunkSet = linkedSetOf<ChunkKey>()
         val metrics = linkedMapOf<ChunkKey, RenewalChunkMetrics>()
 
         snapshot.forEach { entry ->
             val key = entry.key
-            val lively = when (val ticks = entry.signals?.inhabitedTimeTicks) {
+            val memorable = when (val ticks = entry.signals?.inhabitedTimeTicks) {
                 null -> 1.0
                 else -> if (maxTicks == 0L) 0.0 else if (ticks.toDouble() >= threshold) 1.0 else 0.0
             }
-            if (lively > 0.0) livelyChunkSet += key
+            if (memorable > 0.0) memorableChunkSet += key
 
             metrics[key] = RenewalChunkMetrics(
                 forgettabilityIndex = if (forgettableByChunk[key] == true) 1.0 else 0.0,
-                livelinessIndex = lively,
+                memorabilityIndex = memorable,
             )
         }
 
-        val rankedCandidates = rankedCandidates(
+        val electionCandidates = electionCandidates(
             generation = generation,
             snapshot = snapshot,
             metrics = metrics,
@@ -410,17 +427,19 @@ class RenewalProjection {
             generation = generation,
             snapshotEntries = snapshot,
             metricsByChunk = metrics,
-            rankedCandidates = rankedCandidates,
+            electionCandidates = electionCandidates,
         )
     }
 
-    private fun rankedCandidates(
+    private fun electionCandidates(
         generation: Long,
         snapshot: List<ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>,
         metrics: Map<ChunkKey, RenewalChunkMetrics>,
     ): List<RenewalRankedCandidate> {
-        val result = EligibilityService.evaluate(
-            RenewalEligibilityInput(
+        // Election semantics are owned by RenewalElection; projection delegates using immutable
+        // snapshot input and stores returned election output in the committed snapshot.
+        val result = RenewalElection.evaluate(
+            RenewalElectionInput(
                 generation = generation,
                 snapshotEntries = snapshot,
                 metricsByChunk = metrics,
@@ -429,7 +448,7 @@ class RenewalProjection {
 
         val out = mutableListOf<RenewalRankedCandidate>()
         var rank = 1
-        result.eligibleRegions.forEach { region ->
+        result.electedRegions.forEach { region ->
             out += RenewalRankedCandidate(
                 id = RenewalCandidateId(
                     action = RenewalCandidateAction.REGION_PRUNE,
@@ -443,8 +462,8 @@ class RenewalProjection {
             rank++
         }
 
-        if (result.eligibleRegions.isEmpty()) {
-            result.eligibleChunks.forEach { chunk ->
+        if (result.electedRegions.isEmpty()) {
+            result.electedChunks.forEach { chunk ->
                 out += RenewalRankedCandidate(
                     id = RenewalCandidateId(
                         action = RenewalCandidateAction.CHUNK_RENEW,

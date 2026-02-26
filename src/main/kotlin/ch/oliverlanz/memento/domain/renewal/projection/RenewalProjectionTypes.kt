@@ -12,7 +12,7 @@ import net.minecraft.world.World
  */
 data class RenewalChunkMetrics(
     val forgettabilityIndex: Double = 0.0,
-    val livelinessIndex: Double = 0.0,
+    val memorabilityIndex: Double = 0.0,
 )
 
 /** Read-only operational status exposed to observational command surfaces. */
@@ -53,23 +53,28 @@ data class RenewalRankedCandidate(
 )
 
 /**
- * Projection-owned published view.
+ * Immutable world memory view at a specific projection generation.
  *
- * This is the only candidate view that command surfaces are allowed to observe.
+ * Contains:
+ * - memorability and forgettability indices
+ * - derived memory metrics
+ * - election output produced from this snapshot
+ *
+ * This snapshot is read-only and safe for cross-thread publication.
  */
 data class RenewalPublishedView(
     val generation: Long,
     val snapshotEntries: List<ChunkScanSnapshotEntry>,
     val metricsByChunk: Map<ChunkKey, RenewalChunkMetrics>,
-    val rankedCandidates: List<RenewalRankedCandidate>,
+    val electionCandidates: List<RenewalRankedCandidate>,
 )
 
 /**
- * Immutable evaluation input for eligibility derivation.
+ * Immutable evaluation input for election derivation.
  *
- * Projection materializes this input first, then eligibility computes without side-effects.
+ * Projection materializes this input first, then election computes without side-effects.
  */
-data class RenewalEligibilityInput(
+data class RenewalElectionInput(
     val generation: Long,
     val snapshotEntries: List<ChunkScanSnapshotEntry>,
     val metricsByChunk: Map<ChunkKey, RenewalChunkMetrics>,

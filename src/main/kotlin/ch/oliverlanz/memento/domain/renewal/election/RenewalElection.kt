@@ -1,34 +1,35 @@
-package ch.oliverlanz.memento.domain.renewal.eligibility
+package ch.oliverlanz.memento.domain.renewal.election
 
+import ch.oliverlanz.memento.domain.renewal.RenewalExecutionGrain
 import ch.oliverlanz.memento.domain.renewal.projection.RegionKey
-import ch.oliverlanz.memento.domain.renewal.projection.RenewalEligibilityInput
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalElectionInput
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import net.minecraft.world.World
 
-sealed interface EligibilityExecutionGrain {
-    data class Region(val region: RegionKey) : EligibilityExecutionGrain
-    data class ChunkBatch(val chunks: List<ChunkKey>) : EligibilityExecutionGrain
-}
-
-data class EligibilityResult(
+data class ElectionResult(
     val projectionGeneration: Long,
     val transactionId: String,
-    val eligibleRegions: List<RegionKey>,
-    val eligibleChunks: List<ChunkKey>,
-    val selectedExecutionGrain: EligibilityExecutionGrain?,
+    val electedRegions: List<RegionKey>,
+    val electedChunks: List<ChunkKey>,
+    val selectedExecutionGrain: RenewalExecutionGrain?,
 )
 
 /**
- * Pure eligibility derivation from one immutable projection evaluation input.
+ * RenewalElection selects renewal targets from an immutable [RenewalCommittedSnapshot]
+ * materialized as [RenewalElectionInput].
  *
- * Side-effect contract:
- * - no world/projection mutation
+ * It is pure and stateless:
+ * - no side effects
+ * - no world or projection mutation
  * - no scheduling
  * - no event emission
+ *
+ * Election defines decision semantics only.
+ * It does not validate execution safety and does not perform execution.
  */
-object EligibilityService {
+object RenewalElection {
 
     private const val MAX_REGION_DISTANCE_RING: Int = 64
     private const val MAX_CHUNK_DISTANCE_RING: Int = 96
@@ -46,7 +47,7 @@ object EligibilityService {
     private data class RegionAggregate(
         val region: RegionKey,
         val allChunksForgettableConservative: Boolean,
-        val hasLivelyChunk: Boolean,
+        val hasMemorableChunk: Boolean,
     )
 
     private class BoundedCheckCounter {
@@ -58,8 +59,8 @@ object EligibilityService {
         }
     }
 
-    fun evaluate(input: RenewalEligibilityInput): EligibilityResult {
-        val transactionId = "elig-${input.generation}-${evaluationCounter.incrementAndGet()}"
+    fun evaluate(input: RenewalElectionInput): ElectionResult {
+        val transactionId = "elect-${input.generation}-${evaluationCounter.incrementAndGet()}"
         val snapshot = input.snapshotEntries
         val metricsByChunk = input.metricsByChunk
         val boundedChecks = BoundedCheckCounter()
@@ -68,30 +69,30 @@ object EligibilityService {
             entry.key to ((metricsByChunk[entry.key]?.forgettabilityIndex ?: 0.0) >= 1.0)
         }
 
-        val livelyChunkSet = snapshot
+        val memorableChunkSet = snapshot
             .asSequence()
             .map { it.key }
-            .filter { (metricsByChunk[it]?.livelinessIndex ?: 0.0) > 0.0 }
+            .filter { (metricsByChunk[it]?.memorabilityIndex ?: 0.0) > 0.0 }
             .toSet()
 
         val chunksByRegion = snapshot.groupBy { RegionKey(it.key.world.value.toString(), it.key.regionX, it.key.regionZ) }
-        val livelyRegions = livelyChunkSet
+        val memorableRegions = memorableChunkSet
             .map { RegionKey(it.world.value.toString(), it.regionX, it.regionZ) }
             .toSet()
-        val livelyRegionPackedByWorld = buildPackedRegionSetByWorld(livelyRegions)
+        val memorableRegionPackedByWorld = buildPackedRegionSetByWorld(memorableRegions)
 
         val aggregatesByRegion = chunksByRegion.mapValues { (region, entries) ->
             RegionAggregate(
                 region = region,
                 allChunksForgettableConservative = entries.all { forgettableByChunk[it.key] == true },
-                hasLivelyChunk = livelyRegions.contains(region),
+                hasMemorableChunk = memorableRegions.contains(region),
             )
         }
 
         val regionCandidates = linkedSetOf<RegionKey>()
         aggregatesByRegion.forEach { (region, aggregate) ->
             if (!aggregate.allChunksForgettableConservative) return@forEach
-            if (aggregate.hasLivelyChunk) return@forEach
+            if (aggregate.hasMemorableChunk) return@forEach
 
             val okNeighbors = neighborRegions8(region).all { neighbor ->
                 boundedChecks.tick()
@@ -105,7 +106,7 @@ object EligibilityService {
         }
 
         val regionDistanceByKey = regionCandidates.associateWith { candidate ->
-            minChebyshevDistanceToLivelyRegions(candidate, livelyRegionPackedByWorld, boundedChecks)
+            minChebyshevDistanceToMemorableRegions(candidate, memorableRegionPackedByWorld, boundedChecks)
         }
 
         val sortedRegions = regionCandidates
@@ -121,7 +122,7 @@ object EligibilityService {
                     .thenBy { it.regionX }
             )
 
-        val livelyChunkPackedByWorld = buildPackedChunkSetByWorld(livelyChunkSet)
+        val memorableChunkPackedByWorld = buildPackedChunkSetByWorld(memorableChunkSet)
 
         val sortedChunks = if (sortedRegions.isEmpty()) {
             val chunkCandidates = snapshot
@@ -131,7 +132,7 @@ object EligibilityService {
                 .toList()
 
             val chunkDistanceByKey = chunkCandidates.associateWith { candidate ->
-                minChebyshevDistanceToLivelyChunks(candidate, livelyChunkPackedByWorld, boundedChecks)
+                minChebyshevDistanceToMemorableChunks(candidate, memorableChunkPackedByWorld, boundedChecks)
             }
 
             snapshot
@@ -156,14 +157,14 @@ object EligibilityService {
         }
 
         val selected = when {
-            sortedRegions.isNotEmpty() -> EligibilityExecutionGrain.Region(sortedRegions.first())
-            sortedChunks.isNotEmpty() -> EligibilityExecutionGrain.ChunkBatch(sortedChunks)
+            sortedRegions.isNotEmpty() -> RenewalExecutionGrain.Region(sortedRegions.first())
+            sortedChunks.isNotEmpty() -> RenewalExecutionGrain.ChunkBatch(sortedChunks)
             else -> null
         }
 
         MementoLog.info(
             MementoConcept.RENEWAL,
-            "eligibility bounded-eval generation={} transaction={} checks={} regionRingMax={} chunkRingMax={} regionCandidates={} chunkFallbackCandidates={} selected={}",
+            "election bounded-eval generation={} transaction={} checks={} regionRingMax={} chunkRingMax={} regionCandidates={} chunkFallbackCandidates={} selected={}",
             input.generation,
             transactionId,
             boundedChecks.checks,
@@ -174,11 +175,11 @@ object EligibilityService {
             selected?.javaClass?.simpleName ?: "NONE",
         )
 
-        return EligibilityResult(
+        return ElectionResult(
             projectionGeneration = input.generation,
             transactionId = transactionId,
-            eligibleRegions = sortedRegions,
-            eligibleChunks = sortedChunks,
+            electedRegions = sortedRegions,
+            electedChunks = sortedChunks,
             selectedExecutionGrain = selected,
         )
     }
@@ -192,15 +193,15 @@ object EligibilityService {
         }
     }
 
-    private fun minChebyshevDistanceToLivelyRegions(
+    private fun minChebyshevDistanceToMemorableRegions(
         candidate: RegionKey,
-        livelyByPackedWorld: Map<String, Set<Long>>,
+        memorableByPackedWorld: Map<String, Set<Long>>,
         checks: BoundedCheckCounter,
     ): Int {
-        val livelyByPacked = livelyByPackedWorld[candidate.worldId] ?: return Int.MAX_VALUE
-        if (livelyByPacked.isEmpty()) return Int.MAX_VALUE
+        val memorableByPacked = memorableByPackedWorld[candidate.worldId] ?: return Int.MAX_VALUE
+        if (memorableByPacked.isEmpty()) return Int.MAX_VALUE
 
-        if (livelyByPacked.contains(packRegion(candidate.regionX, candidate.regionZ))) {
+        if (memorableByPacked.contains(packRegion(candidate.regionX, candidate.regionZ))) {
             checks.tick()
             return 0
         }
@@ -209,35 +210,35 @@ object EligibilityService {
             for (dx in -distance..distance) {
                 val top = packRegion(candidate.regionX + dx, candidate.regionZ - distance)
                 checks.tick()
-                if (livelyByPacked.contains(top)) return distance
+                if (memorableByPacked.contains(top)) return distance
 
                 val bottom = packRegion(candidate.regionX + dx, candidate.regionZ + distance)
                 checks.tick()
-                if (livelyByPacked.contains(bottom)) return distance
+                if (memorableByPacked.contains(bottom)) return distance
             }
             for (dz in (-distance + 1) until distance) {
                 val left = packRegion(candidate.regionX - distance, candidate.regionZ + dz)
                 checks.tick()
-                if (livelyByPacked.contains(left)) return distance
+                if (memorableByPacked.contains(left)) return distance
 
                 val right = packRegion(candidate.regionX + distance, candidate.regionZ + dz)
                 checks.tick()
-                if (livelyByPacked.contains(right)) return distance
+                if (memorableByPacked.contains(right)) return distance
             }
         }
 
         return MAX_REGION_DISTANCE_RING + 1
     }
 
-    private fun minChebyshevDistanceToLivelyChunks(
+    private fun minChebyshevDistanceToMemorableChunks(
         candidate: ChunkKey,
-        livelyByPackedWorld: Map<net.minecraft.registry.RegistryKey<World>, Set<Long>>,
+        memorableByPackedWorld: Map<net.minecraft.registry.RegistryKey<World>, Set<Long>>,
         checks: BoundedCheckCounter,
     ): Int {
-        val livelyByPackedChunk = livelyByPackedWorld[candidate.world] ?: return Int.MAX_VALUE
-        if (livelyByPackedChunk.isEmpty()) return Int.MAX_VALUE
+        val memorableByPackedChunk = memorableByPackedWorld[candidate.world] ?: return Int.MAX_VALUE
+        if (memorableByPackedChunk.isEmpty()) return Int.MAX_VALUE
 
-        if (livelyByPackedChunk.contains(packChunk(candidate.chunkX, candidate.chunkZ))) {
+        if (memorableByPackedChunk.contains(packChunk(candidate.chunkX, candidate.chunkZ))) {
             checks.tick()
             return 0
         }
@@ -246,20 +247,20 @@ object EligibilityService {
             for (dx in -distance..distance) {
                 val top = packChunk(candidate.chunkX + dx, candidate.chunkZ - distance)
                 checks.tick()
-                if (livelyByPackedChunk.contains(top)) return distance
+                if (memorableByPackedChunk.contains(top)) return distance
 
                 val bottom = packChunk(candidate.chunkX + dx, candidate.chunkZ + distance)
                 checks.tick()
-                if (livelyByPackedChunk.contains(bottom)) return distance
+                if (memorableByPackedChunk.contains(bottom)) return distance
             }
             for (dz in (-distance + 1) until distance) {
                 val left = packChunk(candidate.chunkX - distance, candidate.chunkZ + dz)
                 checks.tick()
-                if (livelyByPackedChunk.contains(left)) return distance
+                if (memorableByPackedChunk.contains(left)) return distance
 
                 val right = packChunk(candidate.chunkX + distance, candidate.chunkZ + dz)
                 checks.tick()
-                if (livelyByPackedChunk.contains(right)) return distance
+                if (memorableByPackedChunk.contains(right)) return distance
             }
         }
 
@@ -277,14 +278,14 @@ object EligibilityService {
         return out
     }
 
-    private fun buildPackedChunkSetByWorld(livelyChunkSet: Set<ChunkKey>): Map<net.minecraft.registry.RegistryKey<World>, Set<Long>> {
-        return livelyChunkSet
+    private fun buildPackedChunkSetByWorld(memorableChunkSet: Set<ChunkKey>): Map<net.minecraft.registry.RegistryKey<World>, Set<Long>> {
+        return memorableChunkSet
             .groupBy { it.world }
             .mapValues { (_, keys) -> keys.mapTo(linkedSetOf()) { key -> packChunk(key.chunkX, key.chunkZ) } }
     }
 
-    private fun buildPackedRegionSetByWorld(livelyRegions: Set<RegionKey>): Map<String, Set<Long>> {
-        return livelyRegions
+    private fun buildPackedRegionSetByWorld(memorableRegions: Set<RegionKey>): Map<String, Set<Long>> {
+        return memorableRegions
             .groupBy { it.worldId }
             .mapValues { (_, regions) -> regions.mapTo(linkedSetOf()) { region -> packRegion(region.regionX, region.regionZ) } }
     }

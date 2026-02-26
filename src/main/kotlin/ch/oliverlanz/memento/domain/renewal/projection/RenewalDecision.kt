@@ -13,5 +13,5 @@ data class RegionKey(
 )
 
 /**
- * Region identifier shared by eligibility/command-level selection results.
+ * Region identifier shared by election and command-level selection results.
  */
