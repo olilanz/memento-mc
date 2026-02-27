@@ -187,18 +187,8 @@ This applies to both region-level pruning and chunk-level renewal.
 
 ---
 
-### 2. Renewal Candidate Freshness vs. World Activity
-
-The renewal candidate set is derived from a settled projection snapshot.  
-On very busy servers, the projection may not settle quickly, causing candidate information to become stale.
-
-Renewal must never affect newly inhabited areas, even when candidate information is old.  
-A stable combination of candidate stability and live safety validation is required.
-
----
-
-### 3. Full Automation Scheduling
+### 2. Full Automation Scheduling
 
 Natural renewal (scan → projection → renew) is not yet fully automated on a nightly cadence.
 
-Automation will only be enabled once loop-prevention and queue-freshness safeguards are fully validated.
+Automation will only be enabled once loop-prevention safeguards are fully validated.

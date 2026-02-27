@@ -2,16 +2,19 @@ package ch.oliverlanz.memento.domain.renewal.projection
 
 import ch.oliverlanz.memento.MementoConstants
 import ch.oliverlanz.memento.domain.renewal.election.RenewalElection
+import ch.oliverlanz.memento.domain.stones.Lorestone
+import ch.oliverlanz.memento.domain.stones.StoneAuthority
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
 import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
+import ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry
 import ch.oliverlanz.memento.domain.worldmap.WorldMapService
 import ch.oliverlanz.memento.infrastructure.async.GlobalAsyncExclusionGate
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Callable
+import java.util.concurrent.CopyOnWriteArrayList
 import net.minecraft.registry.RegistryKey
+import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
 
 fun interface RenewalProjectionStableListener {
@@ -19,55 +22,61 @@ fun interface RenewalProjectionStableListener {
 }
 
 /**
- * RenewalProjection owns the lifecycle and publication of the immutable
- * world memory snapshot.
+ * Partitioned boolean renewal projection.
  *
- * It computes memorability and forgettability indices and commits
- * an atomic [RenewalCommittedSnapshot].
+ * Projection boundary contract:
+ * - Projection state is fully derived from WorldMap substrate plus stone-influence snapshots.
+ * - Projection-derived state is never persisted back into WorldMap.
+ * - Commit/publish is atomic and tick-thread only.
+ * - Worker computes from immutable seeds and never mutates committed caches directly.
+ * - Region-level projection caches are projection-internal and fully recomputable.
+ * - Dirty-set roles (source-dirty, affected-dirty, context-only) are distinct and non-interchangeable.
  *
- * RenewalProjection does not define renewal decision semantics.
- * Target selection and ranking are owned by [RenewalElection].
- *
- * Election output may be stored inside the committed snapshot
- * for lifecycle convenience, but semantic ownership remains with
- * [RenewalElection].
- *
- * Local invariants:
- * - Tick thread is the only publisher of operator-visible projection state.
- * - Operator-visible state is a single immutable published view, replaced atomically on publish.
- * - Worker computation is isolated from publication and can never mutate visible state directly.
- * - During in-flight recompute, explain/do keep reading the last published view.
- *
- * Authority boundaries:
- * - Tick thread owns mutable projection state, generation assignment, and publication.
- * - Worker thread owns pure computation from immutable evaluation input.
- * - Worker output is generation-tagged and must pass generation/supersession checks before publish.
+ * Invariants:
+ * - Projection state is fully derived and recomputable.
+ * - Only affected-dirty regions are mutated at commit.
+ * - Unaffected regions remain bitwise identical across commits.
+ * - Election is derived exclusively from committed state.
+ * - No numeric ranking surfaces exist.
  */
 class RenewalProjection {
+
     private companion object {
-        private const val NEIGHBOR_RADIUS = 32
+        // NOTE:
+        // Dirty-expansion dependency radius must remain >= memorability expansion radius.
+        // Current coupling: 1 region ring == 32 chunks, memorability radius == 24 chunks.
+        // If memorability radius changes, dirty expansion rules must be updated accordingly.
+        private const val AFFECTED_EXPANSION_RING_REGIONS = 1
+        private const val CONTEXT_EXPANSION_RING_REGIONS = 1
     }
 
     private var worldMapService: WorldMapService? = null
 
-    private val dirtySet = linkedSetOf<ChunkKey>()
     private val stableListeners = CopyOnWriteArrayList<RenewalProjectionStableListener>()
-    private val metricsByChunk = ConcurrentHashMap<ChunkKey, RenewalChunkMetrics>()
+
+    // Tick-thread owned projection caches (derived only; never persisted into WorldMap)
+    private val chunkSourceByKey = linkedMapOf<ChunkKey, ChunkScanSnapshotEntry>()
+    private val chunkDerivationByKey = linkedMapOf<ChunkKey, RenewalChunkDerivation>()
+    private val regionForgettableByRegion = linkedMapOf<RegionKey, Boolean>()
+
+    // Dirty lifecycle (tick-thread only)
+    private val sourceDirtyRegions = linkedSetOf<RegionKey>()
+    private var dirtySinceMs: Long? = null
+    private var scanRecomputeRequested: Boolean = false
+    private var cacheInvalidationRequested: Boolean = false
 
     @Volatile
     private var publishedView: RenewalPublishedView =
         RenewalPublishedView(
             generation = 0L,
-            snapshotEntries = emptyList(),
-            metricsByChunk = emptyMap(),
+            chunkDerivationByChunk = emptyMap(),
+            regionForgettableByRegion = emptyMap(),
             electionCandidates = emptyList(),
         )
 
-    private var dirtySinceMs: Long? = null
     private var generationHead: Long = 0L
     private var inFlight: InFlightJob? = null
     private var supersededDuringInFlight: Boolean = false
-    private var scanRecomputeRequested: Boolean = false
     private var blockedOnGate: Boolean = false
     private var lastCompletedDurationMs: Long? = null
     private var lastCompletedAtMs: Long? = null
@@ -75,17 +84,6 @@ class RenewalProjection {
 
     @Volatile
     private var attached: Boolean = false
-
-    /**
-     * Read-only safety signal for command surfaces.
-     *
-     * true means the projection has observed world-map changes not yet represented in a committed
-     * snapshot (dirty pending and/or worker running).
-     */
-    fun hasPendingChanges(): Boolean {
-        val hasDirty = synchronized(dirtySet) { dirtySet.isNotEmpty() }
-        return hasDirty || inFlight != null
-    }
 
     private data class InFlightJob(
         val generation: Long,
@@ -98,41 +96,50 @@ class RenewalProjection {
         DIRTY_THRESHOLD,
         DEBOUNCE,
         SCAN_COMPLETED,
+        CACHE_INVALIDATION,
     }
 
     private data class CandidateView(
         val generation: Long,
-        val snapshotEntries: List<ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>,
-        val metricsByChunk: Map<ChunkKey, RenewalChunkMetrics>,
-        val electionCandidates: List<RenewalRankedCandidate>,
+        val affectedRegions: List<RegionKey>,
+        val regionForgettableUpdates: Map<RegionKey, Boolean>,
+        val chunkDerivationUpdates: Map<ChunkKey, RenewalChunkDerivation>,
+        val materializedAffectedRegionCount: Int,
+        val materializedContextRegionCount: Int,
+        val fullSnapshotRecoveryUsed: Boolean,
     )
 
     fun attach(service: WorldMapService) {
         worldMapService = service
         attached = true
+        rebuildSourceCacheFromWorldSnapshot(reason = "attach")
+        cacheInvalidationRequested = true
     }
 
     fun detach() {
         attached = false
         worldMapService = null
         inFlight?.future?.cancel(true)
-        synchronized(dirtySet) {
-            dirtySet.clear()
-            dirtySinceMs = null
-        }
         inFlight = null
-        supersededDuringInFlight = false
+        sourceDirtyRegions.clear()
+        dirtySinceMs = null
         scanRecomputeRequested = false
+        cacheInvalidationRequested = false
+        supersededDuringInFlight = false
         blockedOnGate = false
         lastCompletedDurationMs = null
         lastCompletedAtMs = null
         lastCompletedReason = null
         generationHead = 0L
-        metricsByChunk.clear()
+
+        chunkSourceByKey.clear()
+        chunkDerivationByKey.clear()
+        regionForgettableByRegion.clear()
+
         publishedView = RenewalPublishedView(
             generation = 0L,
-            snapshotEntries = emptyList(),
-            metricsByChunk = emptyMap(),
+            chunkDerivationByChunk = emptyMap(),
+            regionForgettableByRegion = emptyMap(),
             electionCandidates = emptyList(),
         )
         stableListeners.clear()
@@ -146,14 +153,18 @@ class RenewalProjection {
         stableListeners -= listener
     }
 
+    fun hasPendingChanges(): Boolean {
+        return sourceDirtyRegions.isNotEmpty() || inFlight != null || cacheInvalidationRequested || scanRecomputeRequested
+    }
+
     fun statusView(): RenewalProjectionStatusView {
         val now = System.currentTimeMillis()
-        val pending = synchronized(dirtySet) { dirtySet.size }
         val runningDuration = inFlight?.let { now - it.startedAtMs }
         val published = publishedView
         return RenewalProjectionStatusView(
-            pendingWorkSetSize = pending,
-            trackedChunks = metricsByChunk.size,
+            pendingWorkSetSize = sourceDirtyRegions.size,
+            trackedChunks = chunkDerivationByKey.size,
+            trackedRegions = regionForgettableByRegion.size,
             committedGeneration = published.generation,
             blockedOnGate = blockedOnGate,
             runningDurationMs = runningDuration,
@@ -175,50 +186,143 @@ class RenewalProjection {
         return publishedView.electionCandidates.take(limit)
     }
 
-    /**
-     * Returns whether the target is still part of the latest election result derived from
-     * the provided committed snapshot.
-     *
-     * This does not perform execution safety validation.
-     */
     fun isStillElected(snapshot: RenewalPublishedView, candidateId: RenewalCandidateId): Boolean {
         return snapshot.electionCandidates.any { it.id == candidateId }
     }
 
     fun observeFactApplied(fact: ChunkMetadataFact) {
         if (!attached) return
-        val now = System.currentTimeMillis()
-        synchronized(dirtySet) {
-            val added = dirtySet.add(fact.key)
-            if (added && dirtySinceMs == null) dirtySinceMs = now
+
+        if (fact.signals == null) {
+            chunkSourceByKey.remove(fact.key)
+        } else {
+            chunkSourceByKey[fact.key] = ChunkScanSnapshotEntry(
+                key = fact.key,
+                signals = fact.signals,
+                scanTick = fact.scanTick,
+                provenance = fact.source,
+                unresolvedReason = fact.unresolvedReason,
+            )
         }
-        if (inFlight != null) {
-            supersededDuringInFlight = true
-        }
+
+        markSourceDirty(regionOf(fact.key))
+        if (inFlight != null) supersededDuringInFlight = true
         blockedOnGate = false
     }
 
     fun observeWorldScanCompleted() {
         if (!attached) return
+        // Recovery path allowed to materialize from authoritative world snapshot.
+        rebuildSourceCacheFromWorldSnapshot(reason = "scan_completed")
         scanRecomputeRequested = true
-        if (inFlight != null) {
-            supersededDuringInFlight = true
-        }
+        if (inFlight != null) supersededDuringInFlight = true
         blockedOnGate = false
     }
 
     fun tick() {
         if (!attached) return
-
         maybeFinalizeInFlight()
     }
 
     fun onMediumPulse() {
         if (!attached) return
-        if (inFlight == null) {
-            val reason = nextTriggerReason(System.currentTimeMillis())
-            if (reason != null) {
-                dispatchWorker(reason)
+        if (inFlight != null) return
+        val reason = nextTriggerReason(System.currentTimeMillis()) ?: return
+        dispatchWorker(reason)
+    }
+
+    private fun nextTriggerReason(nowMs: Long): TriggerReason? {
+        if (cacheInvalidationRequested) return TriggerReason.CACHE_INVALIDATION
+        if (scanRecomputeRequested) return TriggerReason.SCAN_COMPLETED
+
+        val dirtyCount = sourceDirtyRegions.size
+        val firstDirtyAt = dirtySinceMs
+
+        if (dirtyCount == 0) return null
+        if (dirtyCount >= MementoConstants.MEMENTO_RENEWAL_PROJECTION_DIRTY_REGION_TRIGGER_THRESHOLD) {
+            return TriggerReason.DIRTY_THRESHOLD
+        }
+        if (firstDirtyAt != null && nowMs - firstDirtyAt >= MementoConstants.MEMENTO_RENEWAL_PROJECTION_DIRTY_REGION_DEBOUNCE_MS) {
+            return TriggerReason.DEBOUNCE
+        }
+        return null
+    }
+
+    private fun dispatchWorker(reason: TriggerReason) {
+        val generation = generationHead + 1L
+
+        val sourceSeed: Map<ChunkKey, ChunkScanSnapshotEntry> = LinkedHashMap(chunkSourceByKey)
+        val dirtySeed = when {
+            cacheInvalidationRequested || scanRecomputeRequested ->
+                sourceSeed.keys.asSequence().map(::regionOf).toSortedSet(regionOrder()).toList()
+
+            else -> sourceDirtyRegions.toList().sortedWith(regionOrder())
+        }
+
+        val loreInfluenceByWorld: Map<RegistryKey<World>, Set<Long>> =
+            StoneAuthority
+                .influenceSnapshot()
+                .dimensions
+                .mapValues { (_, dim) ->
+                    dim.dominantByChunk
+                        .asSequence()
+                        .filter { (_, kind) -> kind == Lorestone::class }
+                        .map { (chunk, _) -> packChunk(chunk.x, chunk.z) }
+                        .toSet()
+                }
+
+        val submit = GlobalAsyncExclusionGate.submitIfIdle(
+            concept = MementoConcept.PROJECTION,
+            owner = "renewal-projection",
+        ) {
+            Callable {
+                computeCandidateView(
+                    generation = generation,
+                    sourceSnapshotByKey = sourceSeed,
+                    sourceDirtySeed = dirtySeed,
+                    loreInfluencePackedByWorld = loreInfluenceByWorld,
+                    fullSnapshotRecovery = cacheInvalidationRequested || scanRecomputeRequested,
+                )
+            }
+        }
+
+        when (submit) {
+            is GlobalAsyncExclusionGate.SubmitResult.Busy -> {
+                blockedOnGate = true
+                MementoLog.debug(
+                    MementoConcept.PROJECTION,
+                    "worker blocked-on-gate reason={} activeOwner={} pendingSourceDirty={} retry=medium-cadence",
+                    reason.name,
+                    submit.activeOwner,
+                    sourceDirtyRegions.size,
+                )
+            }
+
+            is GlobalAsyncExclusionGate.SubmitResult.Accepted -> {
+                generationHead = generation
+                blockedOnGate = false
+                supersededDuringInFlight = false
+
+                if (cacheInvalidationRequested) cacheInvalidationRequested = false
+                if (scanRecomputeRequested) scanRecomputeRequested = false
+                sourceDirtyRegions.clear()
+                dirtySinceMs = null
+
+                inFlight = InFlightJob(
+                    generation = generation,
+                    reason = reason,
+                    startedAtMs = System.currentTimeMillis(),
+                    future = submit.future,
+                )
+
+                MementoLog.debug(
+                    MementoConcept.PROJECTION,
+                    "worker start generation={} reason={} sourceDirtySeed={} fullSnapshotRecovery={} retryPolicy=medium-cadence-retained-intent",
+                    generation,
+                    reason.name,
+                    dirtySeed.size,
+                    reason == TriggerReason.CACHE_INVALIDATION || reason == TriggerReason.SCAN_COMPLETED,
+                )
             }
         }
     }
@@ -227,6 +331,7 @@ class RenewalProjection {
         val job = inFlight ?: return
         if (!job.future.isDone) return
         inFlight = null
+
         val completedAtMs = System.currentTimeMillis()
         val durationMs = (completedAtMs - job.startedAtMs).coerceAtLeast(0L)
         lastCompletedDurationMs = durationMs
@@ -251,40 +356,72 @@ class RenewalProjection {
         if (result.generation != generationHead || supersededDuringInFlight) {
             MementoLog.debug(
                 MementoConcept.PROJECTION,
-                "worker discard generation={} reason={} durationMs={} head={} superseded={} pendingDirty={}",
+                "worker discard generation={} reason={} durationMs={} head={} superseded={} pendingSourceDirty={}",
                 result.generation,
                 job.reason.name,
                 durationMs,
                 generationHead,
                 supersededDuringInFlight,
-                synchronized(dirtySet) { dirtySet.size },
+                sourceDirtyRegions.size,
             )
             supersededDuringInFlight = false
             blockedOnGate = false
             return
         }
 
-        metricsByChunk.clear()
-        metricsByChunk.putAll(result.metricsByChunk)
-        supersededDuringInFlight = false
-        blockedOnGate = false
+        // Commit mutation guard:
+        // - Generation validation (above) must pass before any cache mutation.
+        // - Only affected-dirty regions may be mutated at commit.
+        // - No cross-region spillover is permitted.
+        val affected = result.affectedRegions.toSet()
+        val affectedKey = { key: ChunkKey -> affected.contains(regionOf(key)) }
+
+        chunkDerivationByKey.entries.removeIf { (key, _) -> affectedKey(key) }
+        result.chunkDerivationUpdates.forEach { (key, value) ->
+            if (affectedKey(key)) {
+                chunkDerivationByKey[key] = value
+            }
+        }
+
+        regionForgettableByRegion.entries.removeIf { (region, _) -> affected.contains(region) }
+        result.regionForgettableUpdates.forEach { (region, forgettable) ->
+            if (affected.contains(region)) {
+                regionForgettableByRegion[region] = forgettable
+            }
+        }
+
+        val election = RenewalElection.evaluate(
+            RenewalElectionInput(
+                generation = result.generation,
+                regionForgettableByRegion = regionForgettableByRegion.toMap(),
+                chunkDerivationByChunk = chunkDerivationByKey.toMap(),
+            )
+        )
+        val ranked = RenewalElection.asRankedCandidates(election)
 
         val committed = RenewalPublishedView(
             generation = result.generation,
-            snapshotEntries = result.snapshotEntries,
-            metricsByChunk = result.metricsByChunk,
-            electionCandidates = result.electionCandidates,
+            chunkDerivationByChunk = chunkDerivationByKey.toMap(),
+            regionForgettableByRegion = regionForgettableByRegion.toMap(),
+            electionCandidates = ranked,
         )
         publishedView = committed
 
+        supersededDuringInFlight = false
+        blockedOnGate = false
+
         MementoLog.debug(
             MementoConcept.PROJECTION,
-            "worker commit generation={} reason={} durationMs={} tracked={} ranked={}",
+            "worker commit generation={} reason={} durationMs={} affectedRegions={} contextRegions={} trackedRegions={} trackedChunks={} electionCandidates={} fullSnapshotRecovery={}",
             committed.generation,
             job.reason.name,
             durationMs,
-            metricsByChunk.size,
+            result.materializedAffectedRegionCount,
+            result.materializedContextRegionCount,
+            committed.regionForgettableByRegion.size,
+            committed.chunkDerivationByChunk.size,
             committed.electionCandidates.size,
+            result.fullSnapshotRecoveryUsed,
         )
 
         stableListeners.forEach { listener ->
@@ -296,242 +433,228 @@ class RenewalProjection {
         }
     }
 
-    private fun nextTriggerReason(nowMs: Long): TriggerReason? {
-        if (scanRecomputeRequested) return TriggerReason.SCAN_COMPLETED
-
-        val dirtyCount: Int
-        val firstDirtyAt: Long?
-        synchronized(dirtySet) {
-            dirtyCount = dirtySet.size
-            firstDirtyAt = dirtySinceMs
-        }
-
-        if (dirtyCount == 0) return null
-        if (dirtyCount >= MementoConstants.MEMENTO_RENEWAL_PROJECTION_DIRTY_THRESHOLD) {
-            return TriggerReason.DIRTY_THRESHOLD
-        }
-
-        if (firstDirtyAt != null && nowMs - firstDirtyAt >= MementoConstants.MEMENTO_RENEWAL_PROJECTION_DIRTY_DEBOUNCE_MS) {
-            return TriggerReason.DEBOUNCE
-        }
-
-        return null
-    }
-
-    private fun dispatchWorker(reason: TriggerReason) {
-        val service = worldMapService ?: return
-
-        val generation = generationHead + 1L
-        val dirtySeedCount = synchronized(dirtySet) { dirtySet.size }
-        val snapshotEntries = service.substrate().snapshot()
-
-        val submit = GlobalAsyncExclusionGate.submitIfIdle(
-            concept = MementoConcept.PROJECTION,
-            owner = "renewal-projection",
-        ) {
-            Callable {
-                // Projection publication invariant: worker evaluates from one immutable seed
-                // materialized before dispatch. This prevents mixed-cadence visibility in
-                // operator-facing publication.
-                computeCandidateView(generation, snapshotEntries)
-            }
-        }
-
-        when (submit) {
-            is GlobalAsyncExclusionGate.SubmitResult.Busy -> {
-                blockedOnGate = true
-                MementoLog.debug(
-                    MementoConcept.PROJECTION,
-                    "worker blocked-on-gate reason={} activeOwner={} pendingDirty={} retry=medium-cadence",
-                    reason.name,
-                    submit.activeOwner,
-                    dirtySeedCount,
-                )
-                return
-            }
-
-            is GlobalAsyncExclusionGate.SubmitResult.Accepted -> {
-                generationHead = generation
-                synchronized(dirtySet) {
-                    dirtySet.clear()
-                    dirtySinceMs = null
-                }
-
-                scanRecomputeRequested = false
-                supersededDuringInFlight = false
-                blockedOnGate = false
-
-                MementoLog.debug(
-                    MementoConcept.PROJECTION,
-                    "worker start generation={} reason={} dirtySeed={} snapshot=pending-worker-materialization retryPolicy=medium-cadence-retained-intent",
-                    generation,
-                    reason.name,
-                    dirtySeedCount,
-                )
-                inFlight = InFlightJob(
-                    generation = generation,
-                    reason = reason,
-                    startedAtMs = System.currentTimeMillis(),
-                    future = submit.future,
-                )
-            }
-        }
-    }
-
     private fun computeCandidateView(
         generation: Long,
-        snapshot: List<ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>,
+        sourceSnapshotByKey: Map<ChunkKey, ChunkScanSnapshotEntry>,
+        sourceDirtySeed: List<RegionKey>,
+        loreInfluencePackedByWorld: Map<RegistryKey<World>, Set<Long>>,
+        fullSnapshotRecovery: Boolean,
     ): CandidateView {
-        if (snapshot.isEmpty()) {
+        // Phase contract (boolean partitioned derivation):
+        // Pass 1: region forgettable (region-only).
+        // Pass 2: memorable source chunks (absolute inhabited threshold OR lore influence).
+        // Pass 3: memorability expansion (radius = MEMENTO_RENEWAL_MEMORABLE_EXPANSION_RADIUS_CHUNKS).
+        // Pass 4: chunk eligibility = !regionForgettable && !memorable.
+        //
+        // Region prune and chunk renewal eligibility are separate domains and must not be conflated.
+        if (sourceSnapshotByKey.isEmpty()) {
             return CandidateView(
                 generation = generation,
-                snapshotEntries = emptyList(),
-                metricsByChunk = emptyMap(),
-                electionCandidates = emptyList(),
+                affectedRegions = emptyList(),
+                regionForgettableUpdates = emptyMap(),
+                chunkDerivationUpdates = emptyMap(),
+                materializedAffectedRegionCount = 0,
+                materializedContextRegionCount = 0,
+                fullSnapshotRecoveryUsed = fullSnapshotRecovery,
             )
         }
 
-        val index = buildSnapshotIndex(snapshot)
-        val forgettableByChunk = snapshot.associate { entry ->
-            entry.key to (computeForgettability(entry.key, index) >= 1.0)
-        }
-
-        val maxTicks = snapshot.asSequence()
-            .mapNotNull { it.signals?.inhabitedTimeTicks }
-            .maxOrNull() ?: 0L
-        val threshold = maxTicks.toDouble() * 0.8
-        val memorableChunkSet = linkedSetOf<ChunkKey>()
-        val metrics = linkedMapOf<ChunkKey, RenewalChunkMetrics>()
-
-        snapshot.forEach { entry ->
-            val key = entry.key
-            val memorable = when (val ticks = entry.signals?.inhabitedTimeTicks) {
-                null -> 1.0
-                else -> if (maxTicks == 0L) 0.0 else if (ticks.toDouble() >= threshold) 1.0 else 0.0
-            }
-            if (memorable > 0.0) memorableChunkSet += key
-
-            metrics[key] = RenewalChunkMetrics(
-                forgettabilityIndex = if (forgettableByChunk[key] == true) 1.0 else 0.0,
-                memorabilityIndex = memorable,
+        val sourceDirty = sourceDirtySeed.toSortedSet(regionOrder())
+        if (sourceDirty.isEmpty()) {
+            return CandidateView(
+                generation = generation,
+                affectedRegions = emptyList(),
+                regionForgettableUpdates = emptyMap(),
+                chunkDerivationUpdates = emptyMap(),
+                materializedAffectedRegionCount = 0,
+                materializedContextRegionCount = 0,
+                fullSnapshotRecoveryUsed = fullSnapshotRecovery,
             )
         }
 
-        val electionCandidates = electionCandidates(
-            generation = generation,
-            snapshot = snapshot,
-            metrics = metrics,
+        val allKnownRegions = sourceSnapshotByKey.keys
+            .asSequence()
+            .map(::regionOf)
+            .toSet()
+
+        val affectedAll = expandRing(sourceDirty, AFFECTED_EXPANSION_RING_REGIONS)
+            .filter { allKnownRegions.contains(it) }
+            .toSortedSet(regionOrder())
+
+        val affected = affectedAll
+            .take(MementoConstants.MEMENTO_RENEWAL_MAX_AFFECTED_REGIONS_PER_DISPATCH)
+            .toSortedSet(regionOrder())
+
+        MementoLog.debug(
+            MementoConcept.PROJECTION,
+            "partition window generation={} maxAffectedPerDispatch={} sourceDirty={} affectedAll={} affectedSelected={} overflowRetained={}",
+            generation,
+            MementoConstants.MEMENTO_RENEWAL_MAX_AFFECTED_REGIONS_PER_DISPATCH,
+            sourceDirty.size,
+            affectedAll.size,
+            affected.size,
+            (affectedAll.size - affected.size).coerceAtLeast(0),
         )
+
+        val contextAll = expandRing(affected, CONTEXT_EXPANSION_RING_REGIONS)
+            .filter { allKnownRegions.contains(it) }
+            .toMutableSet()
+        contextAll.removeAll(affected)
+        val contextOnly = contextAll.toSortedSet(regionOrder())
+
+        val materializedRegions = linkedSetOf<RegionKey>().apply {
+            addAll(affected)
+            addAll(contextOnly)
+        }
+
+        val entriesByRegion = sourceSnapshotByKey.values
+            .asSequence()
+            .filter { materializedRegions.contains(regionOf(it.key)) }
+            .groupBy { regionOf(it.key) }
+
+        val regionHasInhabited = linkedMapOf<RegionKey, Boolean>()
+        val regionHasLore = linkedMapOf<RegionKey, Boolean>()
+
+        materializedRegions.sortedWith(regionOrder()).forEach { region ->
+            val entries = entriesByRegion[region].orEmpty()
+            regionHasInhabited[region] = entries.any { (it.signals?.inhabitedTimeTicks ?: 0L) > 0L }
+            regionHasLore[region] = entries.any { entry ->
+                val lorePacked = loreInfluencePackedByWorld[entry.key.world].orEmpty()
+                lorePacked.contains(packChunk(entry.key.chunkX, entry.key.chunkZ))
+            }
+        }
+
+        val regionForgettableUpdates = linkedMapOf<RegionKey, Boolean>()
+        affected.forEach { region ->
+            val neighbors = neighborRegions8(region)
+            val localInhabited = regionHasInhabited[region] == true
+            val localLore = regionHasLore[region] == true
+            val neighborInhabited = neighbors.any { regionHasInhabited[it] == true }
+            val neighborLore = neighbors.any { regionHasLore[it] == true }
+            regionForgettableUpdates[region] = !(localInhabited || localLore || neighborInhabited || neighborLore)
+        }
+
+        val allEntriesInMaterialized = entriesByRegion.values.flatten()
+        val memorableSourcePackedByWorld = linkedMapOf<RegistryKey<World>, MutableSet<Long>>()
+        allEntriesInMaterialized.forEach { entry ->
+            val inhabitedTicks = entry.signals?.inhabitedTimeTicks ?: 0L
+            val hasLore = loreInfluencePackedByWorld[entry.key.world].orEmpty()
+                .contains(packChunk(entry.key.chunkX, entry.key.chunkZ))
+
+            if (inhabitedTicks >= MementoConstants.MEMENTO_RENEWAL_MEMORABLE_INHABITED_TICKS_THRESHOLD || hasLore) {
+                memorableSourcePackedByWorld
+                    .computeIfAbsent(entry.key.world) { linkedSetOf() }
+                    .add(packChunk(entry.key.chunkX, entry.key.chunkZ))
+            }
+        }
+
+        val chunkDerivationUpdates = linkedMapOf<ChunkKey, RenewalChunkDerivation>()
+        affected.forEach { region ->
+            val regionForgettable = regionForgettableUpdates[region] == true
+            val entries = entriesByRegion[region].orEmpty()
+            entries.forEach { entry ->
+                val key = entry.key
+                val packed = packChunk(key.chunkX, key.chunkZ)
+                val sourceSet = memorableSourcePackedByWorld[key.world].orEmpty()
+                val memorable = if (sourceSet.contains(packed)) {
+                    true
+                } else {
+                    hasSourceWithinRadius(
+                        candidate = key,
+                        sourcePacked = sourceSet,
+                        radius = MementoConstants.MEMENTO_RENEWAL_MEMORABLE_EXPANSION_RADIUS_CHUNKS,
+                    )
+                }
+
+                chunkDerivationUpdates[key] = RenewalChunkDerivation(
+                    memorable = memorable,
+                    eligibleChunkRenewal = !regionForgettable && !memorable,
+                )
+            }
+        }
 
         return CandidateView(
             generation = generation,
-            snapshotEntries = snapshot,
-            metricsByChunk = metrics,
-            electionCandidates = electionCandidates,
+            affectedRegions = affected.toList(),
+            regionForgettableUpdates = regionForgettableUpdates,
+            chunkDerivationUpdates = chunkDerivationUpdates,
+            materializedAffectedRegionCount = affected.size,
+            materializedContextRegionCount = contextOnly.size,
+            fullSnapshotRecoveryUsed = fullSnapshotRecovery,
         )
     }
 
-    private fun electionCandidates(
-        generation: Long,
-        snapshot: List<ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>,
-        metrics: Map<ChunkKey, RenewalChunkMetrics>,
-    ): List<RenewalRankedCandidate> {
-        // Election semantics are owned by RenewalElection; projection delegates using immutable
-        // snapshot input and stores returned election output in the committed snapshot.
-        val result = RenewalElection.evaluate(
-            RenewalElectionInput(
-                generation = generation,
-                snapshotEntries = snapshot,
-                metricsByChunk = metrics,
-            )
+    private fun rebuildSourceCacheFromWorldSnapshot(reason: String) {
+        val service = worldMapService ?: return
+        val snapshot = service.substrate().snapshot()
+        chunkSourceByKey.clear()
+        snapshot.forEach { entry ->
+            chunkSourceByKey[entry.key] = entry
+            markSourceDirty(regionOf(entry.key))
+        }
+        MementoLog.debug(
+            MementoConcept.PROJECTION,
+            "projection source-cache rebuild reason={} scannedEntries={} mode=full-snapshot-recovery",
+            reason,
+            snapshot.size,
+        )
+    }
+
+    private fun markSourceDirty(region: RegionKey) {
+        if (sourceDirtyRegions.add(region) && dirtySinceMs == null) {
+            dirtySinceMs = System.currentTimeMillis()
+        }
+    }
+
+    private fun regionOf(key: ChunkKey): RegionKey =
+        RegionKey(
+            worldId = key.world.value.toString(),
+            regionX = key.regionX,
+            regionZ = key.regionZ,
         )
 
-        val out = mutableListOf<RenewalRankedCandidate>()
-        var rank = 1
-        result.electedRegions.forEach { region ->
-            out += RenewalRankedCandidate(
-                id = RenewalCandidateId(
-                    action = RenewalCandidateAction.REGION_PRUNE,
-                    worldKey = region.worldId,
-                    regionX = region.regionX,
-                    regionZ = region.regionZ,
-                ),
-                rank = rank,
-                byRegionPrune = true,
-            )
-            rank++
-        }
+    private fun regionOrder(): Comparator<RegionKey> =
+        compareBy<RegionKey> { it.worldId }
+            .thenBy { it.regionX }
+            .thenBy { it.regionZ }
 
-        if (result.electedRegions.isEmpty()) {
-            result.electedChunks.forEach { chunk ->
-                out += RenewalRankedCandidate(
-                    id = RenewalCandidateId(
-                        action = RenewalCandidateAction.CHUNK_RENEW,
-                        worldKey = chunk.world.value.toString(),
-                        chunkX = chunk.chunkX,
-                        chunkZ = chunk.chunkZ,
-                    ),
-                    rank = rank,
-                    byRegionPrune = false,
-                )
-                rank++
+    private fun expandRing(seed: Set<RegionKey>, ring: Int): Set<RegionKey> {
+        if (ring <= 0) return seed
+        val out = linkedSetOf<RegionKey>()
+        seed.forEach { region ->
+            for (dx in -ring..ring) {
+                for (dz in -ring..ring) {
+                    out += RegionKey(
+                        worldId = region.worldId,
+                        regionX = region.regionX + dx,
+                        regionZ = region.regionZ + dz,
+                    )
+                }
             }
         }
-
         return out
     }
 
-    private data class SnapshotIndex(
-        val byKey: Map<ChunkKey, ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>,
-        val byPackedChunkByWorld: Map<RegistryKey<World>, Map<Long, ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>>,
-    )
-
-    private fun buildSnapshotIndex(entries: List<ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>): SnapshotIndex {
-        val byKey = entries.associateBy { it.key }
-        val byPackedChunkByWorld = entries
-            .groupBy { it.key.world }
-            .mapValues { (_, list) ->
-                linkedMapOf<Long, ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry>().apply {
-                    list.forEach { entry ->
-                        this[packChunk(entry.key.chunkX, entry.key.chunkZ)] = entry
-                    }
-                }
-            }
-
-        return SnapshotIndex(
-            byKey = byKey,
-            byPackedChunkByWorld = byPackedChunkByWorld,
-        )
-    }
-
-    private fun computeForgettability(
-        key: ChunkKey,
-        index: SnapshotIndex,
-    ): Double {
-        val current = index.byKey[key]
-        val currentTicks = current?.signals?.inhabitedTimeTicks
-        if (currentTicks == null) return 0.0
-        if (currentTicks > 0L) return 0.0
-
-        val worldByPackedChunk = index.byPackedChunkByWorld[key.world] ?: return 0.0
-        var hasNeighborWithActivity = false
-        for (dx in -NEIGHBOR_RADIUS..NEIGHBOR_RADIUS) {
-            if (hasNeighborWithActivity) break
-            for (dz in -NEIGHBOR_RADIUS..NEIGHBOR_RADIUS) {
-                val neighbor = worldByPackedChunk[packChunk(key.chunkX + dx, key.chunkZ + dz)]
-                // Absence in snapshot means "non-existing / not discovered chunk" and must not block
-                // forgettability. Existing chunk entries with unknown ticks remain conservative blockers.
-                if (neighbor == null) continue
-
-                val t = neighbor.signals?.inhabitedTimeTicks
-                if (t == null || t > 0L) {
-                    hasNeighborWithActivity = true
-                    break
-                }
+    private fun neighborRegions8(region: RegionKey): List<RegionKey> {
+        val out = ArrayList<RegionKey>(8)
+        for (dx in -1..1) {
+            for (dz in -1..1) {
+                if (dx == 0 && dz == 0) continue
+                out += RegionKey(region.worldId, region.regionX + dx, region.regionZ + dz)
             }
         }
+        return out
+    }
 
-        return if (hasNeighborWithActivity) 0.0 else 1.0
+    private fun hasSourceWithinRadius(candidate: ChunkKey, sourcePacked: Set<Long>, radius: Int): Boolean {
+        if (sourcePacked.isEmpty()) return false
+        for (dx in -radius..radius) {
+            for (dz in -radius..radius) {
+                val packed = packChunk(candidate.chunkX + dx, candidate.chunkZ + dz)
+                if (sourcePacked.contains(packed)) return true
+            }
+        }
+        return false
     }
 
     private fun packChunk(x: Int, z: Int): Long {
