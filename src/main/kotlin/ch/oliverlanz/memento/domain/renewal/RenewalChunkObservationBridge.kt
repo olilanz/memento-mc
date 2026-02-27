@@ -14,11 +14,10 @@ import net.minecraft.util.math.ChunkPos
 object RenewalChunkObservationBridge {
 
     fun onChunkLoaded(world: RegistryKey<World>, pos: ChunkPos) {
-        // dimension intentionally ignored for now (single-world assumption)
-        RenewalTracker.observeChunkLoaded(pos)
+        RenewalTracker.observeChunkLoaded(world, pos)
     }
 
     fun onChunkUnloaded(world: RegistryKey<World>, pos: ChunkPos) {
-        RenewalTracker.observeChunkUnloaded(pos)
+        RenewalTracker.observeChunkUnloaded(world, pos)
     }
 }

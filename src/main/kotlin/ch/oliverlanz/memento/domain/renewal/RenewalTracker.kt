@@ -131,14 +131,23 @@ object RenewalTracker {
     /**
      * Observational hook: a chunk was observed unloaded.
      *
-     * Dimension is currently ignored by design (single-world assumption is enforced elsewhere).
+     * Chunk identity is dimension-qualified: (dimension, chunkX, chunkZ).
      */
-    fun observeChunkUnloaded(pos: ChunkPos) {
+    fun observeChunkUnloaded(dimension: RegistryKey<World>, pos: ChunkPos) {
         for (batch in batches.values) {
+            if (batch.dimension != dimension) continue
             if (!batch.chunks.contains(pos)) continue
 
             batch.observeUnloaded(pos)
-            emit(ChunkObserved(batchName = batch.name, trigger = RenewalTrigger.CHUNK_UNLOAD, chunk = pos, state = batch.state))
+            emit(
+                ChunkObserved(
+                    batchName = batch.name,
+                    trigger = RenewalTrigger.CHUNK_UNLOAD,
+                    dimension = dimension,
+                    chunk = pos,
+                    state = batch.state,
+                )
+            )
 
             // Single code path: unload evidence may satisfy the gate.
             maybePassUnloadGate(batch, RenewalTrigger.CHUNK_UNLOAD)
@@ -148,14 +157,23 @@ object RenewalTracker {
     /**
      * Observational hook: a chunk was observed loaded.
      *
-     * Dimension is currently ignored by design (single-world assumption is enforced elsewhere).
+     * Chunk identity is dimension-qualified: (dimension, chunkX, chunkZ).
      */
-    fun observeChunkLoaded(pos: ChunkPos) {
+    fun observeChunkLoaded(dimension: RegistryKey<World>, pos: ChunkPos) {
         for (batch in batches.values) {
+            if (batch.dimension != dimension) continue
             if (!batch.chunks.contains(pos)) continue
 
             batch.observeLoaded(pos)
-            emit(ChunkObserved(batchName = batch.name, trigger = RenewalTrigger.CHUNK_LOAD, chunk = pos, state = batch.state))
+            emit(
+                ChunkObserved(
+                    batchName = batch.name,
+                    trigger = RenewalTrigger.CHUNK_LOAD,
+                    dimension = dimension,
+                    chunk = pos,
+                    state = batch.state,
+                )
+            )
 
             // If a chunk loads while we are waiting for renewal, treat it as renewal evidence.
             // This is intentionally compatible with the application ChunkLoadDriver forcing loads as a completion signal.

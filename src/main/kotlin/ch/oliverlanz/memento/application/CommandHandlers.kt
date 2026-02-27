@@ -519,6 +519,9 @@ object CommandHandlers {
         val orderedChunks = mutableListOf<ch.oliverlanz.memento.domain.worldmap.ChunkKey>()
         var invalidTargets = 0
 
+        val regionRequestCountsByDimension = linkedMapOf<String, Int>()
+        val chunkRequestCountsByDimension = linkedMapOf<String, Int>()
+
         requestedCandidates.forEach { candidate ->
             when (candidate.id.action) {
                 RenewalCandidateAction.REGION_PRUNE -> {
@@ -533,6 +536,7 @@ object CommandHandlers {
                         return@forEach
                     }
                     orderedRegions += dimension to region
+                    regionRequestCountsByDimension[region.worldId] = (regionRequestCountsByDimension[region.worldId] ?: 0) + 1
                 }
 
                 RenewalCandidateAction.CHUNK_RENEW -> {
@@ -542,8 +546,22 @@ object CommandHandlers {
                         return@forEach
                     }
                     orderedChunks += key
+                    val dim = key.world.value.toString()
+                    chunkRequestCountsByDimension[dim] = (chunkRequestCountsByDimension[dim] ?: 0) + 1
                 }
             }
+        }
+
+        val allActionDimensions = (regionRequestCountsByDimension.keys + chunkRequestCountsByDimension.keys).toSortedSet()
+        allActionDimensions.forEach { dim ->
+            MementoLog.info(
+                MementoConcept.RENEWAL,
+                "do renewal summary action=AGGREGATE dimension={} regionPrunes={} chunkRenews={} by={}",
+                dim,
+                regionRequestCountsByDimension[dim] ?: 0,
+                chunkRequestCountsByDimension[dim] ?: 0,
+                source.name,
+            )
         }
 
         var regionPathResult: Int? = null
@@ -566,12 +584,23 @@ object CommandHandlers {
                     }
                     MementoLog.info(
                         MementoConcept.RENEWAL,
-                        "do renewal batch submitted requested={} submitted={} invalidTargets={} by={}",
+                        "do renewal action=REGION_PRUNE result=submitted requested={} submitted={} invalidTargets={} by={}",
                         batch.requested,
                         batch.submitted,
                         invalidTargets,
                         source.name,
                     )
+
+                    orderedRegions.forEach { (_, region) ->
+                        MementoLog.info(
+                            MementoConcept.RENEWAL,
+                            "do renewal action=REGION_PRUNE dimension={} region=({}, {}) result=submitted by={}",
+                            region.worldId,
+                            region.regionX,
+                            region.regionZ,
+                            source.name,
+                        )
+                    }
                     1
                 }
 
@@ -613,7 +642,7 @@ object CommandHandlers {
 
                     MementoLog.info(
                         MementoConcept.RENEWAL,
-                        "do renewal batch completed requested={} succeeded={} failed={} partialState={} detail={} invalidTargets={} by={}",
+                        "do renewal action=REGION_PRUNE result=completed requested={} succeeded={} failed={} partialState={} detail={} invalidTargets={} by={}",
                         batch.requested,
                         succeeded,
                         failed,
@@ -622,6 +651,19 @@ object CommandHandlers {
                         invalidTargets,
                         source.name,
                     )
+
+                    batch.completions.forEach { completion ->
+                        MementoLog.info(
+                            MementoConcept.RENEWAL,
+                            "do renewal action=REGION_PRUNE dimension={} region=({}, {}) result={} category={} by={}",
+                            completion.target.worldId,
+                            completion.target.regionX,
+                            completion.target.regionZ,
+                            completion.outcome.name,
+                            completion.category.name,
+                            source.name,
+                        )
+                    }
                     if (failed == 0) 1 else 0
                 }
             }
@@ -662,12 +704,23 @@ object CommandHandlers {
         }
         MementoLog.info(
             MementoConcept.RENEWAL,
-            "do renewal chunk-path requested={} submitted={} invalidTargets={} by={}",
+            "do renewal action=CHUNK_RENEW result=submitted requested={} submitted={} invalidTargets={} by={}",
             requestedCandidates.size,
             submittedChunks,
             invalidTargets,
             source.name,
         )
+
+        orderedChunks.forEach { key ->
+            MementoLog.info(
+                MementoConcept.RENEWAL,
+                "do renewal action=CHUNK_RENEW dimension={} chunk=({}, {}) result=submitted by={}",
+                key.world.value.toString(),
+                key.chunkX,
+                key.chunkZ,
+                source.name,
+            )
+        }
 
         return if (submittedChunks > 0) 1 else 0
     }
