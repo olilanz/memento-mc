@@ -288,6 +288,11 @@ class WorldScanner : ChunkAvailabilityListener {
         return worldMapService?.hasInitialScanCompleted() == true
     }
 
+    /** Read-only committed world-fact snapshot for operator observability exports. */
+    fun committedWorldSnapshot(): List<ChunkScanSnapshotEntry> {
+        return mapSnapshot()?.snapshot().orEmpty()
+    }
+
     fun detach() {
         val providerStatus = fileMetadataProvider?.status()
         val pendingFacts = pendingFileFacts.size

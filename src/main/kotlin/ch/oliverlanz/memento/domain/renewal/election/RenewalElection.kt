@@ -17,6 +17,16 @@ data class ElectionResult(
     val selectedExecutionGrain: RenewalExecutionGrain?,
 )
 
+data class RenewalRankedElectionEntry(
+    val action: RenewalCandidateAction,
+    val rank: Int,
+    val worldKey: String,
+    val regionX: Int? = null,
+    val regionZ: Int? = null,
+    val chunkX: Int? = null,
+    val chunkZ: Int? = null,
+)
+
 /**
  * Deterministic projection election over boolean projection outputs.
  *
@@ -29,14 +39,18 @@ object RenewalElection {
 
     private val evaluationCounter = java.util.concurrent.atomic.AtomicLong(0L)
 
-    fun evaluate(input: RenewalElectionInput): ElectionResult {
+    fun evaluate(
+        input: RenewalElectionInput,
+        deterministicTransactionId: String? = null,
+    ): ElectionResult {
         // Domain-separation contract:
         // - Region prune and chunk renew are distinct eligibility domains.
         // - Region-prune candidates are evaluated first.
         // - Chunk-renew candidates are evaluated only from non-forgettable regions.
         // - The region filter inside chunk assembly is a defensive consistency guard,
         //   not a semantic derivation source for chunk eligibility.
-        val transactionId = "elect-${input.generation}-${evaluationCounter.incrementAndGet()}"
+        val transactionId = deterministicTransactionId
+            ?: "elect-${input.generation}-${evaluationCounter.incrementAndGet()}"
 
         val sortedRegions = input.regionForgettableByRegion
             .asSequence()
@@ -112,20 +126,47 @@ object RenewalElection {
             rank++
         }
 
-        if (result.electedRegions.isEmpty()) {
-            result.electedChunks.forEach { chunk ->
-                out += ch.oliverlanz.memento.domain.renewal.projection.RenewalRankedCandidate(
-                    id = RenewalCandidateId(
-                        action = RenewalCandidateAction.CHUNK_RENEW,
-                        worldKey = chunk.world.value.toString(),
-                        chunkX = chunk.chunkX,
-                        chunkZ = chunk.chunkZ,
-                    ),
-                    rank = rank,
-                    byRegionPrune = false,
-                )
-                rank++
-            }
+        result.electedChunks.forEach { chunk ->
+            out += ch.oliverlanz.memento.domain.renewal.projection.RenewalRankedCandidate(
+                id = RenewalCandidateId(
+                    action = RenewalCandidateAction.CHUNK_RENEW,
+                    worldKey = chunk.world.value.toString(),
+                    chunkX = chunk.chunkX,
+                    chunkZ = chunk.chunkZ,
+                ),
+                rank = rank,
+                byRegionPrune = false,
+            )
+            rank++
+        }
+
+        return out
+    }
+
+    fun asContinuousRankedEntries(result: ElectionResult): List<RenewalRankedElectionEntry> {
+        val out = mutableListOf<RenewalRankedElectionEntry>()
+        var rank = 1
+
+        result.electedRegions.forEach { region ->
+            out += RenewalRankedElectionEntry(
+                action = RenewalCandidateAction.REGION_PRUNE,
+                rank = rank,
+                worldKey = region.worldId,
+                regionX = region.regionX,
+                regionZ = region.regionZ,
+            )
+            rank++
+        }
+
+        result.electedChunks.forEach { chunk ->
+            out += RenewalRankedElectionEntry(
+                action = RenewalCandidateAction.CHUNK_RENEW,
+                rank = rank,
+                worldKey = chunk.world.value.toString(),
+                chunkX = chunk.chunkX,
+                chunkZ = chunk.chunkZ,
+            )
+            rank++
         }
 
         return out
