@@ -205,11 +205,48 @@ object MementoConstants {
     const val MEMENTO_RENEWAL_PROJECTION_DIRTY_THRESHOLD: Int = 128
 
     /**
+     * Region-dirty threshold that triggers immediate projection worker start.
+     *
+     * This is a semantic alias for projection's region-dirty model.
+     */
+    const val MEMENTO_RENEWAL_PROJECTION_DIRTY_REGION_TRIGGER_THRESHOLD: Int =
+        MEMENTO_RENEWAL_PROJECTION_DIRTY_THRESHOLD
+
+    /**
      * Debounce window for projection worker start after first dirty key arrives.
      *
      * If dirty threshold is not reached, worker starts once this debounce interval elapses.
      */
     const val MEMENTO_RENEWAL_PROJECTION_DIRTY_DEBOUNCE_MS: Long = 250L
+
+    /**
+     * Debounce window for region-dirty projection worker start.
+     *
+     * This is a semantic alias for projection's region-dirty model.
+     */
+    const val MEMENTO_RENEWAL_PROJECTION_DIRTY_REGION_DEBOUNCE_MS: Long =
+        MEMENTO_RENEWAL_PROJECTION_DIRTY_DEBOUNCE_MS
+
+    /**
+     * Hard cap for affected-dirty regions processed per projection worker dispatch.
+     *
+     * Context-only regions are derived from this bounded affected set.
+     */
+    const val MEMENTO_RENEWAL_MAX_AFFECTED_REGIONS_PER_DISPATCH: Int = 256
+
+    /**
+     * Memorability expansion radius in chunks around memorable source chunks.
+     *
+     * NOTE:
+     * Dirty-expansion dependency radius must remain >= memorability expansion radius.
+     * If this value changes, projection dirty expansion rules must be updated accordingly.
+     */
+    const val MEMENTO_RENEWAL_MEMORABLE_EXPANSION_RADIUS_CHUNKS: Int = 24
+
+    /**
+     * Absolute inhabited-time threshold for memorable source classification.
+     */
+    const val MEMENTO_RENEWAL_MEMORABLE_INHABITED_TICKS_THRESHOLD: Long = 1L
 
     /** Backup suffix used by force-prune region file cut-over (`r.x.z.mca` -> `r.x.z.mca.memento.backup`). */
     const val MEMENTO_RENEW_FORCE_BACKUP_SUFFIX: String = ".memento.backup"

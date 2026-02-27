@@ -1,24 +1,22 @@
 package ch.oliverlanz.memento.domain.renewal.projection
 
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
-import ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry
 import net.minecraft.registry.RegistryKey
 import net.minecraft.world.World
 
 /**
- * Derived renewal metrics attached to a factual chunk key in the projection layer.
- *
- * Indices are modeled as Double for algorithm replaceability; current slice uses binary values.
+ * Boolean projection output attached to a factual chunk key.
  */
-data class RenewalChunkMetrics(
-    val forgettabilityIndex: Double = 0.0,
-    val memorabilityIndex: Double = 0.0,
+data class RenewalChunkDerivation(
+    val memorable: Boolean = false,
+    val eligibleChunkRenewal: Boolean = false,
 )
 
 /** Read-only operational status exposed to observational command surfaces. */
 data class RenewalProjectionStatusView(
     val pendingWorkSetSize: Int,
     val trackedChunks: Int,
+    val trackedRegions: Int,
     val committedGeneration: Long,
     val blockedOnGate: Boolean = false,
     val runningDurationMs: Long? = null,
@@ -64,8 +62,8 @@ data class RenewalRankedCandidate(
  */
 data class RenewalPublishedView(
     val generation: Long,
-    val snapshotEntries: List<ChunkScanSnapshotEntry>,
-    val metricsByChunk: Map<ChunkKey, RenewalChunkMetrics>,
+    val chunkDerivationByChunk: Map<ChunkKey, RenewalChunkDerivation>,
+    val regionForgettableByRegion: Map<RegionKey, Boolean>,
     val electionCandidates: List<RenewalRankedCandidate>,
 )
 
@@ -76,8 +74,8 @@ data class RenewalPublishedView(
  */
 data class RenewalElectionInput(
     val generation: Long,
-    val snapshotEntries: List<ChunkScanSnapshotEntry>,
-    val metricsByChunk: Map<ChunkKey, RenewalChunkMetrics>,
+    val regionForgettableByRegion: Map<RegionKey, Boolean>,
+    val chunkDerivationByChunk: Map<ChunkKey, RenewalChunkDerivation>,
 )
 
 typealias RenewalCommittedSnapshot = RenewalPublishedView

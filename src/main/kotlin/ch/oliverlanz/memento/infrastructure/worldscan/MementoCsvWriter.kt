@@ -2,8 +2,9 @@ package ch.oliverlanz.memento.infrastructure.worldscan
 
 import ch.oliverlanz.memento.domain.renewal.RenewalExecutionGrain
 import ch.oliverlanz.memento.domain.renewal.election.ElectionResult
-import ch.oliverlanz.memento.domain.renewal.projection.RenewalChunkMetrics
+import ch.oliverlanz.memento.domain.renewal.projection.RegionKey
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateAction
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalChunkDerivation
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCommittedSnapshot
 import ch.oliverlanz.memento.domain.worldmap.WorldMementoTopology
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry
@@ -95,54 +96,53 @@ object MementoCsvWriter {
             .associateBy { "${it.id.worldKey}:${it.id.chunkX}:${it.id.chunkZ}" }
 
         val sb = StringBuilder()
-        sb.append("projection_generation,dimension,chunk_x,chunk_z,scan_tick,inhabited_ticks,dominant_stone,surface_y,biome_id,is_spawn_chunk,source,status,forgettability_index,memorability_index,renewal_rank,renewal_by_region_prune\n")
+        sb.append("projection_generation,dimension,chunk_x,chunk_z,dominant_stone,memorable,eligible_chunk_renewal,region_forgettable,renewal_rank,renewal_by_region_prune\n")
 
         val dominantByWorld = linkedMapOf<net.minecraft.registry.RegistryKey<net.minecraft.world.World>, Map<ChunkPos, kotlin.reflect.KClass<out ch.oliverlanz.memento.domain.stones.Stone>>>()
 
-        snapshot.snapshotEntries.forEach { entry ->
-            val key = entry.key
-            val signals = entry.signals
-            val metrics = snapshot.metricsByChunk[key] ?: RenewalChunkMetrics()
+        snapshot.chunkDerivationByChunk
+            .entries
+            .sortedWith(
+                compareBy<Map.Entry<ChunkKey, RenewalChunkDerivation>> { it.key.world.value.toString() }
+                    .thenBy { it.key.regionX }
+                    .thenBy { it.key.regionZ }
+                    .thenBy { it.key.chunkX }
+                    .thenBy { it.key.chunkZ }
+            )
+            .forEach { (key, derivation) ->
+                val dominantByChunk = dominantByWorld.getOrPut(key.world) {
+                    StoneMapService.dominantByChunk(key.world)
+                }
+                val dominant = dominantByChunk[ChunkPos(key.chunkX, key.chunkZ)]?.simpleName ?: ""
 
-            val dominantByChunk = dominantByWorld.getOrPut(key.world) {
-                StoneMapService.dominantByChunk(key.world)
+                val dim = key.world.value.toString()
+                val regionKey = "$dim:${key.regionX}:${key.regionZ}"
+                val chunkKey = "$dim:${key.chunkX}:${key.chunkZ}"
+                val regionCandidate = regionCandidates[regionKey]
+                val chunkCandidate = chunkCandidates[chunkKey]
+                val selected = regionCandidate ?: chunkCandidate
+                val renewalRank = selected?.rank?.toString() ?: ""
+                val renewalByRegionPrune = if (regionCandidate != null) "true" else "false"
+                val regionForgettable = snapshot.regionForgettableByRegion[
+                    RegionKey(
+                        worldId = dim,
+                        regionX = key.regionX,
+                        regionZ = key.regionZ,
+                    )
+                ] == true
+
+                sb.append(snapshot.generation)
+                    .append(',').append(dim)
+                    .append(',').append(key.chunkX)
+                    .append(',').append(key.chunkZ)
+                    .append(',').append(dominant)
+                    .append(',').append(if (derivation.memorable) 1 else 0)
+                    .append(',').append(if (derivation.eligibleChunkRenewal) 1 else 0)
+                    .append(',').append(if (regionForgettable) 1 else 0)
+                    .append(',').append(renewalRank)
+                    .append(',').append(renewalByRegionPrune)
+                    .append('\n')
             }
-            val dominant = dominantByChunk[ChunkPos(key.chunkX, key.chunkZ)]?.simpleName ?: ""
-
-            val dim = key.world.value.toString()
-            val inhabited = signals?.inhabitedTimeTicks?.toString() ?: ""
-            val surfaceY = signals?.surfaceY?.toString() ?: ""
-            val biome = signals?.biomeId ?: ""
-            val isSpawn = signals?.isSpawnChunk?.toString() ?: ""
-            val source = projectSource(entry)
-            val status = projectStatus(entry)
-
-            val regionKey = "$dim:${key.regionX}:${key.regionZ}"
-            val chunkKey = "$dim:${key.chunkX}:${key.chunkZ}"
-            val regionCandidate = regionCandidates[regionKey]
-            val chunkCandidate = chunkCandidates[chunkKey]
-            val selected = regionCandidate ?: chunkCandidate
-            val renewalRank = selected?.rank?.toString() ?: ""
-            val renewalByRegionPrune = if (regionCandidate != null) "true" else "false"
-
-            sb.append(snapshot.generation)
-                .append(',').append(dim)
-                .append(',').append(key.chunkX)
-                .append(',').append(key.chunkZ)
-                .append(',').append(entry.scanTick)
-                .append(',').append(inhabited)
-                .append(',').append(dominant)
-                .append(',').append(surfaceY)
-                .append(',').append(biome)
-                .append(',').append(isSpawn)
-                .append(',').append(source)
-                .append(',').append(status)
-                .append(',').append(metrics.forgettabilityIndex)
-                .append(',').append(metrics.memorabilityIndex)
-                .append(',').append(renewalRank)
-                .append(',').append(renewalByRegionPrune)
-                .append('\n')
-        }
 
         Files.writeString(path, sb.toString(), StandardCharsets.UTF_8)
         MementoLog.info(
@@ -157,7 +157,7 @@ object MementoCsvWriter {
     fun writeElectionSnapshot(
         server: MinecraftServer,
         snapshot: List<ChunkScanSnapshotEntry>,
-        metricsByChunk: Map<ChunkKey, RenewalChunkMetrics>,
+        chunkDerivationByChunk: Map<ChunkKey, RenewalChunkDerivation>,
         result: ElectionResult,
     ) {
         val path = server.getSavePath(WorldSavePath.ROOT)
@@ -166,7 +166,7 @@ object MementoCsvWriter {
         Files.createDirectories(path.parent)
 
         val sb = StringBuilder()
-        sb.append("projection_generation,election_transaction_id,dimension,chunk_x,chunk_z,scan_tick,inhabited_ticks,dominant_stone,surface_y,biome_id,is_spawn_chunk,source,status,forgettability_index,memorability_index,elected_as_region,elected_as_chunk\n")
+        sb.append("projection_generation,election_transaction_id,dimension,chunk_x,chunk_z,scan_tick,inhabited_ticks,dominant_stone,surface_y,biome_id,is_spawn_chunk,source,status,memorable,eligible_chunk_renewal,elected_as_region,elected_as_chunk\n")
 
         val electedRegionSet = result.electedRegions.toSet()
         val selectedChunkSet = when (val selected = result.selectedExecutionGrain) {
@@ -179,7 +179,7 @@ object MementoCsvWriter {
         snapshot.forEach { entry ->
             val key = entry.key
             val signals = entry.signals
-            val metrics = metricsByChunk[key] ?: RenewalChunkMetrics()
+            val derivation = chunkDerivationByChunk[key] ?: RenewalChunkDerivation()
 
             val dominantByChunk = dominantByWorld.getOrPut(key.world) {
                 StoneMapService.dominantByChunk(key.world)
@@ -211,8 +211,8 @@ object MementoCsvWriter {
                 .append(',').append(isSpawn)
                 .append(',').append(source)
                 .append(',').append(status)
-                .append(',').append(metrics.forgettabilityIndex)
-                .append(',').append(metrics.memorabilityIndex)
+                .append(',').append(if (derivation.memorable) 1 else 0)
+                .append(',').append(if (derivation.eligibleChunkRenewal) 1 else 0)
                 .append(',').append(if (electedAsRegion) 1 else 0)
                 .append(',').append(if (electedAsChunk) 1 else 0)
                 .append('\n')
