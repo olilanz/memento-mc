@@ -60,8 +60,8 @@ object RenewalTrackerLogging {
                 }
 
             is ChunkObserved ->
-                MementoLog.debug(MementoConcept.RENEWAL, "batch='{}' chunk=({}, {}) observed state={} trigger={}",
-                    e.batchName, e.chunk.x, e.chunk.z, e.state.name, e.trigger.name)
+                MementoLog.debug(MementoConcept.RENEWAL, "batch='{}' dim='{}' chunk=({}, {}) observed state={} trigger={}",
+                    e.batchName, e.dimension.value.toString(), e.chunk.x, e.chunk.z, e.state.name, e.trigger.name)
 
             is GateAttempted ->
                 MementoLog.debug(MementoConcept.RENEWAL, "batch='{}' gate attempted from={} attempted={} trigger={}",

@@ -1,6 +1,8 @@
 package ch.oliverlanz.memento.domain.renewal
 
 import net.minecraft.util.math.ChunkPos
+import net.minecraft.registry.RegistryKey
+import net.minecraft.world.World
 
 /**
  * Domain-level events for RenewalTracker observability + integration.
@@ -61,6 +63,7 @@ data class BatchRemoved(
 data class ChunkObserved(
     val batchName: String,
     override val trigger: RenewalTrigger,
+    val dimension: RegistryKey<World>,
     val chunk: ChunkPos,
     val state: RenewalBatchState
 ) : RenewalEvent
