@@ -465,6 +465,35 @@ object CommandHandlers {
         }
     }
 
+    fun csv(source: ServerCommandSource): Int {
+        MementoLog.info(MementoConcept.OPERATOR, "command=csv by={}", source.name)
+
+        val scanner = worldScanner
+        if (scanner == null) {
+            source.sendError(Text.literal("Scanner is not ready yet."))
+            return 0
+        }
+
+        val committed = committedSnapshotOrSendError(source) ?: return 0
+
+        return try {
+            val path = MementoCsvWriter.writeOperatorWorldviewSnapshot(
+                server = source.server,
+                worldSnapshot = scanner.committedWorldSnapshot(),
+                projectionSnapshot = committed,
+            )
+            source.sendFeedback(
+                { Text.literal("[Memento] worldview CSV exported to $path").formatted(Formatting.YELLOW) },
+                false,
+            )
+            1
+        } catch (e: Exception) {
+            MementoLog.error(MementoConcept.OPERATOR, "command=csv failed", e)
+            source.sendError(Text.literal("[Memento] could not export csv (see server log)."))
+            0
+        }
+    }
+
     fun doRenewal(source: ServerCommandSource): Int {
         return doRenewal(source, 1)
     }
@@ -517,8 +546,9 @@ object CommandHandlers {
             }
         }
 
+        var regionPathResult: Int? = null
         if (orderedRegions.isNotEmpty()) {
-            return when (val batch = WorldPruningService.submitBatch(orderedRegions)) {
+            regionPathResult = when (val batch = WorldPruningService.submitBatch(orderedRegions)) {
                 is WorldPruningService.BatchSubmitResult.Submitted -> {
                     source.sendFeedback(
                         {
@@ -594,6 +624,13 @@ object CommandHandlers {
                     )
                     if (failed == 0) 1 else 0
                 }
+            }
+
+            if (regionPathResult == 0) {
+                return 0
+            }
+            if (orderedChunks.isEmpty()) {
+                return regionPathResult
             }
         }
 
