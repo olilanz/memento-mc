@@ -426,65 +426,64 @@ internal class ChunkLoadRegister {
     fun hasPlannedEntry(chunk: ChunkRef): Boolean =
             lock.withLock { entries[chunk]?.isPlanned() == true }
 
-    /**
-     * Takes up to [max] ticket candidates.
-     *
-     * Candidates are chunks that are currently desired, in REQUESTED state, and not already
-     * ticketed.
-     */
-    fun takeTicketCandidates(max: Int): List<ChunkRef> =
-            lock.withLock {
-                if (max <= 0) return@withLock emptyList()
-                val result = ArrayList<ChunkRef>(minOf(max, entries.size))
-                for ((chunk, entry) in entries) {
-                    if (result.size >= max) break
-                    if (!entry.isRequested()) continue
-                    if (entry.desiredBy.isEmpty()) continue
-                    if (entry.ticketName != null) continue
-                    result.add(chunk)
-                }
-                result
-            }
+    enum class TicketSelectionPolicy {
+        /**
+         * Deterministic renewal-first ordering.
+         *
+         * Guard invariant:
+         * - no fairness rotation,
+         * - no priority aging,
+         * - stable effective ordering for driver consumers.
+         */
+        DETERMINISTIC_RENEWAL_FIRST,
+    }
 
     /** Returns the desired-by sources for a chunk in the current demand snapshot. */
     fun desiredSources(chunk: ChunkRef): Set<RequestSource> =
             lock.withLock { entries[chunk]?.desiredBy?.toSet() ?: emptySet() }
 
     /**
-     * Takes up to [max] ticket candidates, prioritizing renewal desire over scanner desire.
+     * Takes up to [max] ticket candidates using the provided selection [policy].
      *
      * The driver remains the sole policy owner for pressure balancing; providers only express
      * desire.
      */
-    fun takeTicketCandidatesPrioritized(max: Int): List<ChunkRef> =
+    fun takeTicketCandidates(
+            max: Int,
+            policy: TicketSelectionPolicy = TicketSelectionPolicy.DETERMINISTIC_RENEWAL_FIRST,
+    ): List<ChunkRef> =
             lock.withLock {
                 if (max <= 0) return@withLock emptyList()
 
-                val renewalFirst = ArrayList<ChunkRef>(minOf(max, entries.size))
-                val scannerNext = ArrayList<ChunkRef>(minOf(max, entries.size))
+                when (policy) {
+                    TicketSelectionPolicy.DETERMINISTIC_RENEWAL_FIRST -> {
+                        val renewalFirst = ArrayList<ChunkRef>(minOf(max, entries.size))
+                        val scannerNext = ArrayList<ChunkRef>(minOf(max, entries.size))
 
-                for ((chunk, entry) in entries) {
-                    if (!entry.isRequested()) continue
-                    if (entry.desiredBy.isEmpty()) continue
-                    if (entry.ticketName != null) continue
+                        for ((chunk, entry) in entries) {
+                            if (!entry.isRequested()) continue
+                            if (entry.desiredBy.isEmpty()) continue
+                            if (entry.ticketName != null) continue
 
-                    if (entry.desiredBy.contains(RequestSource.RENEWAL)) {
-                        renewalFirst.add(chunk)
-                    } else if (entry.desiredBy.contains(RequestSource.SCANNER)) {
-                        scannerNext.add(chunk)
+                            if (entry.desiredBy.contains(RequestSource.RENEWAL)) {
+                                renewalFirst.add(chunk)
+                            } else if (entry.desiredBy.contains(RequestSource.SCANNER)) {
+                                scannerNext.add(chunk)
+                            }
+                        }
+
+                        val result = ArrayList<ChunkRef>(minOf(max, renewalFirst.size + scannerNext.size))
+                        for (c in renewalFirst) {
+                            if (result.size >= max) break
+                            result.add(c)
+                        }
+                        for (c in scannerNext) {
+                            if (result.size >= max) break
+                            result.add(c)
+                        }
+                        result
                     }
                 }
-
-                val result = ArrayList<ChunkRef>(minOf(max, renewalFirst.size + scannerNext.size))
-                for (c in renewalFirst) {
-                    if (result.size >= max) break
-                    result.add(c)
-                }
-                for (c in scannerNext) {
-                    if (result.size >= max) break
-                    result.add(c)
-                }
-                result
             }
 
     /** Returns true if the chunk is desired by any provider in the current demand snapshot. */

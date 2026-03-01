@@ -44,7 +44,7 @@ import net.minecraft.world.storage.ChunkCompressionFormat
  * - All file IO and NBT decode runs off-thread via global async exclusion gate.
  * - World map mutation stays on tick thread via [ScanMetadataIngestionPort].
  */
-class TwoPassRegionFileMetadataProvider(
+class RegionFileMetadataProvider(
     private val ingestionPort: ScanMetadataIngestionPort,
 ) : FileMetadataProvider {
 
