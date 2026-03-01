@@ -47,7 +47,6 @@ data class RenewalCandidateId(
 data class RenewalRankedCandidate(
     val id: RenewalCandidateId,
     val rank: Int,
-    val byRegionPrune: Boolean,
 )
 
 /**

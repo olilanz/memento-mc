@@ -196,7 +196,12 @@ object CommandHandlers {
         return try {
             val projection = renewalProjection
             val snapshot = projection?.committedSnapshotOrNull()
+            // Presentation boundary only:
+            // This explain surface aggregates already-derived mechanism outputs for operators.
+            // It must not merge, alter, or feed back into region/chunk derivation semantics.
             val topCandidates = snapshot?.electionCandidates?.take(DEFAULT_EXPLAIN_TOP_LIMIT).orEmpty()
+            val topRegionCandidates = topCandidates.filter { it.id.action == RenewalCandidateAction.REGION_PRUNE }
+            val topChunkCandidates = topCandidates.filter { it.id.action == RenewalCandidateAction.CHUNK_RENEW }
             val witherstones = StoneAuthority.list().filterIsInstance<Witherstone>().sortedBy { it.name }
             val batchesByName = RenewalTracker.snapshotBatches().associateBy { it.name }
 
@@ -236,8 +241,8 @@ object CommandHandlers {
 
             source.sendFeedback({ Text.literal("Renewal explanation").formatted(Formatting.GOLD) }, false)
 
-            source.sendFeedback({ Text.literal("1) Top renewal candidates").formatted(Formatting.YELLOW) }, false)
-            if (topCandidates.isEmpty()) {
+            source.sendFeedback({ Text.literal("1) Natural renewal (region prune candidates)").formatted(Formatting.YELLOW) }, false)
+            if (topRegionCandidates.isEmpty()) {
                 val waitingInitialScan = worldScanner?.hasInitialScanCompleted() != true
                 if (waitingInitialScan) {
                     source.sendFeedback(
@@ -248,12 +253,21 @@ object CommandHandlers {
                     source.sendFeedback({ Text.literal("none").formatted(Formatting.GRAY) }, false)
                 }
             } else {
-                topCandidates.forEach { candidate ->
+                topRegionCandidates.forEach { candidate ->
                     source.sendFeedback({ Text.literal(formatCandidateForExplain(candidate)).formatted(Formatting.GRAY) }, false)
                 }
             }
 
-            source.sendFeedback({ Text.literal("2) Stones waiting to mature").formatted(Formatting.YELLOW) }, false)
+            source.sendFeedback({ Text.literal("2) Stone-driven chunk renewal candidates").formatted(Formatting.YELLOW) }, false)
+            if (topChunkCandidates.isEmpty()) {
+                source.sendFeedback({ Text.literal("none").formatted(Formatting.GRAY) }, false)
+            } else {
+                topChunkCandidates.forEach { candidate ->
+                    source.sendFeedback({ Text.literal(formatCandidateForExplain(candidate)).formatted(Formatting.GRAY) }, false)
+                }
+            }
+
+            source.sendFeedback({ Text.literal("3) Stones waiting to mature").formatted(Formatting.YELLOW) }, false)
             if (waitingToMature.isEmpty()) {
                 source.sendFeedback({ Text.literal("none").formatted(Formatting.GRAY) }, false)
             } else {
@@ -262,7 +276,7 @@ object CommandHandlers {
                 }
             }
 
-            source.sendFeedback({ Text.literal("3) Stones waiting for consumption").formatted(Formatting.YELLOW) }, false)
+            source.sendFeedback({ Text.literal("4) Stones waiting for consumption").formatted(Formatting.YELLOW) }, false)
             if (waitingForConsumption.isEmpty()) {
                 source.sendFeedback({ Text.literal("none").formatted(Formatting.GRAY) }, false)
             } else {
@@ -271,7 +285,7 @@ object CommandHandlers {
                 }
             }
 
-            source.sendFeedback({ Text.literal("4) Blocking conditions").formatted(Formatting.YELLOW) }, false)
+            source.sendFeedback({ Text.literal("5) Blocking conditions").formatted(Formatting.YELLOW) }, false)
             val blockingLines = mutableListOf<String>()
             if (worldScanner?.hasInitialScanCompleted() != true) {
                 blockingLines += "- initial world scan is not completed"
@@ -982,7 +996,7 @@ object CommandHandlers {
         val regionCandidates = candidates.count { it.id.action == RenewalCandidateAction.REGION_PRUNE }
         val chunkCandidates = candidates.count { it.id.action == RenewalCandidateAction.CHUNK_RENEW }
         lines += "Renewal candidate totals: all=${candidates.size}, regions=$regionCandidates, chunks=$chunkCandidates"
-        lines += "Distribution summary: selection=${if (regionCandidates > 0) "region-prune" else if (chunkCandidates > 0) "chunk-renew" else "none"}"
+        lines += "Mechanism activity: natural=${if (regionCandidates > 0) "ready" else "none"}, stone-driven=${if (chunkCandidates > 0) "ready" else "none"}"
 
         val health = when {
             projection == null -> "projection unavailable"

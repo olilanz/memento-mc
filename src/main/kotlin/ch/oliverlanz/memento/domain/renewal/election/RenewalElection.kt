@@ -1,6 +1,5 @@
 package ch.oliverlanz.memento.domain.renewal.election
 
-import ch.oliverlanz.memento.domain.renewal.RenewalExecutionGrain
 import ch.oliverlanz.memento.domain.renewal.projection.RegionKey
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateAction
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateId
@@ -14,7 +13,6 @@ data class ElectionResult(
     val transactionId: String,
     val electedRegions: List<RegionKey>,
     val electedChunks: List<ChunkKey>,
-    val selectedExecutionGrain: RenewalExecutionGrain?,
 )
 
 data class RenewalRankedElectionEntry(
@@ -32,7 +30,8 @@ data class RenewalRankedElectionEntry(
  *
  * Election policy:
  * - region-prune candidates first in deterministic order
- * - chunk-renew candidates only from non-forgettable regions
+ * - chunk-renew candidates are derived independently from chunk-local eligibility
+ * - region-first ordering is an execution policy, not a derivation dependency
  * - no numeric scoring surfaces
  */
 object RenewalElection {
@@ -46,9 +45,8 @@ object RenewalElection {
         // Domain-separation contract:
         // - Region prune and chunk renew are distinct eligibility domains.
         // - Region-prune candidates are evaluated first.
-        // - Chunk-renew candidates are evaluated only from non-forgettable regions.
-        // - The region filter inside chunk assembly is a defensive consistency guard,
-        //   not a semantic derivation source for chunk eligibility.
+        // - Chunk-renew candidates are derived from chunk-local eligibility only.
+        // - Region forgettability must not be used as a fallback/override gate for chunk renewal.
         val transactionId = deterministicTransactionId
             ?: "elect-${input.generation}-${evaluationCounter.incrementAndGet()}"
 
@@ -67,13 +65,6 @@ object RenewalElection {
             .asSequence()
             .filter { (_, derivation) -> derivation.eligibleChunkRenewal }
             .map { (key, _) -> key }
-            .filter { key ->
-                input.regionForgettableByRegion[RegionKey(
-                    worldId = key.world.value.toString(),
-                    regionX = key.regionX,
-                    regionZ = key.regionZ,
-                )] != true
-            }
             .sortedWith(
                 compareBy<ChunkKey> { it.world.value.toString() }
                     .thenBy { it.regionX }
@@ -83,20 +74,13 @@ object RenewalElection {
             )
             .toList()
 
-        val selected = when {
-            sortedRegions.isNotEmpty() -> RenewalExecutionGrain.Region(sortedRegions.first())
-            chunkCandidates.isNotEmpty() -> RenewalExecutionGrain.ChunkBatch(chunkCandidates)
-            else -> null
-        }
-
         MementoLog.info(
             MementoConcept.RENEWAL,
-            "election deterministic generation={} transaction={} regionCandidates={} chunkCandidates={} selected={}",
+            "election deterministic generation={} transaction={} regionCandidates={} chunkCandidates={} regionFirstPolicy=true",
             input.generation,
             transactionId,
             sortedRegions.size,
             chunkCandidates.size,
-            selected?.javaClass?.simpleName ?: "NONE",
         )
 
         return ElectionResult(
@@ -104,7 +88,6 @@ object RenewalElection {
             transactionId = transactionId,
             electedRegions = sortedRegions,
             electedChunks = chunkCandidates,
-            selectedExecutionGrain = selected,
         )
     }
 
@@ -121,7 +104,6 @@ object RenewalElection {
                     regionZ = region.regionZ,
                 ),
                 rank = rank,
-                byRegionPrune = true,
             )
             rank++
         }
@@ -135,7 +117,6 @@ object RenewalElection {
                     chunkZ = chunk.chunkZ,
                 ),
                 rank = rank,
-                byRegionPrune = false,
             )
             rank++
         }

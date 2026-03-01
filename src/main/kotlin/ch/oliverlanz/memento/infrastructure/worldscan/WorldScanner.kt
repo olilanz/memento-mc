@@ -300,12 +300,10 @@ class WorldScanner : ChunkAvailabilityListener {
         if (providerStatus != null) {
             MementoLog.info(
                     MementoConcept.SCANNER,
-                    "scan shutdown summary providerLifecycle={} firstPass={}/{} secondPass={}/{} emittedFacts={} unappliedQueuedFacts={}",
+                    "scan shutdown summary providerLifecycle={} workUnits={}/{} emittedFacts={} unappliedQueuedFacts={}",
                     providerStatus.lifecycle,
-                    providerStatus.firstPassProcessed,
-                    providerStatus.firstPassTotal,
-                    providerStatus.secondPassProcessed,
-                    providerStatus.secondPassTotal,
+                    providerStatus.processedWorkUnits,
+                    providerStatus.totalWorkUnits,
                     providerStatus.emittedFacts,
                     pendingFacts,
             )
