@@ -1,194 +1,228 @@
-# Memento – Natural Renewal
+# Memento -- Natural Renewal
 
 **Intentional world renewal through remembering and forgetting.**
 
-Memento is a lightweight, server-side Fabric mod for Minecraft that helps long-lived worlds evolve naturally over time — without wiping the world or interrupting gameplay.
+Memento is a lightweight, server-side Fabric mod for Minecraft that
+helps long‑lived worlds evolve safely over time --- without wiping the
+world or interrupting gameplay.
 
 Vanilla clients are fully compatible.
 
----
+------------------------------------------------------------------------
 
-## The problem it solves
+## The problem
 
 Minecraft worlds never forget.
 
-Over time, long-lived worlds become surrounded by vast areas of old, unused terrain. New world features appear farther and farther away, and upgrades or world-generation changes rarely affect the places where players actually live.
+Over time, long‑running servers accumulate vast areas of old terrain
+that no one uses anymore.\
+New world‑generation features appear farther and farther away. World
+upgrades rarely affect the places that matter.
 
-Memento enables **natural renewal**.
+Memento enables **deliberate renewal**.
 
-It distinguishes between land that is **memorable** — inhabited areas and their surroundings — and land that is **forgettable** — terrain that was explored briefly and then abandoned.
+Not by wiping the world.\
+Not by forcing change.\
+But by distinguishing between land that still matters --- and land that
+has been left behind.
 
-Forgettable land is not destroyed.  
-It fades from memory — and only then can it renew.
-
-Renewal begins far from active gameplay and gradually moves inward over time. Inhabited areas remain stable and untouched.
-
-All of this happens while the server is running. No offline tools. No manual region deletion.
-
----
+------------------------------------------------------------------------
 
 ## The core idea: remembering and forgetting
 
 Not all land deserves to last forever.
 
-Memento models a simple idea:
+Memento models a simple principle:
 
-* **Memorable land**  
-  Areas where players live, return to, or spend time — including their surroundings.
+-   **Memorable land**\
+    Areas where players live, return to, or spend meaningful time ---
+    including their surroundings.
 
-* **Forgettable land**  
-  Areas that were explored but never settled, or that have seen no meaningful activity for a long time.
+-   **Forgettable land**\
+    Areas that were explored briefly, mined temporarily, or abandoned
+    long ago.
 
-Forgettable land is allowed to fade.  
-Renewal only happens after that fading has occurred.
+Forgettable land is allowed to fade.
+Only after that fading can renewal occur.
 
-The world feels stable where it matters — and fresh where it doesn’t.
+The result:
 
----
+-   Stability where it matters
+-   Fresh terrain where it doesn't
 
-## What players and servers experience
+------------------------------------------------------------------------
 
-Most of the time:
+## Two complementary renewal paths
 
-* nothing at all
+Memento combines two mechanisms that work hand in hand.
 
-When renewal happens:
+### 1. Natural Renewal (projection-based)
 
-* it occurs away from inhabited areas
-* it only affects abandoned land
-* it never causes partial regeneration or visible tearing
-* it does not interrupt gameplay
+Natural Renewal identifies forgettable regions and proposes conservative
+region-level pruning.
 
-Memento prioritizes stability over speed.
+It:
 
----
+-   Works gradually from the outskirts inward
+-   Never touches protected or memorable land
+-   Suggests what *could* renew
+-   Does nothing automatically
 
-## Stones: guiding memory and renewal
+The operator remains in full control of when renewal happens.
 
-Memento introduces two tools to express operator intent:
+------------------------------------------------------------------------
 
-* **Witherstone**  
-  Marks land for renewal over time. Once mature, it schedules its area for renewal when chunks naturally unload.
+### 2. Stone-driven renewal (explicit intent)
 
-* **Lorestone**  
-  Protects land permanently from renewal.
+Stones allow operators to guide or override renewal behavior.
 
-Stones do not force immediate change.  
-Renewal only occurs when chunks can unload naturally, keeping the world stable and predictable.
+-   **Witherstone** --- marks land for renewal over time\
+-   **Lorestone** --- protects land permanently
 
----
+Stones express intent.
+They never force immediate regeneration.
+Renewal still occurs only when chunks unload naturally.
 
-## Operator workflow (OP ≥ 2)
+------------------------------------------------------------------------
 
-Memento is conservative by default.
+## Nothing happens automatically
 
-Operators typically work in two stages:
+Memento does not run unattended world wipes.
 
-### 1) Define intent with stones
+It:
 
-The primary workflow today is zone-based renewal.
+-   Suggests renewal candidates
+-   Explains what it is waiting for
+-   Executes renewal only when the operator explicitly triggers it
 
-* `/memento add witherstone <name> [radius] [daysToMaturity]`
-* `/memento add lorestone <name> [radius]`
-* `/memento remove witherstone <name>`
-* `/memento remove lorestone <name>`
-* `/memento alter witherstone <name> radius <value>`
-* `/memento alter witherstone <name> daysToMaturity <value>`
-* `/memento alter lorestone <name> radius <value>`
+You remain in control of when change occurs.
 
-Witherstones mature over in-game days.  
-Lorestones prevent renewal in protected areas.
+------------------------------------------------------------------------
 
-This is the primary entry point for new operators.
+## What you see in game
 
----
+Memento is designed to be explainable and visible.
 
-### 2) Observe and act deliberately
+-   Placing a stone briefly shows its area of influence with particle
+    effects
+-   Areas waiting for renewal glow subtly
+-   Protected areas can be visualized again at any time
 
-Operators can inspect system state:
+If you need clarity:
 
-* `/memento explain`  
-  Operator dashboard summary.
+-   `/memento explain` shows system status
+-   `/memento explain renewal` shows proposed renewal actions and
+    waiting conditions
+-   `/memento explain stones` shows stone state
+-   `/memento visualize` replays visual area indicators
 
-* `/memento explain world`  
-  World knowledge completeness and renewal health.
+The system tells you what it is waiting for.
 
-* `/memento explain stones`  
-  Overview of registered stones.
+------------------------------------------------------------------------
 
-* `/memento explain renewal`  
-  Current renewal state, including:
-  1. Top renewal candidates  
-  2. Stones waiting to mature  
-  3. Stones waiting for consumption  
-  4. Blocking conditions  
+# Practical Workflows
 
-Operators may also act deliberately:
+## Workflow A --- Deliberate area renewal with stones
 
-* `/memento do scan`  
-  Trigger an active world scan.
+1.  Protect what must never change\
+    `/memento add lorestone <name> [radius]`
 
-* `/memento do renew [N]`  
-  Immediately submit up to `N` renewal actions (default `N = 1`).
+2.  Mark land for renewal\
+    `/memento add witherstone <name> [radius] [daysToMaturity]`
 
-These commands are explainable by design.  
-They describe what the system is waiting for and allow controlled intervention without hidden lifecycle state.
+3.  Let the Witherstone mature\
+    (in‑game days pass)
 
----
+4.  Inspect status\
+    `/memento explain renewal`
+
+5.  Execute renewal deliberately\
+    `/memento do renew [N]`
+
+6.  Leave the area so chunks can unload naturally\
+    (move away, log out/in, or restart the server if needed)
+
+Renewal completes when the world reloads the affected chunks.
+
+------------------------------------------------------------------------
+
+## Workflow B --- Gradual world pruning from the outskirts
+
+1.  Scan the world\
+    `/memento do scan`
+
+    Active scan is single-pass and conservative.\
+    Unresolved files are reported explicitly and can be reconciled by
+    rerunning the command.
+
+2.  Inspect world knowledge\
+    `/memento explain world`
+
+3.  Inspect renewal proposals\
+    `/memento explain renewal`
+
+4.  Execute controlled renewal\
+    `/memento do renew [N]`
+
+Natural Renewal proposes region-level pruning only.\
+The operator decides when to apply it.
+
+------------------------------------------------------------------------
+
+## Core Commands (Operator ≥ 2)
+
+### Stones
+
+-   `/memento add witherstone <name> [radius] [daysToMaturity]`
+-   `/memento add lorestone <name> [radius]`
+-   `/memento remove witherstone <name>`
+-   `/memento remove lorestone <name>`
+-   `/memento alter witherstone <name> radius <value>`
+-   `/memento alter witherstone <name> daysToMaturity <value>`
+-   `/memento alter lorestone <name> radius <value>`
+
+### Inspection
+
+-   `/memento explain`
+-   `/memento explain world`
+-   `/memento explain stones`
+-   `/memento explain renewal`
+-   `/memento visualize`
+
+### Execution
+
+-   `/memento do scan`
+-   `/memento do renew [N]`
+
+------------------------------------------------------------------------
 
 ## Safety and compatibility
 
-* Server-side only  
-* Vanilla clients fully compatible  
-* No forced chunk unloads  
-* No partial regeneration  
-* Deterministic and explainable behavior  
-* Compatible with world-generation mods  
+-   Server-side only
+-   Vanilla clients fully compatible
+-   No forced chunk unloads
+-   No partial regeneration
+-   Deterministic and explainable behavior
+-   Compatible with world-generation mods
 
-Renewal only occurs when land is fully abandoned.
+Protection dominance is absolute.
+Renewal only occurs on abandoned land.
 
----
+------------------------------------------------------------------------
 
 ## Installation
 
-Memento is a standard Fabric mod.
-
-1. Install Fabric Loader for your Minecraft version  
-2. Place the mod JAR in your server’s `mods` folder  
-3. Start the server  
+1.  Install Fabric Loader for your Minecraft version
+2.  Place the mod JAR in your server's `mods` folder
+3.  Start the server
 
 No client installation required.
 
----
+------------------------------------------------------------------------
 
 ## Further documentation
 
-* **RENEWAL_MODEL.md** — in-world explanation of memory and forgetting  
-* **ARCHITECTURE.md** — internal design and invariants  
-* **DEVELOPMENT.md** — build and development environment  
-
----
-
-## Open Issues Before General Availability
-
-Memento is approaching general availability.  
-The following architectural gaps are known and will be resolved before GA.
-
-### 1. Renewal Loop Prevention (Chunks & Regions)
-
-Renewed chunks and pruned regions must be marked as “recently renewed” so they do not immediately become eligible again.
-
-Without durable exemption markers, the system may:
-
-* renew the same chunk repeatedly, or  
-* oscillate between region pruning and chunk renewal near region borders.
-
-This applies to both region-level pruning and chunk-level renewal.
-
----
-
-### 2. Full Automation Scheduling
-
-Natural renewal (scan → projection → renew) is not yet fully automated on a nightly cadence.
-
-Automation will only be enabled once loop-prevention safeguards are fully validated.
+-   `RENEWAL_MODEL.md` --- in-world explanation of memory and
+    forgetting
+-   `ARCHITECTURE.md` --- internal design and invariants
+-   `DEVELOPMENT.md` --- build and development environment

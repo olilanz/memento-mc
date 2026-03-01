@@ -1338,47 +1338,51 @@ object CommandHandlers {
     }
 
     private fun forceChunkBatchRenew(source: ServerCommandSource, chunkKeys: List<ch.oliverlanz.memento.domain.worldmap.ChunkKey>): Int {
-        val chunksByWorld = chunkKeys.groupBy { it.world }
-        if (chunksByWorld.isEmpty()) {
+        val submission = submitChunkBatchDefinitions(chunkKeys)
+        if (submission.groupCount == 0) {
             source.sendError(Text.literal("[Memento] no chunks available for renewal action."))
             return 0
-        }
-
-        var submitted = 0
-        chunksByWorld.entries.sortedBy { it.key.value.toString() }.forEach { (world, chunks) ->
-            val scope = chunks.map { ChunkPos(it.chunkX, it.chunkZ) }.toSet()
-            val minX = chunks.minOf { it.chunkX }
-            val minZ = chunks.minOf { it.chunkZ }
-            val maxX = chunks.maxOf { it.chunkX }
-            val maxZ = chunks.maxOf { it.chunkZ }
-            val batchName =
-                "${ch.oliverlanz.memento.MementoConstants.MEMENTO_RENEW_FORCE_BATCH_PREFIX}${world.value}_${minX}_${minZ}_${maxX}_${maxZ}_${scope.size}"
-
-            RenewalTracker.upsertBatchDefinition(
-                name = batchName,
-                dimension = world,
-                chunks = scope,
-                trigger = RenewalTrigger.MANUAL,
-            )
-            submitted += scope.size
         }
 
         MementoLog.info(
             MementoConcept.RENEWAL,
             "do renewal decision grain=chunk count={} groups={} by={}",
-            submitted,
-            chunksByWorld.size,
+            submission.submittedCount,
+            submission.groupCount,
             source.name,
         )
         source.sendFeedback(
-            { Text.literal("[Memento] renewal action queued ${submitted} chunks across ${chunksByWorld.size} renewal group(s). ").formatted(Formatting.YELLOW) },
+            { Text.literal("[Memento] renewal action queued ${submission.submittedCount} chunks across ${submission.groupCount} renewal group(s). ").formatted(Formatting.YELLOW) },
             false
         )
         return 1
     }
     private fun submitChunkBatchNow(owner: String, chunkKeys: List<ch.oliverlanz.memento.domain.worldmap.ChunkKey>): Int {
+        val submission = submitChunkBatchDefinitions(chunkKeys)
+        if (submission.groupCount == 0) return 0
+
+        MementoLog.info(
+            MementoConcept.RENEWAL,
+            "do renewal decision grain=chunk count={} groups={} by={}",
+            submission.submittedCount,
+            submission.groupCount,
+            owner,
+        )
+        return submission.submittedCount
+    }
+
+    private data class ChunkBatchSubmission(
+        val submittedCount: Int,
+        val groupCount: Int,
+    )
+
+    private fun submitChunkBatchDefinitions(
+        chunkKeys: List<ch.oliverlanz.memento.domain.worldmap.ChunkKey>,
+    ): ChunkBatchSubmission {
         val chunksByWorld = chunkKeys.groupBy { it.world }
-        if (chunksByWorld.isEmpty()) return 0
+        if (chunksByWorld.isEmpty()) {
+            return ChunkBatchSubmission(submittedCount = 0, groupCount = 0)
+        }
 
         var submitted = 0
         chunksByWorld.entries.sortedBy { it.key.value.toString() }.forEach { (world, chunks) ->
@@ -1399,14 +1403,10 @@ object CommandHandlers {
             submitted += scope.size
         }
 
-        MementoLog.info(
-            MementoConcept.RENEWAL,
-            "do renewal decision grain=chunk count={} groups={} by={}",
-            submitted,
-            chunksByWorld.size,
-            owner,
+        return ChunkBatchSubmission(
+            submittedCount = submitted,
+            groupCount = chunksByWorld.size,
         )
-        return submitted
     }
 
     private fun formatCandidateForExplain(candidate: RenewalRankedCandidate): String {

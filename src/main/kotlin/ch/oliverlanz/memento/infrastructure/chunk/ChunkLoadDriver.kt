@@ -489,7 +489,10 @@ class ChunkLoadDriver {
         // Issue tickets in a single pass.
         // Policy:
         // - Renewal desire is prioritized over scanner desire.
-        val candidates = register.takeTicketCandidatesPrioritized(capacity)
+        val candidates = register.takeTicketCandidates(
+            max = capacity,
+            policy = ChunkLoadRegister.TicketSelectionPolicy.DETERMINISTIC_RENEWAL_FIRST,
+        )
         if (candidates.isEmpty()) return
 
         var issued = 0

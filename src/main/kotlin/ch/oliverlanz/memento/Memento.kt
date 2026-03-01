@@ -33,7 +33,7 @@ import ch.oliverlanz.memento.infrastructure.pulse.PulseGenerator
 import ch.oliverlanz.memento.infrastructure.time.GameTimeTracker
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanCsvExporter
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
-import ch.oliverlanz.memento.infrastructure.worldscan.TwoPassRegionFileMetadataProvider
+import ch.oliverlanz.memento.infrastructure.worldscan.RegionFileMetadataProvider
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanListener
 import ch.oliverlanz.memento.infrastructure.observability.OperatorMessages
 import net.fabricmc.api.ModInitializer
@@ -191,7 +191,7 @@ object Memento : ModInitializer {
                 MementoLog.info(MementoConcept.SCANNER, "bootstrap scanner: binding WorldMapService before server attach")
                 it.attachWorldMapService(service)
                 it.attach(server)
-                it.attachFileMetadataProvider(TwoPassRegionFileMetadataProvider(it.metadataIngestionPort()))
+                it.attachFileMetadataProvider(RegionFileMetadataProvider(it.metadataIngestionPort()))
                 it.addListener(onWorldScanCompleted)
             }
 
