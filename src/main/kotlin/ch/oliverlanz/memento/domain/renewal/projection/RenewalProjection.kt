@@ -34,6 +34,10 @@ fun interface RenewalProjectionStableListener {
  *
  * Invariants:
  * - Projection state is fully derived and recomputable.
+ * - Region-level eligibility is derived from region forgettability only.
+ * - Chunk-level eligibility is derived independently and does not consult region forgettability.
+ * - Protection dominance is encoded before execution by stone-authority/derivation surfaces.
+ * - No mixed arbitration state exists between region and chunk mechanisms.
  * - Only affected-dirty regions are mutated at commit.
  * - Unaffected regions remain bitwise identical across commits.
  * - Election is derived exclusively from committed state.
@@ -444,7 +448,7 @@ class RenewalProjection {
         // Pass 1: region forgettable (region-only).
         // Pass 2: memorable source chunks (absolute inhabited threshold OR lore influence).
         // Pass 3: memorability expansion (radius = MEMENTO_RENEWAL_MEMORABLE_EXPANSION_RADIUS_CHUNKS).
-        // Pass 4: chunk eligibility = !regionForgettable && !memorable.
+        // Pass 4: chunk eligibility = !memorable (stone-driven path is independent from region forgettability).
         //
         // Region prune and chunk renewal eligibility are separate domains and must not be conflated.
         if (sourceSnapshotByKey.isEmpty()) {
@@ -568,7 +572,9 @@ class RenewalProjection {
 
                 chunkDerivationUpdates[key] = RenewalChunkDerivation(
                     memorable = memorable,
-                    eligibleChunkRenewal = !regionForgettable && !memorable,
+                    // Stone-driven chunk renewal is intentionally independent of region forgettability.
+                    // Chunk renewal eligibility is derived from chunk-local memorability/protection only.
+                    eligibleChunkRenewal = !memorable,
                 )
             }
         }
