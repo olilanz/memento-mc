@@ -288,6 +288,11 @@ class WorldScanner : ChunkAvailabilityListener {
         return worldMapService?.hasInitialScanCompleted() == true
     }
 
+    /** Read-only committed world-fact snapshot for operator observability exports. */
+    fun committedWorldSnapshot(): List<ChunkScanSnapshotEntry> {
+        return mapSnapshot()?.snapshot().orEmpty()
+    }
+
     fun detach() {
         val providerStatus = fileMetadataProvider?.status()
         val pendingFacts = pendingFileFacts.size
@@ -295,12 +300,10 @@ class WorldScanner : ChunkAvailabilityListener {
         if (providerStatus != null) {
             MementoLog.info(
                     MementoConcept.SCANNER,
-                    "scan shutdown summary providerLifecycle={} firstPass={}/{} secondPass={}/{} emittedFacts={} unappliedQueuedFacts={}",
+                    "scan shutdown summary providerLifecycle={} workUnits={}/{} emittedFacts={} unappliedQueuedFacts={}",
                     providerStatus.lifecycle,
-                    providerStatus.firstPassProcessed,
-                    providerStatus.firstPassTotal,
-                    providerStatus.secondPassProcessed,
-                    providerStatus.secondPassTotal,
+                    providerStatus.processedWorkUnits,
+                    providerStatus.totalWorkUnits,
                     providerStatus.emittedFacts,
                     pendingFacts,
             )
@@ -580,36 +583,27 @@ class WorldScanner : ChunkAvailabilityListener {
             }
         }
 
-        if (map.isComplete()) {
-            MementoLog.info(
-                    MementoConcept.SCANNER,
-                    "World scan completed. Scanned: {}. Missing: {}. Provenance={} UnresolvedReasons={} unresolvedWithoutReason={}",
-                    event.scannedChunks,
-                    event.missingChunks,
-                    formatProvenanceCounts(event.provenanceCounts),
-                    formatUnresolvedReasonCounts(event.unresolvedReasonCounts),
-                    event.unresolvedWithoutReasonCount,
-            )
-        } else if (reason == "exhausted_but_missing") {
-            MementoLog.info(
-                    MementoConcept.SCANNER,
-                    "World scan paused-with-missing. Missing chunks remain: {}. Provenance={} UnresolvedReasons={} unresolvedWithoutReason={}",
-                    event.missingChunks,
-                    formatProvenanceCounts(event.provenanceCounts),
-                    formatUnresolvedReasonCounts(event.unresolvedReasonCounts),
-                    event.unresolvedWithoutReasonCount,
-            )
+        val completionLogTemplate: String
+        val completionLogFirstValue: Any
+        if (!map.isComplete() && reason == "exhausted_but_missing") {
+            completionLogTemplate =
+                    "World scan paused-with-missing. Missing chunks remain: {}. Provenance={} UnresolvedReasons={} unresolvedWithoutReason={}"
+            completionLogFirstValue = event.missingChunks
         } else {
-            MementoLog.info(
-                    MementoConcept.SCANNER,
-                    "World scan completed. Scanned: {}. Missing: {}. Provenance={} UnresolvedReasons={} unresolvedWithoutReason={}",
-                    event.scannedChunks,
-                    event.missingChunks,
-                    formatProvenanceCounts(event.provenanceCounts),
-                    formatUnresolvedReasonCounts(event.unresolvedReasonCounts),
-                    event.unresolvedWithoutReasonCount,
-            )
+            completionLogTemplate =
+                    "World scan completed. Scanned: {}. Missing: {}. Provenance={} UnresolvedReasons={} unresolvedWithoutReason={}"
+            completionLogFirstValue = event.scannedChunks
         }
+
+        MementoLog.info(
+                MementoConcept.SCANNER,
+                completionLogTemplate,
+                completionLogFirstValue,
+                event.missingChunks,
+                formatProvenanceCounts(event.provenanceCounts),
+                formatUnresolvedReasonCounts(event.unresolvedReasonCounts),
+                event.unresolvedWithoutReasonCount,
+        )
 
         val shouldMarkInitialScanCompleted = map.isComplete() || (plannedChunks == 0 && event.scannedChunks == 0)
         if (shouldMarkInitialScanCompleted) {

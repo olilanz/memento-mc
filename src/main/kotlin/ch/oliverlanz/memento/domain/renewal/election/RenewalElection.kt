@@ -1,300 +1,155 @@
 package ch.oliverlanz.memento.domain.renewal.election
 
-import ch.oliverlanz.memento.domain.renewal.RenewalExecutionGrain
 import ch.oliverlanz.memento.domain.renewal.projection.RegionKey
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateAction
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateId
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalElectionInput
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
-import net.minecraft.world.World
 
 data class ElectionResult(
     val projectionGeneration: Long,
     val transactionId: String,
     val electedRegions: List<RegionKey>,
     val electedChunks: List<ChunkKey>,
-    val selectedExecutionGrain: RenewalExecutionGrain?,
+)
+
+data class RenewalRankedElectionEntry(
+    val action: RenewalCandidateAction,
+    val rank: Int,
+    val worldKey: String,
+    val regionX: Int? = null,
+    val regionZ: Int? = null,
+    val chunkX: Int? = null,
+    val chunkZ: Int? = null,
 )
 
 /**
- * RenewalElection selects renewal targets from an immutable [RenewalCommittedSnapshot]
- * materialized as [RenewalElectionInput].
+ * Deterministic projection election over boolean projection outputs.
  *
- * It is pure and stateless:
- * - no side effects
- * - no world or projection mutation
- * - no scheduling
- * - no event emission
- *
- * Election defines decision semantics only.
- * It does not validate execution safety and does not perform execution.
+ * Election policy:
+ * - region-prune candidates first in deterministic order
+ * - chunk-renew candidates are derived independently from chunk-local eligibility
+ * - region-first ordering is an execution policy, not a derivation dependency
+ * - no numeric scoring surfaces
  */
 object RenewalElection {
 
-    private const val MAX_REGION_DISTANCE_RING: Int = 64
-    private const val MAX_CHUNK_DISTANCE_RING: Int = 96
-    /**
-     * Bound chunk fallback list size retained in projection ranking.
-     *
-     * Drift revalidation for `/memento renew force <N>` is membership-based against
-     * projection-ranked candidates, so this bound should stay comfortably above operator preview
-     * and expected force counts.
-     */
-    private const val MAX_CHUNK_FALLBACK_CANDIDATES: Int = 256
-
     private val evaluationCounter = java.util.concurrent.atomic.AtomicLong(0L)
 
-    private data class RegionAggregate(
-        val region: RegionKey,
-        val allChunksForgettableConservative: Boolean,
-        val hasMemorableChunk: Boolean,
-    )
+    fun evaluate(
+        input: RenewalElectionInput,
+        deterministicTransactionId: String? = null,
+    ): ElectionResult {
+        // Domain-separation contract:
+        // - Region prune and chunk renew are distinct eligibility domains.
+        // - Region-prune candidates are evaluated first.
+        // - Chunk-renew candidates are derived from chunk-local eligibility only.
+        // - Region forgettability must not be used as a fallback/override gate for chunk renewal.
+        val transactionId = deterministicTransactionId
+            ?: "elect-${input.generation}-${evaluationCounter.incrementAndGet()}"
 
-    private class BoundedCheckCounter {
-        var checks: Int = 0
-            private set
-
-        fun tick() {
-            checks++
-        }
-    }
-
-    fun evaluate(input: RenewalElectionInput): ElectionResult {
-        val transactionId = "elect-${input.generation}-${evaluationCounter.incrementAndGet()}"
-        val snapshot = input.snapshotEntries
-        val metricsByChunk = input.metricsByChunk
-        val boundedChecks = BoundedCheckCounter()
-
-        val forgettableByChunk = snapshot.associate { entry ->
-            entry.key to ((metricsByChunk[entry.key]?.forgettabilityIndex ?: 0.0) >= 1.0)
-        }
-
-        val memorableChunkSet = snapshot
+        val sortedRegions = input.regionForgettableByRegion
             .asSequence()
-            .map { it.key }
-            .filter { (metricsByChunk[it]?.memorabilityIndex ?: 0.0) > 0.0 }
-            .toSet()
-
-        val chunksByRegion = snapshot.groupBy { RegionKey(it.key.world.value.toString(), it.key.regionX, it.key.regionZ) }
-        val memorableRegions = memorableChunkSet
-            .map { RegionKey(it.world.value.toString(), it.regionX, it.regionZ) }
-            .toSet()
-        val memorableRegionPackedByWorld = buildPackedRegionSetByWorld(memorableRegions)
-
-        val aggregatesByRegion = chunksByRegion.mapValues { (region, entries) ->
-            RegionAggregate(
-                region = region,
-                allChunksForgettableConservative = entries.all { forgettableByChunk[it.key] == true },
-                hasMemorableChunk = memorableRegions.contains(region),
-            )
-        }
-
-        val regionCandidates = linkedSetOf<RegionKey>()
-        aggregatesByRegion.forEach { (region, aggregate) ->
-            if (!aggregate.allChunksForgettableConservative) return@forEach
-            if (aggregate.hasMemorableChunk) return@forEach
-
-            val okNeighbors = neighborRegions8(region).all { neighbor ->
-                boundedChecks.tick()
-                val neighborAgg = aggregatesByRegion[neighbor] ?: return@all true
-                neighborAgg.allChunksForgettableConservative
-            }
-
-            if (okNeighbors) {
-                regionCandidates += region
-            }
-        }
-
-        val regionDistanceByKey = regionCandidates.associateWith { candidate ->
-            minChebyshevDistanceToMemorableRegions(candidate, memorableRegionPackedByWorld, boundedChecks)
-        }
-
-        val sortedRegions = regionCandidates
+            .filter { (_, forgettable) -> forgettable }
+            .map { (region, _) -> region }
             .sortedWith(
-                compareBy<RegionKey> { candidate ->
-                    worldRank(candidate.worldId)
-                }
-                    .thenByDescending { candidate ->
-                        regionDistanceByKey[candidate] ?: Int.MAX_VALUE
-                    }
-                    .thenBy { it.worldId }
-                    .thenBy { it.regionZ }
+                compareBy<RegionKey> { it.worldId }
                     .thenBy { it.regionX }
+                    .thenBy { it.regionZ }
             )
+            .toList()
 
-        val memorableChunkPackedByWorld = buildPackedChunkSetByWorld(memorableChunkSet)
-
-        val sortedChunks = if (sortedRegions.isEmpty()) {
-            val chunkCandidates = snapshot
-                .asSequence()
-                .map { it.key }
-                .filter { forgettableByChunk[it] == true }
-                .toList()
-
-            val chunkDistanceByKey = chunkCandidates.associateWith { candidate ->
-                minChebyshevDistanceToMemorableChunks(candidate, memorableChunkPackedByWorld, boundedChecks)
-            }
-
-            snapshot
-                .asSequence()
-                .map { it.key }
-                .filter { forgettableByChunk[it] == true }
-                .sortedWith(
-                    compareBy<ChunkKey> { candidate ->
-                        worldRank(candidate.world.value.toString())
-                    }
-                        .thenByDescending { candidate ->
-                            chunkDistanceByKey[candidate] ?: Int.MAX_VALUE
-                        }
-                        .thenBy { it.world.value.toString() }
-                        .thenBy { it.chunkZ }
-                        .thenBy { it.chunkX }
-                )
-                .take(MAX_CHUNK_FALLBACK_CANDIDATES)
-                .toList()
-        } else {
-            emptyList()
-        }
-
-        val selected = when {
-            sortedRegions.isNotEmpty() -> RenewalExecutionGrain.Region(sortedRegions.first())
-            sortedChunks.isNotEmpty() -> RenewalExecutionGrain.ChunkBatch(sortedChunks)
-            else -> null
-        }
+        val chunkCandidates = input.chunkDerivationByChunk
+            .asSequence()
+            .filter { (_, derivation) -> derivation.eligibleChunkRenewal }
+            .map { (key, _) -> key }
+            .sortedWith(
+                compareBy<ChunkKey> { it.world.value.toString() }
+                    .thenBy { it.regionX }
+                    .thenBy { it.regionZ }
+                    .thenBy { it.chunkX }
+                    .thenBy { it.chunkZ }
+            )
+            .toList()
 
         MementoLog.info(
             MementoConcept.RENEWAL,
-            "election bounded-eval generation={} transaction={} checks={} regionRingMax={} chunkRingMax={} regionCandidates={} chunkFallbackCandidates={} selected={}",
+            "election deterministic generation={} transaction={} regionCandidates={} chunkCandidates={} regionFirstPolicy=true",
             input.generation,
             transactionId,
-            boundedChecks.checks,
-            MAX_REGION_DISTANCE_RING,
-            MAX_CHUNK_DISTANCE_RING,
             sortedRegions.size,
-            sortedChunks.size,
-            selected?.javaClass?.simpleName ?: "NONE",
+            chunkCandidates.size,
         )
 
         return ElectionResult(
             projectionGeneration = input.generation,
             transactionId = transactionId,
             electedRegions = sortedRegions,
-            electedChunks = sortedChunks,
-            selectedExecutionGrain = selected,
+            electedChunks = chunkCandidates,
         )
     }
 
-    private fun worldRank(worldId: String): Int {
-        return when (worldId) {
-            World.OVERWORLD.value.toString() -> 0
-            World.NETHER.value.toString() -> 1
-            World.END.value.toString() -> 2
-            else -> 99
-        }
-    }
+    fun asRankedCandidates(result: ElectionResult): List<ch.oliverlanz.memento.domain.renewal.projection.RenewalRankedCandidate> {
+        val out = mutableListOf<ch.oliverlanz.memento.domain.renewal.projection.RenewalRankedCandidate>()
+        var rank = 1
 
-    private fun minChebyshevDistanceToMemorableRegions(
-        candidate: RegionKey,
-        memorableByPackedWorld: Map<String, Set<Long>>,
-        checks: BoundedCheckCounter,
-    ): Int {
-        val memorableByPacked = memorableByPackedWorld[candidate.worldId] ?: return Int.MAX_VALUE
-        if (memorableByPacked.isEmpty()) return Int.MAX_VALUE
-
-        if (memorableByPacked.contains(packRegion(candidate.regionX, candidate.regionZ))) {
-            checks.tick()
-            return 0
+        result.electedRegions.forEach { region ->
+            out += ch.oliverlanz.memento.domain.renewal.projection.RenewalRankedCandidate(
+                id = RenewalCandidateId(
+                    action = RenewalCandidateAction.REGION_PRUNE,
+                    worldKey = region.worldId,
+                    regionX = region.regionX,
+                    regionZ = region.regionZ,
+                ),
+                rank = rank,
+            )
+            rank++
         }
 
-        for (distance in 1..MAX_REGION_DISTANCE_RING) {
-            for (dx in -distance..distance) {
-                val top = packRegion(candidate.regionX + dx, candidate.regionZ - distance)
-                checks.tick()
-                if (memorableByPacked.contains(top)) return distance
-
-                val bottom = packRegion(candidate.regionX + dx, candidate.regionZ + distance)
-                checks.tick()
-                if (memorableByPacked.contains(bottom)) return distance
-            }
-            for (dz in (-distance + 1) until distance) {
-                val left = packRegion(candidate.regionX - distance, candidate.regionZ + dz)
-                checks.tick()
-                if (memorableByPacked.contains(left)) return distance
-
-                val right = packRegion(candidate.regionX + distance, candidate.regionZ + dz)
-                checks.tick()
-                if (memorableByPacked.contains(right)) return distance
-            }
+        result.electedChunks.forEach { chunk ->
+            out += ch.oliverlanz.memento.domain.renewal.projection.RenewalRankedCandidate(
+                id = RenewalCandidateId(
+                    action = RenewalCandidateAction.CHUNK_RENEW,
+                    worldKey = chunk.world.value.toString(),
+                    chunkX = chunk.chunkX,
+                    chunkZ = chunk.chunkZ,
+                ),
+                rank = rank,
+            )
+            rank++
         }
 
-        return MAX_REGION_DISTANCE_RING + 1
-    }
-
-    private fun minChebyshevDistanceToMemorableChunks(
-        candidate: ChunkKey,
-        memorableByPackedWorld: Map<net.minecraft.registry.RegistryKey<World>, Set<Long>>,
-        checks: BoundedCheckCounter,
-    ): Int {
-        val memorableByPackedChunk = memorableByPackedWorld[candidate.world] ?: return Int.MAX_VALUE
-        if (memorableByPackedChunk.isEmpty()) return Int.MAX_VALUE
-
-        if (memorableByPackedChunk.contains(packChunk(candidate.chunkX, candidate.chunkZ))) {
-            checks.tick()
-            return 0
-        }
-
-        for (distance in 1..MAX_CHUNK_DISTANCE_RING) {
-            for (dx in -distance..distance) {
-                val top = packChunk(candidate.chunkX + dx, candidate.chunkZ - distance)
-                checks.tick()
-                if (memorableByPackedChunk.contains(top)) return distance
-
-                val bottom = packChunk(candidate.chunkX + dx, candidate.chunkZ + distance)
-                checks.tick()
-                if (memorableByPackedChunk.contains(bottom)) return distance
-            }
-            for (dz in (-distance + 1) until distance) {
-                val left = packChunk(candidate.chunkX - distance, candidate.chunkZ + dz)
-                checks.tick()
-                if (memorableByPackedChunk.contains(left)) return distance
-
-                val right = packChunk(candidate.chunkX + distance, candidate.chunkZ + dz)
-                checks.tick()
-                if (memorableByPackedChunk.contains(right)) return distance
-            }
-        }
-
-        return MAX_CHUNK_DISTANCE_RING + 1
-    }
-
-    private fun neighborRegions8(region: RegionKey): List<RegionKey> {
-        val out = ArrayList<RegionKey>(8)
-        for (dx in -1..1) {
-            for (dz in -1..1) {
-                if (dx == 0 && dz == 0) continue
-                out += RegionKey(region.worldId, region.regionX + dx, region.regionZ + dz)
-            }
-        }
         return out
     }
 
-    private fun buildPackedChunkSetByWorld(memorableChunkSet: Set<ChunkKey>): Map<net.minecraft.registry.RegistryKey<World>, Set<Long>> {
-        return memorableChunkSet
-            .groupBy { it.world }
-            .mapValues { (_, keys) -> keys.mapTo(linkedSetOf()) { key -> packChunk(key.chunkX, key.chunkZ) } }
-    }
+    fun asContinuousRankedEntries(result: ElectionResult): List<RenewalRankedElectionEntry> {
+        val out = mutableListOf<RenewalRankedElectionEntry>()
+        var rank = 1
 
-    private fun buildPackedRegionSetByWorld(memorableRegions: Set<RegionKey>): Map<String, Set<Long>> {
-        return memorableRegions
-            .groupBy { it.worldId }
-            .mapValues { (_, regions) -> regions.mapTo(linkedSetOf()) { region -> packRegion(region.regionX, region.regionZ) } }
-    }
+        result.electedRegions.forEach { region ->
+            out += RenewalRankedElectionEntry(
+                action = RenewalCandidateAction.REGION_PRUNE,
+                rank = rank,
+                worldKey = region.worldId,
+                regionX = region.regionX,
+                regionZ = region.regionZ,
+            )
+            rank++
+        }
 
-    private fun packChunk(x: Int, z: Int): Long {
-        return (x.toLong() shl 32) xor (z.toLong() and 0xffffffffL)
-    }
+        result.electedChunks.forEach { chunk ->
+            out += RenewalRankedElectionEntry(
+                action = RenewalCandidateAction.CHUNK_RENEW,
+                rank = rank,
+                worldKey = chunk.world.value.toString(),
+                chunkX = chunk.chunkX,
+                chunkZ = chunk.chunkZ,
+            )
+            rank++
+        }
 
-    private fun packRegion(x: Int, z: Int): Long {
-        return (x.toLong() shl 32) xor (z.toLong() and 0xffffffffL)
+        return out
     }
 }

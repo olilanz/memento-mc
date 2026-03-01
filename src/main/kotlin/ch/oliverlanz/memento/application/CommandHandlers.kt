@@ -196,7 +196,12 @@ object CommandHandlers {
         return try {
             val projection = renewalProjection
             val snapshot = projection?.committedSnapshotOrNull()
+            // Presentation boundary only:
+            // This explain surface aggregates already-derived mechanism outputs for operators.
+            // It must not merge, alter, or feed back into region/chunk derivation semantics.
             val topCandidates = snapshot?.electionCandidates?.take(DEFAULT_EXPLAIN_TOP_LIMIT).orEmpty()
+            val topRegionCandidates = topCandidates.filter { it.id.action == RenewalCandidateAction.REGION_PRUNE }
+            val topChunkCandidates = topCandidates.filter { it.id.action == RenewalCandidateAction.CHUNK_RENEW }
             val witherstones = StoneAuthority.list().filterIsInstance<Witherstone>().sortedBy { it.name }
             val batchesByName = RenewalTracker.snapshotBatches().associateBy { it.name }
 
@@ -236,8 +241,8 @@ object CommandHandlers {
 
             source.sendFeedback({ Text.literal("Renewal explanation").formatted(Formatting.GOLD) }, false)
 
-            source.sendFeedback({ Text.literal("1) Top renewal candidates").formatted(Formatting.YELLOW) }, false)
-            if (topCandidates.isEmpty()) {
+            source.sendFeedback({ Text.literal("1) Natural renewal (region prune candidates)").formatted(Formatting.YELLOW) }, false)
+            if (topRegionCandidates.isEmpty()) {
                 val waitingInitialScan = worldScanner?.hasInitialScanCompleted() != true
                 if (waitingInitialScan) {
                     source.sendFeedback(
@@ -248,12 +253,21 @@ object CommandHandlers {
                     source.sendFeedback({ Text.literal("none").formatted(Formatting.GRAY) }, false)
                 }
             } else {
-                topCandidates.forEach { candidate ->
+                topRegionCandidates.forEach { candidate ->
                     source.sendFeedback({ Text.literal(formatCandidateForExplain(candidate)).formatted(Formatting.GRAY) }, false)
                 }
             }
 
-            source.sendFeedback({ Text.literal("2) Stones waiting to mature").formatted(Formatting.YELLOW) }, false)
+            source.sendFeedback({ Text.literal("2) Stone-driven chunk renewal candidates").formatted(Formatting.YELLOW) }, false)
+            if (topChunkCandidates.isEmpty()) {
+                source.sendFeedback({ Text.literal("none").formatted(Formatting.GRAY) }, false)
+            } else {
+                topChunkCandidates.forEach { candidate ->
+                    source.sendFeedback({ Text.literal(formatCandidateForExplain(candidate)).formatted(Formatting.GRAY) }, false)
+                }
+            }
+
+            source.sendFeedback({ Text.literal("3) Stones waiting to mature").formatted(Formatting.YELLOW) }, false)
             if (waitingToMature.isEmpty()) {
                 source.sendFeedback({ Text.literal("none").formatted(Formatting.GRAY) }, false)
             } else {
@@ -262,7 +276,7 @@ object CommandHandlers {
                 }
             }
 
-            source.sendFeedback({ Text.literal("3) Stones waiting for consumption").formatted(Formatting.YELLOW) }, false)
+            source.sendFeedback({ Text.literal("4) Stones waiting for consumption").formatted(Formatting.YELLOW) }, false)
             if (waitingForConsumption.isEmpty()) {
                 source.sendFeedback({ Text.literal("none").formatted(Formatting.GRAY) }, false)
             } else {
@@ -271,7 +285,7 @@ object CommandHandlers {
                 }
             }
 
-            source.sendFeedback({ Text.literal("4) Blocking conditions").formatted(Formatting.YELLOW) }, false)
+            source.sendFeedback({ Text.literal("5) Blocking conditions").formatted(Formatting.YELLOW) }, false)
             val blockingLines = mutableListOf<String>()
             if (worldScanner?.hasInitialScanCompleted() != true) {
                 blockingLines += "- initial world scan is not completed"
@@ -465,6 +479,35 @@ object CommandHandlers {
         }
     }
 
+    fun csv(source: ServerCommandSource): Int {
+        MementoLog.info(MementoConcept.OPERATOR, "command=csv by={}", source.name)
+
+        val scanner = worldScanner
+        if (scanner == null) {
+            source.sendError(Text.literal("Scanner is not ready yet."))
+            return 0
+        }
+
+        val committed = committedSnapshotOrSendError(source) ?: return 0
+
+        return try {
+            val path = MementoCsvWriter.writeOperatorWorldviewSnapshot(
+                server = source.server,
+                worldSnapshot = scanner.committedWorldSnapshot(),
+                projectionSnapshot = committed,
+            )
+            source.sendFeedback(
+                { Text.literal("[Memento] worldview CSV exported to $path").formatted(Formatting.YELLOW) },
+                false,
+            )
+            1
+        } catch (e: Exception) {
+            MementoLog.error(MementoConcept.OPERATOR, "command=csv failed", e)
+            source.sendError(Text.literal("[Memento] could not export csv (see server log)."))
+            0
+        }
+    }
+
     fun doRenewal(source: ServerCommandSource): Int {
         return doRenewal(source, 1)
     }
@@ -490,6 +533,9 @@ object CommandHandlers {
         val orderedChunks = mutableListOf<ch.oliverlanz.memento.domain.worldmap.ChunkKey>()
         var invalidTargets = 0
 
+        val regionRequestCountsByDimension = linkedMapOf<String, Int>()
+        val chunkRequestCountsByDimension = linkedMapOf<String, Int>()
+
         requestedCandidates.forEach { candidate ->
             when (candidate.id.action) {
                 RenewalCandidateAction.REGION_PRUNE -> {
@@ -504,6 +550,7 @@ object CommandHandlers {
                         return@forEach
                     }
                     orderedRegions += dimension to region
+                    regionRequestCountsByDimension[region.worldId] = (regionRequestCountsByDimension[region.worldId] ?: 0) + 1
                 }
 
                 RenewalCandidateAction.CHUNK_RENEW -> {
@@ -513,12 +560,27 @@ object CommandHandlers {
                         return@forEach
                     }
                     orderedChunks += key
+                    val dim = key.world.value.toString()
+                    chunkRequestCountsByDimension[dim] = (chunkRequestCountsByDimension[dim] ?: 0) + 1
                 }
             }
         }
 
+        val allActionDimensions = (regionRequestCountsByDimension.keys + chunkRequestCountsByDimension.keys).toSortedSet()
+        allActionDimensions.forEach { dim ->
+            MementoLog.info(
+                MementoConcept.RENEWAL,
+                "do renewal summary action=AGGREGATE dimension={} regionPrunes={} chunkRenews={} by={}",
+                dim,
+                regionRequestCountsByDimension[dim] ?: 0,
+                chunkRequestCountsByDimension[dim] ?: 0,
+                source.name,
+            )
+        }
+
+        var regionPathResult: Int? = null
         if (orderedRegions.isNotEmpty()) {
-            return when (val batch = WorldPruningService.submitBatch(orderedRegions)) {
+            regionPathResult = when (val batch = WorldPruningService.submitBatch(orderedRegions)) {
                 is WorldPruningService.BatchSubmitResult.Submitted -> {
                     source.sendFeedback(
                         {
@@ -536,12 +598,23 @@ object CommandHandlers {
                     }
                     MementoLog.info(
                         MementoConcept.RENEWAL,
-                        "do renewal batch submitted requested={} submitted={} invalidTargets={} by={}",
+                        "do renewal action=REGION_PRUNE result=submitted requested={} submitted={} invalidTargets={} by={}",
                         batch.requested,
                         batch.submitted,
                         invalidTargets,
                         source.name,
                     )
+
+                    orderedRegions.forEach { (_, region) ->
+                        MementoLog.info(
+                            MementoConcept.RENEWAL,
+                            "do renewal action=REGION_PRUNE dimension={} region=({}, {}) result=submitted by={}",
+                            region.worldId,
+                            region.regionX,
+                            region.regionZ,
+                            source.name,
+                        )
+                    }
                     1
                 }
 
@@ -583,7 +656,7 @@ object CommandHandlers {
 
                     MementoLog.info(
                         MementoConcept.RENEWAL,
-                        "do renewal batch completed requested={} succeeded={} failed={} partialState={} detail={} invalidTargets={} by={}",
+                        "do renewal action=REGION_PRUNE result=completed requested={} succeeded={} failed={} partialState={} detail={} invalidTargets={} by={}",
                         batch.requested,
                         succeeded,
                         failed,
@@ -592,8 +665,28 @@ object CommandHandlers {
                         invalidTargets,
                         source.name,
                     )
+
+                    batch.completions.forEach { completion ->
+                        MementoLog.info(
+                            MementoConcept.RENEWAL,
+                            "do renewal action=REGION_PRUNE dimension={} region=({}, {}) result={} category={} by={}",
+                            completion.target.worldId,
+                            completion.target.regionX,
+                            completion.target.regionZ,
+                            completion.outcome.name,
+                            completion.category.name,
+                            source.name,
+                        )
+                    }
                     if (failed == 0) 1 else 0
                 }
+            }
+
+            if (regionPathResult == 0) {
+                return 0
+            }
+            if (orderedChunks.isEmpty()) {
+                return regionPathResult
             }
         }
 
@@ -625,12 +718,23 @@ object CommandHandlers {
         }
         MementoLog.info(
             MementoConcept.RENEWAL,
-            "do renewal chunk-path requested={} submitted={} invalidTargets={} by={}",
+            "do renewal action=CHUNK_RENEW result=submitted requested={} submitted={} invalidTargets={} by={}",
             requestedCandidates.size,
             submittedChunks,
             invalidTargets,
             source.name,
         )
+
+        orderedChunks.forEach { key ->
+            MementoLog.info(
+                MementoConcept.RENEWAL,
+                "do renewal action=CHUNK_RENEW dimension={} chunk=({}, {}) result=submitted by={}",
+                key.world.value.toString(),
+                key.chunkX,
+                key.chunkZ,
+                source.name,
+            )
+        }
 
         return if (submittedChunks > 0) 1 else 0
     }
@@ -892,7 +996,7 @@ object CommandHandlers {
         val regionCandidates = candidates.count { it.id.action == RenewalCandidateAction.REGION_PRUNE }
         val chunkCandidates = candidates.count { it.id.action == RenewalCandidateAction.CHUNK_RENEW }
         lines += "Renewal candidate totals: all=${candidates.size}, regions=$regionCandidates, chunks=$chunkCandidates"
-        lines += "Distribution summary: selection=${if (regionCandidates > 0) "region-prune" else if (chunkCandidates > 0) "chunk-renew" else "none"}"
+        lines += "Mechanism activity: natural=${if (regionCandidates > 0) "ready" else "none"}, stone-driven=${if (chunkCandidates > 0) "ready" else "none"}"
 
         val health = when {
             projection == null -> "projection unavailable"
@@ -1234,47 +1338,51 @@ object CommandHandlers {
     }
 
     private fun forceChunkBatchRenew(source: ServerCommandSource, chunkKeys: List<ch.oliverlanz.memento.domain.worldmap.ChunkKey>): Int {
-        val chunksByWorld = chunkKeys.groupBy { it.world }
-        if (chunksByWorld.isEmpty()) {
+        val submission = submitChunkBatchDefinitions(chunkKeys)
+        if (submission.groupCount == 0) {
             source.sendError(Text.literal("[Memento] no chunks available for renewal action."))
             return 0
-        }
-
-        var submitted = 0
-        chunksByWorld.entries.sortedBy { it.key.value.toString() }.forEach { (world, chunks) ->
-            val scope = chunks.map { ChunkPos(it.chunkX, it.chunkZ) }.toSet()
-            val minX = chunks.minOf { it.chunkX }
-            val minZ = chunks.minOf { it.chunkZ }
-            val maxX = chunks.maxOf { it.chunkX }
-            val maxZ = chunks.maxOf { it.chunkZ }
-            val batchName =
-                "${ch.oliverlanz.memento.MementoConstants.MEMENTO_RENEW_FORCE_BATCH_PREFIX}${world.value}_${minX}_${minZ}_${maxX}_${maxZ}_${scope.size}"
-
-            RenewalTracker.upsertBatchDefinition(
-                name = batchName,
-                dimension = world,
-                chunks = scope,
-                trigger = RenewalTrigger.MANUAL,
-            )
-            submitted += scope.size
         }
 
         MementoLog.info(
             MementoConcept.RENEWAL,
             "do renewal decision grain=chunk count={} groups={} by={}",
-            submitted,
-            chunksByWorld.size,
+            submission.submittedCount,
+            submission.groupCount,
             source.name,
         )
         source.sendFeedback(
-            { Text.literal("[Memento] renewal action queued ${submitted} chunks across ${chunksByWorld.size} renewal group(s). ").formatted(Formatting.YELLOW) },
+            { Text.literal("[Memento] renewal action queued ${submission.submittedCount} chunks across ${submission.groupCount} renewal group(s). ").formatted(Formatting.YELLOW) },
             false
         )
         return 1
     }
     private fun submitChunkBatchNow(owner: String, chunkKeys: List<ch.oliverlanz.memento.domain.worldmap.ChunkKey>): Int {
+        val submission = submitChunkBatchDefinitions(chunkKeys)
+        if (submission.groupCount == 0) return 0
+
+        MementoLog.info(
+            MementoConcept.RENEWAL,
+            "do renewal decision grain=chunk count={} groups={} by={}",
+            submission.submittedCount,
+            submission.groupCount,
+            owner,
+        )
+        return submission.submittedCount
+    }
+
+    private data class ChunkBatchSubmission(
+        val submittedCount: Int,
+        val groupCount: Int,
+    )
+
+    private fun submitChunkBatchDefinitions(
+        chunkKeys: List<ch.oliverlanz.memento.domain.worldmap.ChunkKey>,
+    ): ChunkBatchSubmission {
         val chunksByWorld = chunkKeys.groupBy { it.world }
-        if (chunksByWorld.isEmpty()) return 0
+        if (chunksByWorld.isEmpty()) {
+            return ChunkBatchSubmission(submittedCount = 0, groupCount = 0)
+        }
 
         var submitted = 0
         chunksByWorld.entries.sortedBy { it.key.value.toString() }.forEach { (world, chunks) ->
@@ -1295,14 +1403,10 @@ object CommandHandlers {
             submitted += scope.size
         }
 
-        MementoLog.info(
-            MementoConcept.RENEWAL,
-            "do renewal decision grain=chunk count={} groups={} by={}",
-            submitted,
-            chunksByWorld.size,
-            owner,
+        return ChunkBatchSubmission(
+            submittedCount = submitted,
+            groupCount = chunksByWorld.size,
         )
-        return submitted
     }
 
     private fun formatCandidateForExplain(candidate: RenewalRankedCandidate): String {

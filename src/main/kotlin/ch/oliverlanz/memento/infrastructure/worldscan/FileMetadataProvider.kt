@@ -8,8 +8,8 @@ import ch.oliverlanz.memento.infrastructure.worldscan.WorldDiscoveryPlan
  * Contract:
  * - input is discovery work from [WorldDiscoveryPlan]
  * - provider runs off-thread
- * - provider owns exactly two passes (immediate + one delayed transient reconciliation)
- * - completion is terminal (no further retries)
+ * - provider owns exactly one pass over discovered work units
+ * - completion is terminal (operator may rerun scan explicitly)
  */
 interface FileMetadataProvider : AutoCloseable {
     /**
@@ -35,9 +35,7 @@ enum class FileMetadataProviderLifecycle {
 
 data class FileMetadataProviderStatus(
     val lifecycle: FileMetadataProviderLifecycle = FileMetadataProviderLifecycle.IDLE,
-    val firstPassTotal: Int = 0,
-    val firstPassProcessed: Int = 0,
-    val secondPassTotal: Int = 0,
-    val secondPassProcessed: Int = 0,
+    val totalWorkUnits: Int = 0,
+    val processedWorkUnits: Int = 0,
     val emittedFacts: Int = 0,
 )

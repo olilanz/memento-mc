@@ -33,33 +33,27 @@ import net.minecraft.nbt.NbtSizeTracker
 import net.minecraft.world.storage.ChunkCompressionFormat
 
 /**
- * File-primary metadata provider with locked two-pass policy.
+ * File-primary metadata provider with single-pass policy.
  *
  * Behavior:
- * - Pass 1: attempts all discovered chunk work units from [WorldDiscoveryPlan]
- * - Pass 2: attempts only transient failures ([ChunkScanUnresolvedReason.FILE_LOCKED],
- *   [ChunkScanUnresolvedReason.FILE_IO_ERROR])
- * - Terminal completion after pass 2 (or pass 1 if no transient failures)
+ * - One pass attempts all discovered chunk work units from [WorldDiscoveryPlan]
+ * - Terminal completion after that pass (no hidden retry pass)
+ * - Reconciliation is explicit operator control via re-running `/memento do scan`
  *
  * Threading:
  * - All file IO and NBT decode runs off-thread via global async exclusion gate.
  * - World map mutation stays on tick thread via [ScanMetadataIngestionPort].
  */
-class TwoPassRegionFileMetadataProvider(
+class RegionFileMetadataProvider(
     private val ingestionPort: ScanMetadataIngestionPort,
-    private val delayedReconciliationMillis: Long = DEFAULT_DELAYED_RECONCILIATION_MILLIS,
 ) : FileMetadataProvider {
 
     private val lifecycle = AtomicReference(FileMetadataProviderLifecycle.IDLE)
-    private val firstPassProcessed = AtomicInteger(0)
-    private val secondPassProcessed = AtomicInteger(0)
+    private val processedWorkUnits = AtomicInteger(0)
     private val emittedFacts = AtomicInteger(0)
 
     @Volatile
-    private var firstPassTotal: Int = 0
-
-    @Volatile
-    private var secondPassTotal: Int = 0
+    private var totalWorkUnits: Int = 0
 
     @Volatile
     private var runFuture: Future<*>? = null
@@ -69,10 +63,8 @@ class TwoPassRegionFileMetadataProvider(
         if (lifecycle.get() == FileMetadataProviderLifecycle.RUNNING) return false
 
         val work = flatten(plan)
-        firstPassTotal = work.size
-        secondPassTotal = 0
-        firstPassProcessed.set(0)
-        secondPassProcessed.set(0)
+        totalWorkUnits = work.size
+        processedWorkUnits.set(0)
         emittedFacts.set(0)
         lifecycle.set(FileMetadataProviderLifecycle.RUNNING)
 
@@ -82,7 +74,7 @@ class TwoPassRegionFileMetadataProvider(
         ) {
             Callable {
                 runCatching {
-                    runTwoPass(work, scanTick)
+                    runSinglePass(work, scanTick)
                 }.onFailure { t ->
                     if (lifecycle.get() == FileMetadataProviderLifecycle.CANCELLED || t is InterruptedException) {
                         MementoLog.debug(MementoConcept.SCANNER, "file metadata provider cancelled")
@@ -114,10 +106,8 @@ class TwoPassRegionFileMetadataProvider(
     override fun status(): FileMetadataProviderStatus {
         return FileMetadataProviderStatus(
             lifecycle = lifecycle.get(),
-            firstPassTotal = firstPassTotal,
-            firstPassProcessed = firstPassProcessed.get(),
-            secondPassTotal = secondPassTotal,
-            secondPassProcessed = secondPassProcessed.get(),
+            totalWorkUnits = totalWorkUnits,
+            processedWorkUnits = processedWorkUnits.get(),
             emittedFacts = emittedFacts.get(),
         )
     }
@@ -135,111 +125,34 @@ class TwoPassRegionFileMetadataProvider(
         runFuture?.cancel(true)
     }
 
-    private fun runTwoPass(work: List<FileChunkWorkUnit>, scanTick: Long) {
-        val transientRetry = ArrayList<FileChunkWorkUnit>()
-        val pass1UnresolvedByReason = linkedMapOf<ChunkScanUnresolvedReason, Int>()
-        var pass1Success = 0
-        var pass1Unresolved = 0
-        var pass1TransientCandidates = 0
-
-        // Pass 1: all discovered chunks.
+    private fun runSinglePass(work: List<FileChunkWorkUnit>, scanTick: Long) {
+        val unresolvedByReason = linkedMapOf<ChunkScanUnresolvedReason, Int>()
+        var success = 0
+        var unresolved = 0
         for (unit in work) {
             if (Thread.currentThread().isInterrupted) return
 
             val result = readChunkMetadata(unit)
             emitFact(unit.key, result, scanTick)
-            firstPassProcessed.incrementAndGet()
+            processedWorkUnits.incrementAndGet()
 
             if (result.unresolvedReason == null) {
-                pass1Success++
+                success++
             } else {
-                pass1Unresolved++
-                pass1UnresolvedByReason[result.unresolvedReason] =
-                    (pass1UnresolvedByReason[result.unresolvedReason] ?: 0) + 1
-            }
-
-            if (result.isTransientFailure) {
-                transientRetry.add(unit)
-                pass1TransientCandidates++
+                unresolved++
+                unresolvedByReason[result.unresolvedReason] =
+                    (unresolvedByReason[result.unresolvedReason] ?: 0) + 1
             }
         }
 
         MementoLog.info(
             MementoConcept.SCANNER,
-            "scan file-pass1 summary processed={}/{} success={} unresolved={} transientRetryCandidates={} unresolvedByReason={}",
-            firstPassProcessed.get(),
-            firstPassTotal,
-            pass1Success,
-            pass1Unresolved,
-            pass1TransientCandidates,
-            formatReasonCounts(pass1UnresolvedByReason),
-        )
-
-        // Pass 2: delayed reconciliation for transient failures only.
-        secondPassTotal = transientRetry.size
-        if (transientRetry.isEmpty()) {
-            MementoLog.info(
-                MementoConcept.SCANNER,
-                "scan file-pass2 summary skipped processed=0/0 resolvedFromTransient=0 stillUnresolved=0 stillTransient=0 unresolvedByReason=[]"
-            )
-            MementoLog.info(
-                MementoConcept.SCANNER,
-                "scan file-two-pass summary pass1Processed={} pass2Processed={} transientCandidates={} transientResolved={} transientRemaining={} emittedFacts={}",
-                firstPassProcessed.get(),
-                secondPassProcessed.get(),
-                pass1TransientCandidates,
-                0,
-                0,
-                emittedFacts.get(),
-            )
-            return
-        }
-
-        if (delayedReconciliationMillis > 0L) {
-            Thread.sleep(delayedReconciliationMillis)
-        }
-
-        val pass2UnresolvedByReason = linkedMapOf<ChunkScanUnresolvedReason, Int>()
-        var pass2ResolvedFromTransient = 0
-        var pass2StillUnresolved = 0
-        var pass2StillTransient = 0
-
-        for (unit in transientRetry) {
-            if (Thread.currentThread().isInterrupted) return
-
-            val result = readChunkMetadata(unit)
-            emitFact(unit.key, result, scanTick)
-            secondPassProcessed.incrementAndGet()
-
-            if (result.unresolvedReason == null) {
-                pass2ResolvedFromTransient++
-            } else {
-                pass2StillUnresolved++
-                pass2UnresolvedByReason[result.unresolvedReason] =
-                    (pass2UnresolvedByReason[result.unresolvedReason] ?: 0) + 1
-                if (result.isTransientFailure) pass2StillTransient++
-            }
-        }
-
-        MementoLog.info(
-            MementoConcept.SCANNER,
-            "scan file-pass2 summary processed={}/{} resolvedFromTransient={} stillUnresolved={} stillTransient={} unresolvedByReason={}",
-            secondPassProcessed.get(),
-            secondPassTotal,
-            pass2ResolvedFromTransient,
-            pass2StillUnresolved,
-            pass2StillTransient,
-            formatReasonCounts(pass2UnresolvedByReason),
-        )
-
-        MementoLog.info(
-            MementoConcept.SCANNER,
-            "scan file-two-pass summary pass1Processed={} pass2Processed={} transientCandidates={} transientResolved={} transientRemaining={} emittedFacts={}",
-            firstPassProcessed.get(),
-            secondPassProcessed.get(),
-            pass1TransientCandidates,
-            pass2ResolvedFromTransient,
-            pass2StillUnresolved,
+            "scan file-pass summary processed={}/{} success={} unresolved={} unresolvedByReason={} emittedFacts={}",
+            processedWorkUnits.get(),
+            totalWorkUnits,
+            success,
+            unresolved,
+            formatReasonCounts(unresolvedByReason),
             emittedFacts.get(),
         )
     }
@@ -448,6 +361,5 @@ class TwoPassRegionFileMetadataProvider(
         private const val COMPRESSION_ZLIB = 2
         private const val COMPRESSION_NONE = 3
         private const val COMPRESSION_LZ4 = 4
-        private const val DEFAULT_DELAYED_RECONCILIATION_MILLIS = 250L
     }
 }

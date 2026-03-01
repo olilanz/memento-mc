@@ -83,6 +83,11 @@ object Commands {
                             CommandHandlers.scan(ctx.source)
                         }
                     )
+                    .then(literal("csv")
+                        .executes { ctx ->
+                            CommandHandlers.csv(ctx.source)
+                        }
+                    )
                     .then(literal("renew")
                         .executes { ctx ->
                             CommandHandlers.doRenewal(ctx.source)
