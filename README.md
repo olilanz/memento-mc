@@ -52,14 +52,15 @@ The result:
 
 ------------------------------------------------------------------------
 
-## Two complementary renewal paths
+## Natural Renewal uses two complementary mechanisms
 
-Memento combines two mechanisms that work hand in hand.
+Natural Renewal is one operator-facing model with two distinct mechanisms
+working together.
 
-### 1. Natural Renewal (projection-based)
+### 1. Region-based renewal in forgettable outskirts
 
-Natural Renewal identifies forgettable regions and proposes conservative
-region-level pruning.
+Projection identifies forgettable regions and proposes conservative
+region-pruning actions.
 
 It:
 
@@ -72,9 +73,10 @@ The operator remains in full control of when renewal happens.
 
 ------------------------------------------------------------------------
 
-### 2. Stone-driven renewal (explicit intent)
+### 2. Stone-guided chunk renewal (explicit intent)
 
-Stones allow operators to guide or override renewal behavior.
+Stones allow operators to guide renewal near memorable places, and stones
+can also be applied in outskirts when desired.
 
 -   **Witherstone** --- marks land for renewal over time\
 -   **Lorestone** --- protects land permanently
@@ -164,7 +166,8 @@ Renewal completes when the world reloads the affected chunks.
 4.  Execute controlled renewal\
     `/memento do renew [N]`
 
-Natural Renewal proposes region-level pruning only.\
+Natural Renewal in this workflow uses the region-based mechanism in
+forgettable outskirts.\
 The operator decides when to apply it.
 
 ------------------------------------------------------------------------

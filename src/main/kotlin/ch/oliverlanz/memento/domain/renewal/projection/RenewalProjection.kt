@@ -75,7 +75,7 @@ class RenewalProjection {
             generation = 0L,
             chunkDerivationByChunk = emptyMap(),
             regionForgettableByRegion = emptyMap(),
-            electionCandidates = emptyList(),
+            rankedCandidates = emptyList(),
         )
 
     private var generationHead: Long = 0L
@@ -144,7 +144,7 @@ class RenewalProjection {
             generation = 0L,
             chunkDerivationByChunk = emptyMap(),
             regionForgettableByRegion = emptyMap(),
-            electionCandidates = emptyList(),
+            rankedCandidates = emptyList(),
         )
         stableListeners.clear()
     }
@@ -187,11 +187,11 @@ class RenewalProjection {
 
     fun currentCandidates(limit: Int): List<RenewalRankedCandidate> {
         if (limit <= 0) return emptyList()
-        return publishedView.electionCandidates.take(limit)
+        return publishedView.rankedCandidates.take(limit)
     }
 
     fun isStillElected(snapshot: RenewalPublishedView, candidateId: RenewalCandidateId): Boolean {
-        return snapshot.electionCandidates.any { it.id == candidateId }
+        return snapshot.rankedCandidates.any { it.id == candidateId }
     }
 
     fun observeFactApplied(fact: ChunkMetadataFact) {
@@ -394,6 +394,8 @@ class RenewalProjection {
             }
         }
 
+        // Projection remains read/derive-only: election authority is invoked as a
+        // separate stage from committed projection output.
         val election = RenewalElection.evaluate(
             RenewalElectionInput(
                 generation = result.generation,
@@ -407,7 +409,7 @@ class RenewalProjection {
             generation = result.generation,
             chunkDerivationByChunk = chunkDerivationByKey.toMap(),
             regionForgettableByRegion = regionForgettableByRegion.toMap(),
-            electionCandidates = ranked,
+            rankedCandidates = ranked,
         )
         publishedView = committed
 
@@ -416,7 +418,7 @@ class RenewalProjection {
 
         MementoLog.debug(
             MementoConcept.PROJECTION,
-            "worker commit generation={} reason={} durationMs={} affectedRegions={} contextRegions={} trackedRegions={} trackedChunks={} electionCandidates={} fullSnapshotRecovery={}",
+            "worker commit generation={} reason={} durationMs={} affectedRegions={} contextRegions={} trackedRegions={} trackedChunks={} rankedCandidates={} fullSnapshotRecovery={}",
             committed.generation,
             job.reason.name,
             durationMs,
@@ -424,7 +426,7 @@ class RenewalProjection {
             result.materializedContextRegionCount,
             committed.regionForgettableByRegion.size,
             committed.chunkDerivationByChunk.size,
-            committed.electionCandidates.size,
+            committed.rankedCandidates.size,
             result.fullSnapshotRecoveryUsed,
         )
 

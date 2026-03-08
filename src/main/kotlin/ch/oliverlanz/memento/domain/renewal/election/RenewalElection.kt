@@ -26,7 +26,7 @@ data class RenewalRankedElectionEntry(
 )
 
 /**
- * Deterministic projection election over boolean projection outputs.
+ * Deterministic election authority over boolean projection outputs.
  *
  * Election policy:
  * - region-prune candidates first in deterministic order

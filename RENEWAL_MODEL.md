@@ -3,6 +3,12 @@
 This document describes how Natural Renewal decides **where renewal may occur**,
 independent of implementation or technology.
 
+Natural Renewal is one operator-facing model composed of two complementary,
+architecturally distinct mechanisms:
+
+- region-based renewal in forgettable places, typically outskirts
+- stone-guided renewal in or near memorable places (and optionally outskirts)
+
 It defines the balance between remembering and forgetting, and the role of
 operator guidance within that balance.
 
@@ -101,6 +107,10 @@ Influence resolution follows a strict priority:
 
 Natural Renewal therefore operates only on chunks whose resolved influence
 explicitly allows it.
+
+Within the combined model, this section describes region/chunk eligibility
+derivation and influence resolution at the model level. Election and execution
+authority remain separate downstream stages.
 
 ---
 
