@@ -6,6 +6,8 @@ import java.util.concurrent.atomic.AtomicInteger
 data class ChunkScanSnapshotEntry(
         val key: ChunkKey,
         val signals: ChunkSignals?,
+        val dominantStone: DominantStoneSignal = DominantStoneSignal.NONE,
+        val dominantStoneEffect: DominantStoneEffectSignal = DominantStoneEffectSignal.NONE,
         val scanTick: Long,
         val provenance: ChunkScanProvenance = ChunkScanProvenance.ENGINE_AMBIENT,
         val unresolvedReason: ChunkScanUnresolvedReason? = null,
@@ -60,6 +62,8 @@ class WorldMementoMap {
      */
     private data class ChunkRecord(
             @Volatile var signals: ChunkSignals? = null,
+            @Volatile var dominantStone: DominantStoneSignal = DominantStoneSignal.NONE,
+            @Volatile var dominantStoneEffect: DominantStoneEffectSignal = DominantStoneEffectSignal.NONE,
             @Volatile var scanTick: Long? = null,
             @Volatile var provenance: ChunkScanProvenance = ChunkScanProvenance.ENGINE_AMBIENT,
             @Volatile var unresolvedReason: ChunkScanUnresolvedReason? = null,
@@ -93,6 +97,27 @@ class WorldMementoMap {
         val previous = record.signals
         record.signals = signals
         return previous != signals
+    }
+
+    /**
+     * Attach/replace dominant stone topology + effect signals for a chunk.
+     *
+     * - If the chunk was not previously known, it will be added.
+     * - Returns true when either signal changed.
+     */
+    fun upsertDominantStone(
+            key: ChunkKey,
+            dominantStone: DominantStoneSignal,
+            dominantStoneEffect: DominantStoneEffectSignal,
+    ): Boolean {
+        val record = records.computeIfAbsent(key) { ChunkRecord() }
+        val changed =
+                record.dominantStone != dominantStone ||
+                        record.dominantStoneEffect != dominantStoneEffect
+
+        record.dominantStone = dominantStone
+        record.dominantStoneEffect = dominantStoneEffect
+        return changed
     }
 
     /**
@@ -210,6 +235,8 @@ class WorldMementoMap {
                         ChunkScanSnapshotEntry(
                                 key = k,
                                 signals = v.signals,
+                                dominantStone = v.dominantStone,
+                                dominantStoneEffect = v.dominantStoneEffect,
                                 scanTick = tick,
                                 provenance = v.provenance,
                                 unresolvedReason = v.unresolvedReason,

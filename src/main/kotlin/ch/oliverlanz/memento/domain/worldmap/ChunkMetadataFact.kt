@@ -13,10 +13,13 @@ data class ChunkMetadataFact(
     val source: ChunkScanProvenance,
     val unresolvedReason: ChunkScanUnresolvedReason? = null,
     val signals: ChunkSignals? = null,
+    /** Optional topology signal update authored by stone authority. */
+    val dominantStone: DominantStoneSignal? = null,
+    /** Optional effect signal update authored by stone authority. */
+    val dominantStoneEffect: DominantStoneEffectSignal? = null,
     val scanTick: Long,
 )
 
 fun interface ChunkMetadataIngestionPort {
     fun ingest(fact: ChunkMetadataFact)
 }
-

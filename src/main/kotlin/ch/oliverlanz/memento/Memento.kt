@@ -215,6 +215,9 @@ object Memento : ModInitializer {
             // mutation/transition pathway, 3) evaluate startup lifecycle progression.
             MementoLog.info(MementoConcept.STONE, "startup stone bootstrap phase=attach")
             StoneAuthority.attach(server)
+            StoneAuthority.attachWorldFactPublisher { fact ->
+                worldMapService?.applyFactOnTickThread(fact)
+            }
 
             MementoLog.info(MementoConcept.STONE, "startup stone bootstrap phase=process_persisted")
             StoneAuthority.processPersistedStones(trigger = StoneLifecycleTrigger.SERVER_START)
@@ -253,6 +256,7 @@ object Memento : ModInitializer {
             StoneMaturityTimeBridge.detach()
             WitherstoneRenewalBridge.detach()
             CommandHandlers.detachStoneNameSuggestions()
+            StoneAuthority.attachWorldFactPublisher(null)
             StoneAuthorityWiring.onServerStopping()
 
             CommandHandlers.detachVisualizationEngine()

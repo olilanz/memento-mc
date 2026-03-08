@@ -9,7 +9,6 @@ import ch.oliverlanz.memento.domain.renewal.projection.RenewalCommittedSnapshot
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanProvenance
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry
-import ch.oliverlanz.memento.domain.stones.StoneMapService
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import java.nio.charset.StandardCharsets
@@ -17,7 +16,6 @@ import java.nio.file.Files
 import java.nio.file.Path
 import net.minecraft.server.MinecraftServer
 import net.minecraft.util.WorldSavePath
-import net.minecraft.util.math.ChunkPos
 
 /**
  * Operator CSV observability writer.
@@ -57,11 +55,10 @@ object MementoCsvWriter {
             .filter { it.action == RenewalCandidateAction.CHUNK_RENEW }
             .associateBy { keyOfChunk(it.worldKey, it.chunkX, it.chunkZ) }
 
-        val dominantByWorld = linkedMapOf<net.minecraft.registry.RegistryKey<net.minecraft.world.World>, Map<ChunkPos, kotlin.reflect.KClass<out ch.oliverlanz.memento.domain.stones.Stone>>>()
-
         val sb = StringBuilder()
         // Baseline world snapshot fields (unchanged, no removals) + additive projection/election fields.
-        sb.append("dimension,chunkX,chunkZ,scanTick,inhabitedTicks,dominantStone,surfaceY,biome,isSpawn,source,status,regionForgettable,memorable,eligibleChunkRenewal,renewalAction,renewalRank\n")
+        // Compatibility rule: new columns append-only.
+        sb.append("dimension,chunkX,chunkZ,scanTick,inhabitedTicks,dominantStone,surfaceY,biome,isSpawn,source,status,regionForgettable,memorable,eligibleChunkRenewal,renewalAction,renewalRank,dominantStoneSignal,dominantStoneEffect\n")
 
         worldSnapshot
             .sortedWith(
@@ -76,10 +73,9 @@ object MementoCsvWriter {
                 val signals = entry.signals
                 val dim = key.world.value.toString()
 
-                val dominantByChunk = dominantByWorld.getOrPut(key.world) {
-                    StoneMapService.dominantByChunk(key.world)
-                }
-                val dominant = dominantByChunk[ChunkPos(key.chunkX, key.chunkZ)]?.simpleName ?: ""
+                val dominant = entry.dominantStone.name
+                val dominantStoneSignal = entry.dominantStone.name
+                val dominantStoneEffect = entry.dominantStoneEffect.name
 
                 val derivation = projectionSnapshot.chunkDerivationByChunk[key]
                 val regionForgettable = projectionSnapshot.regionForgettableByRegion[
@@ -108,6 +104,8 @@ object MementoCsvWriter {
                     .append(',').append(if (derivation?.eligibleChunkRenewal == true) 1 else 0)
                     .append(',').append(action)
                     .append(',').append(rank)
+                    .append(',').append(dominantStoneSignal)
+                    .append(',').append(dominantStoneEffect)
                     .append('\n')
             }
 
@@ -144,4 +142,3 @@ object MementoCsvWriter {
         return "$worldKey:${chunkX ?: ""}:${chunkZ ?: ""}"
     }
 }
-

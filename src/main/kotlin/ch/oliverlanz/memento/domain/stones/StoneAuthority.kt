@@ -5,6 +5,11 @@ import ch.oliverlanz.memento.domain.events.StoneLifecycleState
 import ch.oliverlanz.memento.domain.events.StoneLifecycleTransition
 import ch.oliverlanz.memento.domain.events.StoneLifecycleTrigger
 import ch.oliverlanz.memento.domain.renewal.StoneRenewalDerivation
+import ch.oliverlanz.memento.domain.worldmap.ChunkKey
+import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
+import ch.oliverlanz.memento.domain.worldmap.ChunkScanProvenance
+import ch.oliverlanz.memento.domain.worldmap.DominantStoneEffectSignal
+import ch.oliverlanz.memento.domain.worldmap.DominantStoneSignal
 import ch.oliverlanz.memento.MementoConstants
 import ch.oliverlanz.memento.infrastructure.StoneAuthorityPersistence
 import net.minecraft.registry.RegistryKey
@@ -21,7 +26,7 @@ import net.minecraft.world.World
  * - Renewal derivation consumes this lifecycle state through renewal-side orchestration.
  *
      * Invariants:
- * - Does not own world fact mutation.
+ * - Does not own world-map mutation; emits facts through wiring-owned callback only.
  * - No dependency on legacy stone types.
  * - Lifecycle transitions are explicit and observable via structured events.
  * - Persistence is overwrite-on-change (no dirty state by design).
@@ -39,6 +44,15 @@ object StoneAuthority {
      */
     private var influenceTree: StoneInfluenceTree = StoneInfluenceTree.EMPTY
 
+    private data class DominantTuple(
+        val dominantStone: DominantStoneSignal,
+        val dominantStoneEffect: DominantStoneEffectSignal,
+    )
+
+    private var worldFactPublisher: ((ChunkMetadataFact) -> Unit)? = null
+    private var publishedDominantByChunk: Map<ChunkKey, DominantTuple> = emptyMap()
+    private var nextStoneFactScanTick: Long = 0L
+
     private var server: MinecraftServer? = null
     private var initialized = false
 
@@ -53,6 +67,16 @@ object StoneAuthority {
 
         stones.clear()
         influenceTree = StoneInfluenceTree.EMPTY
+        publishedDominantByChunk = emptyMap()
+        nextStoneFactScanTick = 0L
+    }
+
+    /**
+     * Wiring-owned publication hook. StoneAuthority emits dominant topology/effect facts through
+     * this callback and does not directly mutate world-map state.
+     */
+    fun attachWorldFactPublisher(publisher: ((ChunkMetadataFact) -> Unit)?) {
+        worldFactPublisher = publisher
     }
 
     /**
@@ -111,6 +135,9 @@ object StoneAuthority {
         initialized = false
         stones.clear()
         influenceTree = StoneInfluenceTree.EMPTY
+        publishedDominantByChunk = emptyMap()
+        nextStoneFactScanTick = 0L
+        worldFactPublisher = null
     }
 
     // ---------------------------------------------------------------------
@@ -470,6 +497,140 @@ object StoneAuthority {
         }
 
         influenceTree = StoneInfluenceTree(dimensions = dimensionsOut)
+
+        syncDominantSignalsToWorldMap(
+            byDimension = byDimension,
+            byStoneByDimension = dimensionsOut.mapValues { it.value.byStone },
+        )
+    }
+
+    private fun syncDominantSignalsToWorldMap(
+        byDimension: Map<RegistryKey<World>, List<Stone>>,
+        byStoneByDimension: Map<RegistryKey<World>, Map<String, Set<ChunkPos>>>,
+    ) {
+        val publish = worldFactPublisher ?: return
+
+        val next = linkedMapOf<ChunkKey, DominantTuple>()
+        for ((dimension, dimStones) in byDimension) {
+            val byStone = byStoneByDimension[dimension].orEmpty()
+            val byChunk = deriveDominantTupleByChunk(dimStones, byStone)
+            for ((chunk, tuple) in byChunk) {
+                next[toChunkKey(dimension, chunk)] = tuple
+            }
+        }
+
+        val changed = linkedSetOf<ChunkKey>()
+        changed.addAll(publishedDominantByChunk.keys)
+        changed.addAll(next.keys)
+
+        if (changed.isEmpty()) {
+            publishedDominantByChunk = next
+            return
+        }
+
+        val orderedChanged = changed
+            .sortedWith(
+                compareBy<ChunkKey>(
+                    { it.world.value.toString() },
+                    { it.regionX },
+                    { it.regionZ },
+                    { it.chunkX },
+                    { it.chunkZ },
+                )
+            )
+
+        for (key in orderedChanged) {
+            val previous = publishedDominantByChunk[key]
+            val current = next[key] ?: DominantTuple(
+                dominantStone = DominantStoneSignal.NONE,
+                dominantStoneEffect = DominantStoneEffectSignal.NONE,
+            )
+
+            if (previous == current) continue
+
+            publish(
+                ChunkMetadataFact(
+                    key = key,
+                    source = ChunkScanProvenance.ENGINE_AMBIENT,
+                    unresolvedReason = null,
+                    signals = null,
+                    dominantStone = current.dominantStone,
+                    dominantStoneEffect = current.dominantStoneEffect,
+                    scanTick = nextStoneFactScanTick(),
+                )
+            )
+        }
+
+        publishedDominantByChunk = next
+    }
+
+    private fun deriveDominantTupleByChunk(
+        dimStones: List<Stone>,
+        byStone: Map<String, Set<ChunkPos>>,
+    ): Map<ChunkPos, DominantTuple> {
+        val loreChunks = linkedSetOf<ChunkPos>()
+        val witherChunks = linkedSetOf<ChunkPos>()
+        val maturedWitherChunks = linkedSetOf<ChunkPos>()
+
+        for (stone in dimStones) {
+            val chunks = byStone[stone.name].orEmpty()
+            when (stone) {
+                is Lorestone -> loreChunks.addAll(chunks)
+                is Witherstone -> {
+                    witherChunks.addAll(chunks)
+                    if (stone.state == WitherstoneState.MATURED) {
+                        maturedWitherChunks.addAll(chunks)
+                    }
+                }
+            }
+        }
+
+        val all = linkedSetOf<ChunkPos>()
+        all.addAll(loreChunks)
+        all.addAll(witherChunks)
+
+        val out = linkedMapOf<ChunkPos, DominantTuple>()
+        for (chunk in all) {
+            val tuple = when {
+                loreChunks.contains(chunk) -> DominantTuple(
+                    dominantStone = DominantStoneSignal.LORE,
+                    dominantStoneEffect = DominantStoneEffectSignal.LORE_PROTECT,
+                )
+
+                witherChunks.contains(chunk) -> DominantTuple(
+                    dominantStone = DominantStoneSignal.WITHER,
+                    dominantStoneEffect = if (maturedWitherChunks.contains(chunk)) {
+                        DominantStoneEffectSignal.WITHER_FORGET
+                    } else {
+                        DominantStoneEffectSignal.NONE
+                    },
+                )
+
+                else -> DominantTuple(
+                    dominantStone = DominantStoneSignal.NONE,
+                    dominantStoneEffect = DominantStoneEffectSignal.NONE,
+                )
+            }
+
+            out[chunk] = tuple
+        }
+
+        return out
+    }
+
+    private fun toChunkKey(dimension: RegistryKey<World>, chunk: ChunkPos): ChunkKey {
+        return ChunkKey(
+            world = dimension,
+            regionX = chunk.x shr 5,
+            regionZ = chunk.z shr 5,
+            chunkX = chunk.x,
+            chunkZ = chunk.z,
+        )
+    }
+
+    private fun nextStoneFactScanTick(): Long {
+        nextStoneFactScanTick += 1L
+        return nextStoneFactScanTick
     }
 
     /**
