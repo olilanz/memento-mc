@@ -71,21 +71,39 @@ class WorldMapService {
      */
     fun applyFactOnTickThread(fact: ChunkMetadataFact) {
         if (!attached) return
+
+        val isScanFact = (fact.signals != null || fact.unresolvedReason != null)
         val signalsChanged = fact.signals?.let { signals ->
             map.upsertSignals(fact.key, signals)
         } ?: false
 
-        val firstScannedMark = map.markScanned(
-            key = fact.key,
-            scanTick = fact.scanTick,
-            provenance = fact.source,
-            unresolvedReason = fact.unresolvedReason,
-        )
+        val dominantStoneChanged =
+            if (fact.dominantStone != null && fact.dominantStoneEffect != null) {
+                map.upsertDominantStone(
+                    key = fact.key,
+                    dominantStone = fact.dominantStone,
+                    dominantStoneEffect = fact.dominantStoneEffect,
+                )
+            } else {
+                false
+            }
+
+        val firstScannedMark = if (isScanFact) {
+            map.markScanned(
+                key = fact.key,
+                scanTick = fact.scanTick,
+                provenance = fact.source,
+                unresolvedReason = fact.unresolvedReason,
+            )
+        } else {
+            map.ensureExists(fact.key)
+            false
+        }
 
         // Debug signal for projection churn analysis:
         // if both are false, we received another fact for an already-known, already-scanned key
         // without factual signal change.
-        if (!signalsChanged && !firstScannedMark) {
+        if (isScanFact && !signalsChanged && !firstScannedMark) {
             MementoLog.debug(
                 MementoConcept.PROJECTION,
                 "world-map duplicate fact key=({}, {}) world={} source={} unresolvedReason={}",
@@ -97,8 +115,9 @@ class WorldMapService {
             )
         }
 
-        // Projection recomputation trigger is strictly signal-change based, not scan-discovery based.
-        if (signalsChanged) {
+        // Projection recomputation trigger is strictly fact-change based (signals or stone-effect),
+        // not scan-discovery based.
+        if (signalsChanged || dominantStoneChanged) {
             RenewalProjectionEvents.emitFactApplied(fact)
         }
     }

@@ -2,11 +2,11 @@ package ch.oliverlanz.memento.domain.renewal.projection
 
 import ch.oliverlanz.memento.MementoConstants
 import ch.oliverlanz.memento.domain.renewal.election.RenewalElection
-import ch.oliverlanz.memento.domain.stones.Lorestone
-import ch.oliverlanz.memento.domain.stones.StoneAuthority
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
 import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry
+import ch.oliverlanz.memento.domain.worldmap.DominantStoneEffectSignal
+import ch.oliverlanz.memento.domain.worldmap.DominantStoneSignal
 import ch.oliverlanz.memento.domain.worldmap.WorldMapService
 import ch.oliverlanz.memento.infrastructure.async.GlobalAsyncExclusionGate
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
@@ -25,7 +25,7 @@ fun interface RenewalProjectionStableListener {
  * Partitioned boolean renewal projection.
  *
  * Projection boundary contract:
- * - Projection state is fully derived from WorldMap substrate plus stone-influence snapshots.
+ * - Projection state is fully derived from WorldMap substrate facts.
  * - Projection-derived state is never persisted back into WorldMap.
  * - Commit/publish is atomic and tick-thread only.
  * - Worker computes from immutable seeds and never mutates committed caches directly.
@@ -197,15 +197,32 @@ class RenewalProjection {
     fun observeFactApplied(fact: ChunkMetadataFact) {
         if (!attached) return
 
-        if (fact.signals == null) {
+        val deleteFact =
+            fact.signals == null &&
+                fact.dominantStone == null &&
+                fact.dominantStoneEffect == null
+
+        if (deleteFact) {
             chunkSourceByKey.remove(fact.key)
         } else {
+            val existing = chunkSourceByKey[fact.key]
+            val mergedSignals = fact.signals ?: existing?.signals
+            val mergedDominantStone = fact.dominantStone ?: existing?.dominantStone ?: DominantStoneSignal.NONE
+            val mergedDominantStoneEffect = fact.dominantStoneEffect ?: existing?.dominantStoneEffect ?: DominantStoneEffectSignal.NONE
+
+            if (mergedSignals == null && existing == null) {
+                // Stone-only fact for a key that is not scanned yet: no projection source row to track.
+                return
+            }
+
             chunkSourceByKey[fact.key] = ChunkScanSnapshotEntry(
                 key = fact.key,
-                signals = fact.signals,
-                scanTick = fact.scanTick,
-                provenance = fact.source,
-                unresolvedReason = fact.unresolvedReason,
+                signals = mergedSignals,
+                dominantStone = mergedDominantStone,
+                dominantStoneEffect = mergedDominantStoneEffect,
+                scanTick = existing?.scanTick ?: fact.scanTick,
+                provenance = existing?.provenance ?: fact.source,
+                unresolvedReason = fact.unresolvedReason ?: existing?.unresolvedReason,
             )
         }
 
@@ -263,18 +280,6 @@ class RenewalProjection {
             else -> sourceDirtyRegions.toList().sortedWith(regionOrder())
         }
 
-        val loreInfluenceByWorld: Map<RegistryKey<World>, Set<Long>> =
-            StoneAuthority
-                .influenceSnapshot()
-                .dimensions
-                .mapValues { (_, dim) ->
-                    dim.dominantByChunk
-                        .asSequence()
-                        .filter { (_, kind) -> kind == Lorestone::class }
-                        .map { (chunk, _) -> packChunk(chunk.x, chunk.z) }
-                        .toSet()
-                }
-
         val submit = GlobalAsyncExclusionGate.submitIfIdle(
             concept = MementoConcept.PROJECTION,
             owner = "renewal-projection",
@@ -284,7 +289,6 @@ class RenewalProjection {
                     generation = generation,
                     sourceSnapshotByKey = sourceSeed,
                     sourceDirtySeed = dirtySeed,
-                    loreInfluencePackedByWorld = loreInfluenceByWorld,
                     fullSnapshotRecovery = cacheInvalidationRequested || scanRecomputeRequested,
                 )
             }
@@ -443,7 +447,6 @@ class RenewalProjection {
         generation: Long,
         sourceSnapshotByKey: Map<ChunkKey, ChunkScanSnapshotEntry>,
         sourceDirtySeed: List<RegionKey>,
-        loreInfluencePackedByWorld: Map<RegistryKey<World>, Set<Long>>,
         fullSnapshotRecovery: Boolean,
     ): CandidateView {
         // Phase contract (boolean partitioned derivation):
@@ -525,8 +528,7 @@ class RenewalProjection {
             val entries = entriesByRegion[region].orEmpty()
             regionHasInhabited[region] = entries.any { (it.signals?.inhabitedTimeTicks ?: 0L) > 0L }
             regionHasLore[region] = entries.any { entry ->
-                val lorePacked = loreInfluencePackedByWorld[entry.key.world].orEmpty()
-                lorePacked.contains(packChunk(entry.key.chunkX, entry.key.chunkZ))
+                entry.dominantStoneEffect == DominantStoneEffectSignal.LORE_PROTECT
             }
         }
 
@@ -544,8 +546,7 @@ class RenewalProjection {
         val memorableSourcePackedByWorld = linkedMapOf<RegistryKey<World>, MutableSet<Long>>()
         allEntriesInMaterialized.forEach { entry ->
             val inhabitedTicks = entry.signals?.inhabitedTimeTicks ?: 0L
-            val hasLore = loreInfluencePackedByWorld[entry.key.world].orEmpty()
-                .contains(packChunk(entry.key.chunkX, entry.key.chunkZ))
+            val hasLore = entry.dominantStoneEffect == DominantStoneEffectSignal.LORE_PROTECT
 
             if (inhabitedTicks >= MementoConstants.MEMENTO_RENEWAL_MEMORABLE_INHABITED_TICKS_THRESHOLD || hasLore) {
                 memorableSourcePackedByWorld
@@ -556,7 +557,6 @@ class RenewalProjection {
 
         val chunkDerivationUpdates = linkedMapOf<ChunkKey, RenewalChunkDerivation>()
         affected.forEach { region ->
-            val regionForgettable = regionForgettableUpdates[region] == true
             val entries = entriesByRegion[region].orEmpty()
             entries.forEach { entry ->
                 val key = entry.key
