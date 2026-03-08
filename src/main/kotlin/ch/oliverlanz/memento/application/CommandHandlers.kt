@@ -199,7 +199,7 @@ object CommandHandlers {
             // Presentation boundary only:
             // This explain surface aggregates already-derived mechanism outputs for operators.
             // It must not merge, alter, or feed back into region/chunk derivation semantics.
-            val topCandidates = snapshot?.electionCandidates?.take(DEFAULT_EXPLAIN_TOP_LIMIT).orEmpty()
+            val topCandidates = snapshot?.rankedCandidates?.take(DEFAULT_EXPLAIN_TOP_LIMIT).orEmpty()
             val topRegionCandidates = topCandidates.filter { it.id.action == RenewalCandidateAction.REGION_PRUNE }
             val topChunkCandidates = topCandidates.filter { it.id.action == RenewalCandidateAction.CHUNK_RENEW }
             val witherstones = StoneAuthority.list().filterIsInstance<Witherstone>().sortedBy { it.name }
@@ -239,9 +239,20 @@ object CommandHandlers {
                 }
                 .toList()
 
-            source.sendFeedback({ Text.literal("Renewal explanation").formatted(Formatting.GOLD) }, false)
+            source.sendFeedback({ Text.literal("Natural Renewal explanation").formatted(Formatting.GOLD) }, false)
+            source.sendFeedback(
+                {
+                    Text.literal(
+                        "Natural Renewal combines region-based renewal in forgettable outskirts and stone-guided chunk renewal."
+                    ).formatted(Formatting.GRAY)
+                },
+                false,
+            )
 
-            source.sendFeedback({ Text.literal("1) Natural renewal (region prune candidates)").formatted(Formatting.YELLOW) }, false)
+            source.sendFeedback(
+                { Text.literal("1) Natural Renewal — region pruning proposals in forgettable outskirts").formatted(Formatting.YELLOW) },
+                false,
+            )
             if (topRegionCandidates.isEmpty()) {
                 val waitingInitialScan = worldScanner?.hasInitialScanCompleted() != true
                 if (waitingInitialScan) {
@@ -258,7 +269,10 @@ object CommandHandlers {
                 }
             }
 
-            source.sendFeedback({ Text.literal("2) Stone-driven chunk renewal candidates").formatted(Formatting.YELLOW) }, false)
+            source.sendFeedback(
+                { Text.literal("2) Natural Renewal — stone-guided chunk renewal proposals").formatted(Formatting.YELLOW) },
+                false,
+            )
             if (topChunkCandidates.isEmpty()) {
                 source.sendFeedback({ Text.literal("none").formatted(Formatting.GRAY) }, false)
             } else {
@@ -520,7 +534,7 @@ object CommandHandlers {
 
         val snapshot = committedSnapshotOrSendError(source) ?: return 0
         val boundedRequested = count.coerceAtMost(DO_RENEWAL_MAX_REGION_BATCH)
-        val requestedCandidates = snapshot.electionCandidates.take(boundedRequested)
+        val requestedCandidates = snapshot.rankedCandidates.take(boundedRequested)
         if (requestedCandidates.isEmpty()) {
             source.sendFeedback(
                 { Text.literal("[Memento] no renewal candidates found.").formatted(Formatting.YELLOW) },
@@ -992,7 +1006,7 @@ object CommandHandlers {
             }
         }
 
-        val candidates = snapshot?.electionCandidates.orEmpty()
+        val candidates = snapshot?.rankedCandidates.orEmpty()
         val regionCandidates = candidates.count { it.id.action == RenewalCandidateAction.REGION_PRUNE }
         val chunkCandidates = candidates.count { it.id.action == RenewalCandidateAction.CHUNK_RENEW }
         lines += "Renewal candidate totals: all=${candidates.size}, regions=$regionCandidates, chunks=$chunkCandidates"

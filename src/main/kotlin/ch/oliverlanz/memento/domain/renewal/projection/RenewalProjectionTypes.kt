@@ -55,7 +55,7 @@ data class RenewalRankedCandidate(
  * Contains:
  * - memorability and forgettability indices
  * - derived memory metrics
- * - election output produced from this snapshot
+ * - ranked proposal output produced from this snapshot
  *
  * This snapshot is read-only and safe for cross-thread publication.
  */
@@ -63,7 +63,7 @@ data class RenewalPublishedView(
     val generation: Long,
     val chunkDerivationByChunk: Map<ChunkKey, RenewalChunkDerivation>,
     val regionForgettableByRegion: Map<RegionKey, Boolean>,
-    val electionCandidates: List<RenewalRankedCandidate>,
+    val rankedCandidates: List<RenewalRankedCandidate>,
 )
 
 /**
