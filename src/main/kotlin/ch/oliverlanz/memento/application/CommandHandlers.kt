@@ -243,14 +243,14 @@ object CommandHandlers {
             source.sendFeedback(
                 {
                     Text.literal(
-                        "Natural Renewal combines region-based renewal in forgettable outskirts and stone-guided chunk renewal."
+                        "Actionable renewal is currently scoped to ambient region-based renewal and operator stone-based renewal."
                     ).formatted(Formatting.GRAY)
                 },
                 false,
             )
 
             source.sendFeedback(
-                { Text.literal("1) Natural Renewal — region pruning proposals in forgettable outskirts").formatted(Formatting.YELLOW) },
+                { Text.literal("1) Actionable ambient renewal — region-based").formatted(Formatting.YELLOW) },
                 false,
             )
             if (topRegionCandidates.isEmpty()) {
@@ -270,7 +270,7 @@ object CommandHandlers {
             }
 
             source.sendFeedback(
-                { Text.literal("2) Natural Renewal — stone-guided chunk renewal proposals").formatted(Formatting.YELLOW) },
+                { Text.literal("2) Actionable operator renewal — stone-based").formatted(Formatting.YELLOW) },
                 false,
             )
             if (topChunkCandidates.isEmpty()) {

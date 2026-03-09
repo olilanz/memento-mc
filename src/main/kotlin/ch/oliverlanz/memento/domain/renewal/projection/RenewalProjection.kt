@@ -595,6 +595,7 @@ class RenewalProjection {
                 val sourceSet = memorableSourcePackedByWorld[key.world].orEmpty()
                 val hasLoreProtect = entry.dominantStoneEffect == DominantStoneEffectSignal.LORE_PROTECT
                 val hasWitherForget = entry.dominantStoneEffect == DominantStoneEffectSignal.WITHER_FORGET
+                val regionForgettable = regionForgettableUpdates[region] == true
 
                 val memorable = when {
                     hasLoreProtect -> true
@@ -607,11 +608,23 @@ class RenewalProjection {
                     )
                 }
 
+                // Diagnostic ambient execution preference derived from existing projection facts.
+                // - REGION: ambient renewal would be handled by region pruning.
+                // - CHUNK: ambient renewal would require chunk-level handling, but is currently unelected.
+                // - NONE: no ambient renewal path is currently indicated.
+                val ambientStrategy = when {
+                    regionForgettable -> AmbientRenewalStrategy.REGION
+                    !memorable -> AmbientRenewalStrategy.CHUNK
+                    else -> AmbientRenewalStrategy.NONE
+                }
+
                 chunkDerivationUpdates[key] = RenewalChunkDerivation(
                     memorable = memorable,
                     // Stone-driven chunk renewal is intentionally independent of region forgettability.
                     // Chunk renewal eligibility is derived from chunk-local memorability/protection only.
                     eligibleChunkRenewal = !memorable,
+                    ambientStrategy = ambientStrategy,
+                    explicitRenewalIntent = hasWitherForget,
                 )
             }
         }
