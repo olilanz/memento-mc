@@ -61,9 +61,9 @@ flowchart LR
     Renewal[Autonomous renewal]
 
     Player --> StoneAuthority
-    StoneAuthority -->|lifecycle events| Renewal
-    StoneAuthority -->|projection input| StoneMap
-    StoneMap -->|dominant influence| Renewal
+    StoneAuthority -->|lifecycle events| WorldMapService
+    WorldMapService -->|stone facts| WorldMap
+    WorldMap -->|dominantStone / dominantStoneEffect| Renewal
     Scanner -->|observations| WorldMap
     WorldMap --> Renewal
 ```
@@ -135,6 +135,19 @@ Execution answers a different question:
 Detection does not depend on chunk load state. Execution is deferred
 until chunks unload and reload naturally. Renewal never forces chunk
 unloads or reloads.
+
+
+### Baseline forgettability and stone overrides
+
+Natural Renewal can derive forgettability autonomously from world observation and activity signals recorded in the world map.
+
+Stone effects modify this baseline model:
+
+- `LORE_PROTECT` forces land to remain memorable and never eligible for renewal.
+- `WITHER_FORGET` forces land to become forgettable once the Witherstone matures.
+- If no stone effect is present, projection falls back to baseline derivation.
+
+This keeps stones as **intent signals and overrides**, while the autonomous model continues to preserve world health in forgotten outskirts.
 
 ### Server authority
 
@@ -293,6 +306,25 @@ knowledge is not forgotten. Missing or partial metadata is a valid
 state, not an error.
 
 There is no separate scan plan. **The map is the plan** (ADR‑009).
+
+
+### Stone effects as world facts
+
+Stone topology and lifecycle remain owned by `StoneAuthority`.
+
+However, renewal evaluation does not query stone topology directly. Instead, stone influence is projected into the world map as factual signals:
+
+- `dominantStone`
+- `dominantStoneEffect`
+
+These signals become part of the observable world substrate and are consumed by `RenewalProjection` together with scan observations.
+
+This ensures that:
+
+- the **WorldMap remains the single factual substrate**
+- projection remains **fully recomputable**
+- stone lifecycle authority stays isolated in `StoneAuthority`
+
 
 ### WorldMapService
 

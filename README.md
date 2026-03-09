@@ -52,14 +52,16 @@ The result:
 
 ------------------------------------------------------------------------
 
-## Natural Renewal uses two complementary mechanisms
+## Natural Renewal uses two complementary mechanisms.
+
+These mechanisms complement each other: Natural Renewal can operate autonomously in forgotten outskirts, while stones allow operators to guide renewal or protect areas closer to where players live.
 
 Natural Renewal is one operator-facing model with two distinct mechanisms
 working together.
 
 ### 1. Region-based renewal in forgettable outskirts
 
-Projection identifies forgettable regions and proposes conservative
+Projection identifies forgettable regions based on world observation and activity history, and proposes conservative
 region-pruning actions.
 
 It:
@@ -82,6 +84,8 @@ can also be applied in outskirts when desired.
 -   **Lorestone** --- protects land permanently
 
 Stones express intent.
+
+They influence the system but do not replace the autonomous model.
 They never force immediate regeneration.
 Renewal still occurs only when chunks unload naturally.
 
