@@ -275,7 +275,12 @@ class RenewalProjection {
         val sourceSeed: Map<ChunkKey, ChunkScanSnapshotEntry> = LinkedHashMap(chunkSourceByKey)
         val dirtySeed = when {
             cacheInvalidationRequested || scanRecomputeRequested ->
-                sourceSeed.keys.asSequence().map(::regionOf).toSortedSet(regionOrder()).toList()
+                buildSet {
+                    addAll(sourceSeed.keys.asSequence().map(::regionOf).toList())
+                    addAll(sourceDirtyRegions)
+                }
+                    .toSortedSet(regionOrder())
+                    .toList()
 
             else -> sourceDirtyRegions.toList().sortedWith(regionOrder())
         }
@@ -456,19 +461,22 @@ class RenewalProjection {
         // Pass 4: chunk eligibility = !memorable (stone-driven path is independent from region forgettability).
         //
         // Region prune and chunk renewal eligibility are separate domains and must not be conflated.
+        val sourceDirty = sourceDirtySeed.toSortedSet(regionOrder())
+
         if (sourceSnapshotByKey.isEmpty()) {
             return CandidateView(
                 generation = generation,
-                affectedRegions = emptyList(),
+                // Deletion-only pass: if factual substrate became empty, clear any previously
+                // committed projection residue for dirty regions.
+                affectedRegions = sourceDirty.toList(),
                 regionForgettableUpdates = emptyMap(),
                 chunkDerivationUpdates = emptyMap(),
-                materializedAffectedRegionCount = 0,
+                materializedAffectedRegionCount = sourceDirty.size,
                 materializedContextRegionCount = 0,
                 fullSnapshotRecoveryUsed = fullSnapshotRecovery,
             )
         }
 
-        val sourceDirty = sourceDirtySeed.toSortedSet(regionOrder())
         if (sourceDirty.isEmpty()) {
             return CandidateView(
                 generation = generation,
@@ -486,6 +494,12 @@ class RenewalProjection {
             .map(::regionOf)
             .toSet()
 
+        // Dirty regions can represent factual deletion (expunge). Those regions may no longer
+        // exist in sourceSnapshotByKey and therefore must still be included in commit-clear scope.
+        val deletedDirty = sourceDirty
+            .filter { !allKnownRegions.contains(it) }
+            .toSortedSet(regionOrder())
+
         val affectedAll = expandRing(sourceDirty, AFFECTED_EXPANSION_RING_REGIONS)
             .filter { allKnownRegions.contains(it) }
             .toSortedSet(regionOrder())
@@ -493,6 +507,11 @@ class RenewalProjection {
         val affected = affectedAll
             .take(MementoConstants.MEMENTO_RENEWAL_MAX_AFFECTED_REGIONS_PER_DISPATCH)
             .toSortedSet(regionOrder())
+
+        val clearTargets = linkedSetOf<RegionKey>().apply {
+            addAll(deletedDirty)
+            addAll(affected)
+        }
 
         MementoLog.debug(
             MementoConcept.PROJECTION,
@@ -523,12 +542,16 @@ class RenewalProjection {
 
         val regionHasInhabited = linkedMapOf<RegionKey, Boolean>()
         val regionHasLore = linkedMapOf<RegionKey, Boolean>()
+        val regionHasWitherForget = linkedMapOf<RegionKey, Boolean>()
 
         materializedRegions.sortedWith(regionOrder()).forEach { region ->
             val entries = entriesByRegion[region].orEmpty()
             regionHasInhabited[region] = entries.any { (it.signals?.inhabitedTimeTicks ?: 0L) > 0L }
             regionHasLore[region] = entries.any { entry ->
                 entry.dominantStoneEffect == DominantStoneEffectSignal.LORE_PROTECT
+            }
+            regionHasWitherForget[region] = entries.any { entry ->
+                entry.dominantStoneEffect == DominantStoneEffectSignal.WITHER_FORGET
             }
         }
 
@@ -537,18 +560,26 @@ class RenewalProjection {
             val neighbors = neighborRegions8(region)
             val localInhabited = regionHasInhabited[region] == true
             val localLore = regionHasLore[region] == true
+            val localWitherForget = regionHasWitherForget[region] == true
             val neighborInhabited = neighbors.any { regionHasInhabited[it] == true }
             val neighborLore = neighbors.any { regionHasLore[it] == true }
-            regionForgettableUpdates[region] = !(localInhabited || localLore || neighborInhabited || neighborLore)
+            val neighborWitherForget = neighbors.any { regionHasWitherForget[it] == true }
+
+            regionForgettableUpdates[region] = when {
+                localLore || neighborLore -> false
+                localWitherForget || neighborWitherForget -> true
+                else -> !(localInhabited || neighborInhabited)
+            }
         }
 
         val allEntriesInMaterialized = entriesByRegion.values.flatten()
         val memorableSourcePackedByWorld = linkedMapOf<RegistryKey<World>, MutableSet<Long>>()
         allEntriesInMaterialized.forEach { entry ->
             val inhabitedTicks = entry.signals?.inhabitedTimeTicks ?: 0L
-            val hasLore = entry.dominantStoneEffect == DominantStoneEffectSignal.LORE_PROTECT
+            val hasLoreProtect = entry.dominantStoneEffect == DominantStoneEffectSignal.LORE_PROTECT
+            val hasWitherForget = entry.dominantStoneEffect == DominantStoneEffectSignal.WITHER_FORGET
 
-            if (inhabitedTicks >= MementoConstants.MEMENTO_RENEWAL_MEMORABLE_INHABITED_TICKS_THRESHOLD || hasLore) {
+            if (hasLoreProtect || (!hasWitherForget && inhabitedTicks >= MementoConstants.MEMENTO_RENEWAL_MEMORABLE_INHABITED_TICKS_THRESHOLD)) {
                 memorableSourcePackedByWorld
                     .computeIfAbsent(entry.key.world) { linkedSetOf() }
                     .add(packChunk(entry.key.chunkX, entry.key.chunkZ))
@@ -562,10 +593,14 @@ class RenewalProjection {
                 val key = entry.key
                 val packed = packChunk(key.chunkX, key.chunkZ)
                 val sourceSet = memorableSourcePackedByWorld[key.world].orEmpty()
-                val memorable = if (sourceSet.contains(packed)) {
-                    true
-                } else {
-                    hasSourceWithinRadius(
+                val hasLoreProtect = entry.dominantStoneEffect == DominantStoneEffectSignal.LORE_PROTECT
+                val hasWitherForget = entry.dominantStoneEffect == DominantStoneEffectSignal.WITHER_FORGET
+
+                val memorable = when {
+                    hasLoreProtect -> true
+                    hasWitherForget -> false
+                    sourceSet.contains(packed) -> true
+                    else -> hasSourceWithinRadius(
                         candidate = key,
                         sourcePacked = sourceSet,
                         radius = MementoConstants.MEMENTO_RENEWAL_MEMORABLE_EXPANSION_RADIUS_CHUNKS,
@@ -583,10 +618,10 @@ class RenewalProjection {
 
         return CandidateView(
             generation = generation,
-            affectedRegions = affected.toList(),
+            affectedRegions = clearTargets.toList(),
             regionForgettableUpdates = regionForgettableUpdates,
             chunkDerivationUpdates = chunkDerivationUpdates,
-            materializedAffectedRegionCount = affected.size,
+            materializedAffectedRegionCount = clearTargets.size,
             materializedContextRegionCount = contextOnly.size,
             fullSnapshotRecoveryUsed = fullSnapshotRecovery,
         )
