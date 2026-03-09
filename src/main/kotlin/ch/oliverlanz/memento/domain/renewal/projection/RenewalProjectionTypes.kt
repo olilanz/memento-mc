@@ -7,9 +7,32 @@ import net.minecraft.world.World
 /**
  * Boolean projection output attached to a factual chunk key.
  */
+/**
+ * Diagnostic ambient execution preference derived from current projection facts.
+ *
+ * This is not an action and not a second eligibility authority.
+ *
+ * - [REGION]: ambient renewal would be handled by region pruning.
+ * - [CHUNK]: ambient renewal would require chunk-level handling, but is currently unelected.
+ * - [NONE]: no ambient renewal path is currently indicated.
+ */
+enum class AmbientRenewalStrategy {
+    REGION,
+    CHUNK,
+    NONE,
+}
+
 data class RenewalChunkDerivation(
     val memorable: Boolean = false,
     val eligibleChunkRenewal: Boolean = false,
+    val ambientStrategy: AmbientRenewalStrategy = AmbientRenewalStrategy.NONE,
+    /**
+     * Stone-intent marker derived from dominant WITHER_FORGET influence.
+     *
+     * This is used to keep stone-driven operator renewal actionable while
+     * ambient chunk strategy is temporarily suppressed in election.
+     */
+    val explicitRenewalIntent: Boolean = false,
 )
 
 /** Read-only operational status exposed to observational command surfaces. */
