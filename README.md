@@ -91,9 +91,11 @@ Renewal still occurs only when chunks unload naturally.
 
 ------------------------------------------------------------------------
 
-## Nothing happens automatically unless you explicitly activate ambient renewal
+## Nothing happens automatically until you explicitly activate ambient renewal
 
-Memento does not run unattended world wipes.
+Memento performs no automated world changes until the operator explicitly enables ambient renewal.
+
+After acceptance, Memento may gradually renew abandoned terrain during nightly maintenance cycles, while still respecting all safety and eligibility rules.
 
 It:
 
@@ -103,6 +105,22 @@ It:
 -   Can run acceptance-gated ambient renewal automation only after `/memento accept`
 
 You remain in control of when change occurs.
+
+Manual commands always remain available, and automation never bypasses the same safety checks used by `/memento do renew`.
+
+------------------------------------------------------------------------
+
+## Ambient Renewal
+
+Once accepted, Memento performs a small amount of renewal during the nightly maintenance cycle.
+
+The system will:
+
+-   complete an initial world scan if needed
+-   elect the next eligible region
+-   prune one region per cycle
+
+Renewal remains conservative and explainable, and manual commands always remain available.
 
 ------------------------------------------------------------------------
 
@@ -128,6 +146,18 @@ The system tells you what it is waiting for.
 ------------------------------------------------------------------------
 
 # Practical Workflows
+
+## Quick start
+
+1.  Install the mod and start your server.
+2.  Run `/memento do scan` to analyze the world.
+3.  Use `/memento explain renewal` to see where renewal could occur.
+
+When you are comfortable with the behavior, enable ambient renewal:
+
+`/memento accept`
+
+This allows Memento to perform small nightly renewal steps automatically.
 
 ## Workflow A --- Deliberate area renewal with stones
 
@@ -174,6 +204,8 @@ Renewal completes when the world reloads the affected chunks.
 Natural Renewal in this workflow uses the region-based mechanism in
 forgettable outskirts.\
 The operator decides when to apply it.
+
+The world map used for renewal decisions is rebuilt from scanning world data.
 
 ------------------------------------------------------------------------
 

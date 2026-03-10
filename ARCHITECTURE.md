@@ -337,7 +337,35 @@ It owns:
 -   ingestion of metadata facts from infrastructure publishers
 -   tick-thread application of metadata facts into `WorldMap`
 
+`WorldMapService` maintains an in-memory representation of observed
+world state.
+
+The world map is derived entirely from scanning region files and is not
+persisted.
+
+On server start, the world map begins empty and is rebuilt through scan
+observation flow.
+
 No infrastructure component mutates `WorldMap` directly.
+
+### Persistence boundaries
+
+Memento persists only operator intent and operator configuration.
+
+Persisted files:
+
+-   `memento_stone_topology.json`
+-   `memento_config.json`
+
+Derived state is never persisted:
+
+-   world map observations
+-   renewal projection state
+-   election candidates
+-   runtime orchestration state
+
+Derived state is rebuilt from scanning world data. This prevents
+synchronization drift between region files and internal model state.
 
 ### World scanner
 
@@ -398,6 +426,28 @@ Cadence delivery doctrine:
 -   Busy-retry policy for deferred background work is caller-owned and
     currently mediated on `MEDIUM` cadence; cadence transport itself
     remains non-semantic.
+
+### Ambient renewal orchestration
+
+Ambient renewal automation is implemented as a clock-driven
+orchestration layer.
+
+The orchestration handler:
+
+-   subscribes to `GameClockEvents`
+-   evaluates nightly execution gates
+-   triggers existing scan or renewal command paths
+
+Automation requires explicit operator acceptance.
+
+The acceptance flag is persisted in `memento_config.json`.
+
+Until acceptance is recorded, ambient automation remains disabled and
+the system behaves fully manual.
+
+Automation does not introduce new execution semantics. It reuses the
+same internal scan, projection, election, and execution pipeline used by
+manual commands.
 
 ### Global async exclusion gate
 
@@ -531,6 +581,11 @@ The following properties must remain true:
 
 -   Derived renewal metrics/decisions must not be persisted into
     WorldMap factual memory
+
+-   Derived world observations must never be persisted
+
+-   World state used for renewal decisions must be reconstructable from
+    region files via scanning
 
 -   Global async exclusion gate is infra-only: one background slot,
     reject-while-busy, no queue/fairness/prioritization semantics
