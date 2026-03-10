@@ -175,16 +175,23 @@ object MementoConstants {
      */
     const val RENEWAL_CHECKPOINT_TICK: Long = 21_000L
 
+    /* ---------------------------------------------------------------------
+     * World-root persistence files
+     * ------------------------------------------------------------------ */
+
+    /** World-root persisted acceptance/config state for ambient automation. */
+    const val AMBIENT_CONFIG_FILE: String = "memento_config.json"
+
     /** Primary persistence file for stones. */
-    const val STONE_TOPOLOGY_FILE: String = "memento_stone_topology.json"
+    const val STONE_AUTHORITY_FILE: String = "memento_stone_topology.json"
 
     /**
      * Optional seed file for developer testing.
      *
      * If present, this file is used for initial loading instead of the primary persistence file.
-     * Normal save behavior still overwrites [STONE_TOPOLOGY_FILE].
+     * Normal save behavior still overwrites [STONE_AUTHORITY_FILE].
      */
-    const val STONE_TOPOLOGY_SEED_FILE: String = "memento_stone_topology_seed.json"
+    const val STONE_AUTHORITY_SEED_FILE: String = "memento_stone_topology_seed.json"
 
     /** Debug/analysis CSV snapshot produced by /memento scan (overwritten each scan). */
     const val MEMENTO_SCAN_CSV_FILE: String = "memento_world_snapshot.csv"

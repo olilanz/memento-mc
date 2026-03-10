@@ -5,6 +5,7 @@ import ch.oliverlanz.memento.infrastructure.chunk.ChunkAvailabilityListener
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadDriver
 import ch.oliverlanz.memento.application.renewal.RenewalChunkLoadProvider
 import ch.oliverlanz.memento.application.renewal.RenewalInitialObserver
+import ch.oliverlanz.memento.application.renewal.AmbientRenewalHandler
 import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge
 import ch.oliverlanz.memento.application.renewal.WitherstoneConsumptionBridge
 import ch.oliverlanz.memento.application.stone.StoneMaturityTimeBridge
@@ -36,6 +37,7 @@ import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanner
 import ch.oliverlanz.memento.infrastructure.worldscan.RegionFileMetadataProvider
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanListener
 import ch.oliverlanz.memento.infrastructure.observability.OperatorMessages
+import ch.oliverlanz.memento.infrastructure.ambient.MementoConfigStore
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents
@@ -67,6 +69,7 @@ object Memento : ModInitializer {
     // Renewal wiring (application / infrastructure)
     private var renewalInitialObserver: RenewalInitialObserver? = null
     private var renewalChunkLoadProvider: RenewalChunkLoadProvider? = null
+    private var ambientRenewalHandler: AmbientRenewalHandler? = null
     private var chunkLoadDriver: ChunkLoadDriver? = null
 
     private val onRealtimePulse: (PulseClock) -> Unit = {
@@ -132,6 +135,7 @@ object Memento : ModInitializer {
             PulseEvents.subscribe(PulseCadence.ULTRA_LOW, onExtremeLowPulse)
 
             worldMapService = WorldMapService().also { it.attach(server) }
+            MementoConfigStore.attach(server)
 
             renewalProjection = RenewalProjection().also { projection ->
                 projection.attach(checkNotNull(worldMapService))
@@ -200,6 +204,15 @@ object Memento : ModInitializer {
             CommandHandlers.attachWorldScanner(scanner)
             CommandHandlers.attachRenewalProjection(checkNotNull(renewalProjection))
 
+            ambientRenewalHandler = AmbientRenewalHandler(server, scanner).also { it.attach() }
+
+            if (!MementoConfigStore.isAmbientRenewalAccepted()) {
+                MementoLog.info(MementoConcept.RENEWAL, "Ambient renewal is not yet activated.")
+                MementoLog.info(MementoConcept.RENEWAL, "The mod can automatically renew unused terrain over time.")
+                MementoLog.info(MementoConcept.RENEWAL, "Before enabling, ensure you keep regular world backups.")
+                MementoLog.info(MementoConcept.RENEWAL, "Run \"/memento accept\" to activate automated renewal.")
+            }
+
             // World scanner remains a passive chunk-availability consumer.
             chunkLoadDriver?.registerConsumer(scanner)
 
@@ -215,6 +228,9 @@ object Memento : ModInitializer {
             // mutation/transition pathway, 3) evaluate startup lifecycle progression.
             MementoLog.info(MementoConcept.STONE, "startup stone bootstrap phase=attach")
             StoneAuthority.attach(server)
+            StoneAuthority.attachWorldFactPublisher { fact ->
+                worldMapService?.applyFactOnTickThread(fact)
+            }
 
             MementoLog.info(MementoConcept.STONE, "startup stone bootstrap phase=process_persisted")
             StoneAuthority.processPersistedStones(trigger = StoneLifecycleTrigger.SERVER_START)
@@ -247,12 +263,16 @@ object Memento : ModInitializer {
             renewalInitialObserver?.detach()
             renewalInitialObserver = null
 
+            ambientRenewalHandler?.detach()
+            ambientRenewalHandler = null
+
             RenewalRegenerationBridge.clear()
             RenewalTrackerLogging.detach()
 
             StoneMaturityTimeBridge.detach()
             WitherstoneRenewalBridge.detach()
             CommandHandlers.detachStoneNameSuggestions()
+            StoneAuthority.attachWorldFactPublisher(null)
             StoneAuthorityWiring.onServerStopping()
 
             CommandHandlers.detachVisualizationEngine()
@@ -270,6 +290,8 @@ object Memento : ModInitializer {
 
             worldMapService?.detach()
             worldMapService = null
+
+            MementoConfigStore.detach()
 
             effectsHost = null
 

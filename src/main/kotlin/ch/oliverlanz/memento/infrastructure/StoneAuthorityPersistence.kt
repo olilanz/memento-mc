@@ -28,8 +28,8 @@ object StoneAuthorityPersistence {
     fun load(server: MinecraftServer): List<Stone> {
         val rootPath = server.getSavePath(WorldSavePath.ROOT)
 
-        val seedFile = rootPath.resolve(MementoConstants.STONE_TOPOLOGY_SEED_FILE)
-        val primaryFile = rootPath.resolve(MementoConstants.STONE_TOPOLOGY_FILE)
+        val seedFile = rootPath.resolve(MementoConstants.STONE_AUTHORITY_SEED_FILE)
+        val primaryFile = rootPath.resolve(MementoConstants.STONE_AUTHORITY_FILE)
 
         val fileToLoad = when {
             Files.exists(seedFile) -> {
@@ -107,7 +107,7 @@ object StoneAuthorityPersistence {
     fun save(server: MinecraftServer, stones: List<Stone>) {
         val file = server
             .getSavePath(WorldSavePath.ROOT)
-            .resolve(MementoConstants.STONE_TOPOLOGY_FILE)
+            .resolve(MementoConstants.STONE_AUTHORITY_FILE)
 
         val root = JsonObject()
         val arr = JsonArray()

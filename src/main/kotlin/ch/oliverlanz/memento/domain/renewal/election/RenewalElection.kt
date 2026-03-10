@@ -1,6 +1,7 @@
 package ch.oliverlanz.memento.domain.renewal.election
 
 import ch.oliverlanz.memento.domain.renewal.projection.RegionKey
+import ch.oliverlanz.memento.domain.renewal.projection.AmbientRenewalStrategy
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateAction
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateId
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalElectionInput
@@ -26,7 +27,7 @@ data class RenewalRankedElectionEntry(
 )
 
 /**
- * Deterministic projection election over boolean projection outputs.
+ * Deterministic election authority over boolean projection outputs.
  *
  * Election policy:
  * - region-prune candidates first in deterministic order
@@ -41,6 +42,7 @@ object RenewalElection {
     fun evaluate(
         input: RenewalElectionInput,
         deterministicTransactionId: String? = null,
+        suppressAmbientChunkStrategy: Boolean = true,
     ): ElectionResult {
         // Domain-separation contract:
         // - Region prune and chunk renew are distinct eligibility domains.
@@ -63,7 +65,25 @@ object RenewalElection {
 
         val chunkCandidates = input.chunkDerivationByChunk
             .asSequence()
-            .filter { (_, derivation) -> derivation.eligibleChunkRenewal }
+            .filter { (_, derivation) ->
+                if (!derivation.eligibleChunkRenewal) return@filter false
+
+                // Explicit stone intent remains actionable.
+                if (derivation.explicitRenewalIntent) return@filter true
+
+                if (!suppressAmbientChunkStrategy) {
+                    // Diagnostic/projection view: include ambient chunk strategy.
+                    return@filter true
+                }
+
+                // Release cut gate (explicit and local):
+                // ambient chunk strategy remains projected/observable,
+                // but is intentionally unelected for execution.
+                if (derivation.ambientStrategy == AmbientRenewalStrategy.CHUNK) return@filter false
+
+                // No stone intent and ambient-chunk path suppressed: not actionable in election.
+                false
+            }
             .map { (key, _) -> key }
             .sortedWith(
                 compareBy<ChunkKey> { it.world.value.toString() }

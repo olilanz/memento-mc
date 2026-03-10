@@ -45,6 +45,7 @@ import net.minecraft.util.math.BlockPos
 import net.minecraft.util.math.ChunkPos
 import ch.oliverlanz.memento.application.visualization.EffectsHost
 import ch.oliverlanz.memento.infrastructure.pruning.WorldPruningService
+import ch.oliverlanz.memento.infrastructure.ambient.MementoConfigStore
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import ch.oliverlanz.memento.infrastructure.observability.OperatorMessages
@@ -194,12 +195,13 @@ object CommandHandlers {
 
     fun explainRenewal(source: ServerCommandSource): Int {
         return try {
+            val ambientAccepted = MementoConfigStore.isAmbientRenewalAccepted()
             val projection = renewalProjection
             val snapshot = projection?.committedSnapshotOrNull()
             // Presentation boundary only:
             // This explain surface aggregates already-derived mechanism outputs for operators.
             // It must not merge, alter, or feed back into region/chunk derivation semantics.
-            val topCandidates = snapshot?.electionCandidates?.take(DEFAULT_EXPLAIN_TOP_LIMIT).orEmpty()
+            val topCandidates = snapshot?.rankedCandidates?.take(DEFAULT_EXPLAIN_TOP_LIMIT).orEmpty()
             val topRegionCandidates = topCandidates.filter { it.id.action == RenewalCandidateAction.REGION_PRUNE }
             val topChunkCandidates = topCandidates.filter { it.id.action == RenewalCandidateAction.CHUNK_RENEW }
             val witherstones = StoneAuthority.list().filterIsInstance<Witherstone>().sortedBy { it.name }
@@ -239,9 +241,29 @@ object CommandHandlers {
                 }
                 .toList()
 
-            source.sendFeedback({ Text.literal("Renewal explanation").formatted(Formatting.GOLD) }, false)
+            source.sendFeedback({ Text.literal("Natural Renewal explanation").formatted(Formatting.GOLD) }, false)
+            source.sendFeedback(
+                {
+                    Text.literal(
+                        "Actionable renewal is currently scoped to ambient region-based renewal and operator stone-based renewal."
+                    ).formatted(Formatting.GRAY)
+                },
+                false,
+            )
 
-            source.sendFeedback({ Text.literal("1) Natural renewal (region prune candidates)").formatted(Formatting.YELLOW) }, false)
+            source.sendFeedback({ Text.literal("Ambient renewal").formatted(Formatting.YELLOW) }, false)
+            if (!ambientAccepted) {
+                source.sendFeedback({ Text.literal("Ambient renewal: not activated").formatted(Formatting.GRAY) }, false)
+                source.sendFeedback({ Text.literal("Run \"/memento accept\" to enable automated renewal").formatted(Formatting.GRAY) }, false)
+            } else {
+                source.sendFeedback({ Text.literal("Ambient renewal: active").formatted(Formatting.GRAY) }, false)
+                source.sendFeedback({ Text.literal("Next renewal cycle: 03:00").formatted(Formatting.GRAY) }, false)
+            }
+
+            source.sendFeedback(
+                { Text.literal("1) Actionable ambient renewal — region-based").formatted(Formatting.YELLOW) },
+                false,
+            )
             if (topRegionCandidates.isEmpty()) {
                 val waitingInitialScan = worldScanner?.hasInitialScanCompleted() != true
                 if (waitingInitialScan) {
@@ -258,7 +280,10 @@ object CommandHandlers {
                 }
             }
 
-            source.sendFeedback({ Text.literal("2) Stone-driven chunk renewal candidates").formatted(Formatting.YELLOW) }, false)
+            source.sendFeedback(
+                { Text.literal("2) Actionable operator renewal — stone-based").formatted(Formatting.YELLOW) },
+                false,
+            )
             if (topChunkCandidates.isEmpty()) {
                 source.sendFeedback({ Text.literal("none").formatted(Formatting.GRAY) }, false)
             } else {
@@ -509,10 +534,48 @@ object CommandHandlers {
     }
 
     fun doRenewal(source: ServerCommandSource): Int {
-        return doRenewal(source, 1)
+        return executeRenewal(source, 1)
     }
 
     fun doRenewal(source: ServerCommandSource, count: Int): Int {
+        return executeRenewal(source, count)
+    }
+
+    fun executeRenewalFromAutomation(server: MinecraftServer, count: Int = 1): Int {
+        return executeAmbientRegionRenewal(server, count)
+    }
+
+    fun executeAmbientRegionRenewal(server: MinecraftServer, count: Int = 1): Int {
+        return executeRenewal(
+            source = server.commandSource,
+            count = count,
+            allowedActions = setOf(RenewalCandidateAction.REGION_PRUNE),
+        )
+    }
+
+    fun acceptAmbientRenewal(source: ServerCommandSource): Int {
+        val persisted = MementoConfigStore.accept(source.server)
+        if (!persisted) {
+            source.sendError(Text.literal("[Memento] could not persist ambient renewal acceptance (see server log)."))
+            return 0
+        }
+
+        source.sendFeedback(
+            { Text.literal("[Memento] Ambient renewal automation accepted.").formatted(Formatting.GREEN) },
+            false,
+        )
+        return 1
+    }
+
+    private fun executeRenewal(source: ServerCommandSource, count: Int): Int {
+        return executeRenewal(source = source, count = count, allowedActions = null)
+    }
+
+    private fun executeRenewal(
+        source: ServerCommandSource,
+        count: Int,
+        allowedActions: Set<RenewalCandidateAction>?,
+    ): Int {
         if (count <= 0) {
             source.sendError(Text.literal("[Memento] renewal count must be > 0."))
             return 0
@@ -520,7 +583,11 @@ object CommandHandlers {
 
         val snapshot = committedSnapshotOrSendError(source) ?: return 0
         val boundedRequested = count.coerceAtMost(DO_RENEWAL_MAX_REGION_BATCH)
-        val requestedCandidates = snapshot.electionCandidates.take(boundedRequested)
+        val requestedCandidates = snapshot.rankedCandidates
+            .asSequence()
+            .filter { candidate -> allowedActions == null || candidate.id.action in allowedActions }
+            .take(boundedRequested)
+            .toList()
         if (requestedCandidates.isEmpty()) {
             source.sendFeedback(
                 { Text.literal("[Memento] no renewal candidates found.").formatted(Formatting.YELLOW) },
@@ -992,7 +1059,7 @@ object CommandHandlers {
             }
         }
 
-        val candidates = snapshot?.electionCandidates.orEmpty()
+        val candidates = snapshot?.rankedCandidates.orEmpty()
         val regionCandidates = candidates.count { it.id.action == RenewalCandidateAction.REGION_PRUNE }
         val chunkCandidates = candidates.count { it.id.action == RenewalCandidateAction.CHUNK_RENEW }
         lines += "Renewal candidate totals: all=${candidates.size}, regions=$regionCandidates, chunks=$chunkCandidates"

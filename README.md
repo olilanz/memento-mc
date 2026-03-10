@@ -52,14 +52,17 @@ The result:
 
 ------------------------------------------------------------------------
 
-## Two complementary renewal paths
+## Natural Renewal uses two complementary mechanisms.
 
-Memento combines two mechanisms that work hand in hand.
+These mechanisms complement each other: Natural Renewal can operate autonomously in forgotten outskirts, while stones allow operators to guide renewal or protect areas closer to where players live.
 
-### 1. Natural Renewal (projection-based)
+Natural Renewal is one operator-facing model with two distinct mechanisms
+working together.
 
-Natural Renewal identifies forgettable regions and proposes conservative
-region-level pruning.
+### 1. Region-based renewal in forgettable outskirts
+
+Projection identifies forgettable regions based on world observation and activity history, and proposes conservative
+region-pruning actions.
 
 It:
 
@@ -72,30 +75,52 @@ The operator remains in full control of when renewal happens.
 
 ------------------------------------------------------------------------
 
-### 2. Stone-driven renewal (explicit intent)
+### 2. Stone-guided chunk renewal (explicit intent)
 
-Stones allow operators to guide or override renewal behavior.
+Stones allow operators to guide renewal near memorable places, and stones
+can also be applied in outskirts when desired.
 
 -   **Witherstone** --- marks land for renewal over time\
 -   **Lorestone** --- protects land permanently
 
 Stones express intent.
+
+They influence the system but do not replace the autonomous model.
 They never force immediate regeneration.
 Renewal still occurs only when chunks unload naturally.
 
 ------------------------------------------------------------------------
 
-## Nothing happens automatically
+## Nothing happens automatically until you explicitly activate ambient renewal
 
-Memento does not run unattended world wipes.
+Memento performs no automated world changes until the operator explicitly enables ambient renewal.
+
+After acceptance, Memento may gradually renew abandoned terrain during nightly maintenance cycles, while still respecting all safety and eligibility rules.
 
 It:
 
 -   Suggests renewal candidates
 -   Explains what it is waiting for
--   Executes renewal only when the operator explicitly triggers it
+-   Executes renewal when the operator explicitly triggers it
+-   Can run acceptance-gated ambient renewal automation only after `/memento accept`
 
 You remain in control of when change occurs.
+
+Manual commands always remain available, and automation never bypasses the same safety checks used by `/memento do renew`.
+
+------------------------------------------------------------------------
+
+## Ambient Renewal
+
+Once accepted, Memento performs a small amount of renewal during the nightly maintenance cycle.
+
+The system will:
+
+-   complete an initial world scan if needed
+-   elect the next eligible region
+-   prune one region per cycle
+
+Renewal remains conservative and explainable, and manual commands always remain available.
 
 ------------------------------------------------------------------------
 
@@ -121,6 +146,18 @@ The system tells you what it is waiting for.
 ------------------------------------------------------------------------
 
 # Practical Workflows
+
+## Quick start
+
+1.  Install the mod and start your server.
+2.  Run `/memento do scan` to analyze the world.
+3.  Use `/memento explain renewal` to see where renewal could occur.
+
+When you are comfortable with the behavior, enable ambient renewal:
+
+`/memento accept`
+
+This allows Memento to perform small nightly renewal steps automatically.
 
 ## Workflow A --- Deliberate area renewal with stones
 
@@ -164,8 +201,11 @@ Renewal completes when the world reloads the affected chunks.
 4.  Execute controlled renewal\
     `/memento do renew [N]`
 
-Natural Renewal proposes region-level pruning only.\
+Natural Renewal in this workflow uses the region-based mechanism in
+forgettable outskirts.\
 The operator decides when to apply it.
+
+The world map used for renewal decisions is rebuilt from scanning world data.
 
 ------------------------------------------------------------------------
 
@@ -191,6 +231,7 @@ The operator decides when to apply it.
 
 ### Execution
 
+-   `/memento accept`
 -   `/memento do scan`
 -   `/memento do renew [N]`
 

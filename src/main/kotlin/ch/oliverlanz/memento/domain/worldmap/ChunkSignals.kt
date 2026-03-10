@@ -19,6 +19,28 @@ data class ChunkSignals(
     val isSpawnChunk: Boolean,
 )
 
+/**
+ * Dominant stone topology signal at chunk granularity.
+ *
+ * This is geometric/topological only and intentionally independent from lifecycle-derived effect.
+ */
+enum class DominantStoneSignal {
+    NONE,
+    LORE,
+    WITHER,
+}
+
+/**
+ * Dominant stone effect signal consumed by projection.
+ *
+ * This is lifecycle-aware effect semantics derived by stone authority.
+ */
+enum class DominantStoneEffectSignal {
+    NONE,
+    LORE_PROTECT,
+    WITHER_FORGET,
+}
+
 data class ChunkKey(
     val world: RegistryKey<World>,
     val regionX: Int,
