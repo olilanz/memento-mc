@@ -58,6 +58,12 @@ object Commands {
                     )
                 )
 
+                .then(literal("accept")
+                    .executes { ctx ->
+                        CommandHandlers.acceptAmbientRenewal(ctx.source)
+                    }
+                )
+
                 /* ======================
                  * VISUALIZE
                  * ====================== */
