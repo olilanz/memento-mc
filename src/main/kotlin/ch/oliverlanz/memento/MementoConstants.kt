@@ -175,6 +175,13 @@ object MementoConstants {
      */
     const val RENEWAL_CHECKPOINT_TICK: Long = 21_000L
 
+    /* ---------------------------------------------------------------------
+     * World-root persistence files
+     * ------------------------------------------------------------------ */
+
+    /** World-root persisted acceptance/config state for ambient automation. */
+    const val AMBIENT_CONFIG_FILE: String = "memento_config.json"
+
     /** Primary persistence file for stones. */
     const val STONE_AUTHORITY_FILE: String = "memento_stone_topology.json"
 

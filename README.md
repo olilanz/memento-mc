@@ -91,7 +91,7 @@ Renewal still occurs only when chunks unload naturally.
 
 ------------------------------------------------------------------------
 
-## Nothing happens automatically
+## Nothing happens automatically unless you explicitly activate ambient renewal
 
 Memento does not run unattended world wipes.
 
@@ -99,7 +99,8 @@ It:
 
 -   Suggests renewal candidates
 -   Explains what it is waiting for
--   Executes renewal only when the operator explicitly triggers it
+-   Executes renewal when the operator explicitly triggers it
+-   Can run acceptance-gated ambient renewal automation only after `/memento accept`
 
 You remain in control of when change occurs.
 
@@ -198,6 +199,7 @@ The operator decides when to apply it.
 
 ### Execution
 
+-   `/memento accept`
 -   `/memento do scan`
 -   `/memento do renew [N]`
 
