@@ -94,7 +94,7 @@ object RenewalElection {
             )
             .toList()
 
-        MementoLog.info(
+        MementoLog.debug(
             MementoConcept.RENEWAL,
             "election deterministic generation={} transaction={} regionCandidates={} chunkCandidates={} regionFirstPolicy=true",
             input.generation,

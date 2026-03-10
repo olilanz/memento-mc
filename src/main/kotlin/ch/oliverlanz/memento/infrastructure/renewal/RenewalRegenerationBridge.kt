@@ -30,6 +30,8 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object RenewalRegenerationBridge {
 
+    private const val REGEN_ACK_SAMPLE_SIZE = 5
+
     /** dimension-id -> (chunkLong -> true) */
     private val pendingByDimension: ConcurrentHashMap<String, ConcurrentHashMap<Long, Boolean>> =
         ConcurrentHashMap()
@@ -87,16 +89,31 @@ object RenewalRegenerationBridge {
         val snapshot = regenTriggered.toSet()
         regenTriggered.removeAll(snapshot)
 
+        val acknowledgedByDimension = linkedMapOf<String, MutableList<Long>>()
+
         for ((dim, chunkLong) in snapshot) {
             pendingByDimension[dim]?.remove(chunkLong)
             if (pendingByDimension[dim]?.isEmpty() == true) {
                 pendingByDimension.remove(dim)
             }
 
+            acknowledgedByDimension.getOrPut(dim) { mutableListOf() }.add(chunkLong)
+        }
+
+        acknowledgedByDimension.forEach { (dim, acknowledgedChunks) ->
+            val sample = acknowledgedChunks
+                .asSequence()
+                .distinct()
+                .sorted()
+                .take(REGEN_ACK_SAMPLE_SIZE)
+                .joinToString(prefix = "[", postfix = "]", separator = ",")
+
             MementoLog.debug(
                 MementoConcept.RENEWAL,
-                "regeneration acknowledged dim='{}' chunk={}",
-                dim, chunkLong
+                "regeneration acknowledged dim='{}' chunks={} sampleChunkIds={}",
+                dim,
+                acknowledgedChunks.size,
+                sample,
             )
         }
     }
