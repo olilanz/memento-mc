@@ -326,11 +326,28 @@ class RegionFileMetadataProvider(
     }
 
     private fun extractBiomeId(root: NbtCompound): String? {
-        // NBT section palette layout varies across data versions. We extract the first biome id
-        // occurrence from the chunk payload representation as a conservative operator signal.
-        val raw = root.toString()
-        val match = BIOME_ID_REGEX.find(raw) ?: return null
-        return match.value
+        val sections =
+            root.getList("sections").orElse(null)
+                ?: root.getCompound("Level").flatMap { level -> level.getList("Sections") }.orElse(null)
+                ?: return null
+
+        var selectedSectionY: Int? = null
+        var selectedBiome: String? = null
+
+        for (i in 0 until sections.size) {
+            val section = sections.getCompound(i).orElse(null) ?: continue
+            val biomes = section.getCompound("biomes").orElse(null) ?: continue
+            val palette = biomes.getList("palette").orElse(null) ?: continue
+            val biome = palette.getString(0).orElse(null) ?: continue
+            val sectionY = section.getByte("Y").orElse(0).toInt()
+
+            if (selectedSectionY == null || sectionY > selectedSectionY) {
+                selectedSectionY = sectionY
+                selectedBiome = biome
+            }
+        }
+
+        return selectedBiome
     }
 
     private fun classifyFailure(t: Throwable): ChunkScanUnresolvedReason {
@@ -419,6 +436,5 @@ class RegionFileMetadataProvider(
         private const val COMPRESSION_ZLIB = 2
         private const val COMPRESSION_NONE = 3
         private const val COMPRESSION_LZ4 = 4
-        private val BIOME_ID_REGEX = Regex("minecraft:[a-z0-9_./-]+")
     }
 }
