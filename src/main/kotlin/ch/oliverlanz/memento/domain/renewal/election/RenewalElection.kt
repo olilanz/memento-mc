@@ -9,6 +9,7 @@ import ch.oliverlanz.memento.domain.renewal.projection.RenewalRankedCandidate
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
+import java.util.Comparator
 
 data class ElectionResult(
     val projectionGeneration: Long,
@@ -34,6 +35,7 @@ object RenewalElection {
         input: RenewalElectionInput,
         deterministicTransactionId: String? = null,
         suppressAmbientChunkStrategy: Boolean = true,
+        includeExplicitStoneIntent: Boolean = false,
     ): ElectionResult {
         // Domain-separation contract:
         // - Region prune and chunk renew are distinct eligibility domains.
@@ -60,7 +62,7 @@ object RenewalElection {
                 if (!derivation.eligibleChunkRenewal) return@filter false
 
                 // Explicit stone intent remains actionable.
-                if (derivation.explicitRenewalIntent) return@filter true
+                if (derivation.explicitRenewalIntent) return@filter includeExplicitStoneIntent
 
                 if (!suppressAmbientChunkStrategy) {
                     // Diagnostic/projection view: include ambient chunk strategy.
@@ -104,34 +106,64 @@ object RenewalElection {
 
     fun asRankedCandidates(result: ElectionResult): List<RenewalRankedCandidate> {
         val out = mutableListOf<RenewalRankedCandidate>()
-        var rank = 1
 
-        result.electedRegions.forEach { region ->
-            out += RenewalRankedCandidate(
-                id = RenewalCandidateId(
-                    action = RenewalCandidateAction.REGION_PRUNE,
-                    worldKey = region.worldId,
-                    regionX = region.regionX,
-                    regionZ = region.regionZ,
-                ),
-                rank = rank,
-            )
-            rank++
-        }
+        val regionsByWorld = result.electedRegions.groupBy { it.worldId }
+        val chunksByWorld = result.electedChunks.groupBy { it.world.value.toString() }
 
-        result.electedChunks.forEach { chunk ->
-            out += RenewalRankedCandidate(
-                id = RenewalCandidateId(
-                    action = RenewalCandidateAction.CHUNK_RENEW,
-                    worldKey = chunk.world.value.toString(),
-                    chunkX = chunk.chunkX,
-                    chunkZ = chunk.chunkZ,
-                ),
-                rank = rank,
-            )
-            rank++
+        val orderedWorlds = (regionsByWorld.keys + chunksByWorld.keys)
+            .toSortedSet(worldOrder())
+
+        orderedWorlds.forEach { worldId ->
+            var rank = 1
+
+            regionsByWorld[worldId].orEmpty().forEach { region ->
+                out += RenewalRankedCandidate(
+                    id = RenewalCandidateId(
+                        action = RenewalCandidateAction.REGION_PRUNE,
+                        worldKey = region.worldId,
+                        regionX = region.regionX,
+                        regionZ = region.regionZ,
+                    ),
+                    rank = rank,
+                )
+                rank++
+            }
+
+            chunksByWorld[worldId].orEmpty().forEach { chunk ->
+                out += RenewalRankedCandidate(
+                    id = RenewalCandidateId(
+                        action = RenewalCandidateAction.CHUNK_RENEW,
+                        worldKey = chunk.world.value.toString(),
+                        chunkX = chunk.chunkX,
+                        chunkZ = chunk.chunkZ,
+                    ),
+                    rank = rank,
+                )
+                rank++
+            }
         }
 
         return out
+    }
+
+    private fun worldOrder(): Comparator<String> {
+        return compareBy<String> { worldPriority(it) }
+            .thenBy { it }
+    }
+
+    private fun worldPriority(worldKey: String): Int {
+        return when (worldKey) {
+            "minecraft:overworld" -> 0
+            "minecraft:the_nether" -> 1
+            "minecraft:the_end" -> 2
+            else -> {
+                MementoLog.error(
+                    MementoConcept.RENEWAL,
+                    "unknown dimension encountered in worldPriority(): '{}'. dimension ordering assumptions may be violated; expected [minecraft:overworld, minecraft:the_nether, minecraft:the_end]",
+                    worldKey,
+                )
+                Int.MAX_VALUE
+            }
+        }
     }
 }

@@ -27,6 +27,8 @@ import java.util.zip.GZIPInputStream
 import java.util.zip.InflaterInputStream
 import java.util.zip.ZipException
 import kotlin.math.max
+import kotlin.math.ceil
+import kotlin.math.log2
 import net.minecraft.nbt.NbtCompound
 import net.minecraft.nbt.NbtIo
 import net.minecraft.nbt.NbtSizeTracker
@@ -129,12 +131,19 @@ class RegionFileMetadataProvider(
         val unresolvedByReason = linkedMapOf<ChunkScanUnresolvedReason, Int>()
         var success = 0
         var unresolved = 0
+        var missingSurface = 0
+        var missingBiome = 0
         for (unit in work) {
             if (Thread.currentThread().isInterrupted) return
 
             val result = readChunkMetadata(unit)
             emitFact(unit.key, result, scanTick)
             processedWorkUnits.incrementAndGet()
+
+            if (result.signals != null) {
+                if (result.signals.surfaceY == null) missingSurface++
+                if (result.signals.biomeId == null) missingBiome++
+            }
 
             if (result.unresolvedReason == null) {
                 success++
@@ -155,6 +164,15 @@ class RegionFileMetadataProvider(
             formatReasonCounts(unresolvedByReason),
             emittedFacts.get(),
         )
+
+        if (missingSurface > 0 || missingBiome > 0) {
+            MementoLog.warn(
+                MementoConcept.SCANNER,
+                "scan file-pass metadata gaps surfaceYMissing={} biomeMissing={} policy=null-on-missing",
+                missingSurface,
+                missingBiome,
+            )
+        }
     }
 
     private fun emitFact(key: ChunkKey, result: ChunkReadResult, scanTick: Long) {
@@ -179,6 +197,8 @@ class RegionFileMetadataProvider(
             val lastUpdate =
                 readLong(root, "LastUpdate")
                     ?: root.getCompound("Level").flatMap { level -> level.getLong("LastUpdate") }.orElse(null)
+            val surfaceY = extractSurfaceY(root)
+            val biome = extractBiomeId(root)
 
             ChunkReadResult(
                 unresolvedReason = null,
@@ -186,8 +206,8 @@ class RegionFileMetadataProvider(
                     ChunkSignals(
                         inhabitedTimeTicks = inhabited,
                         lastUpdateTicks = lastUpdate,
-                        surfaceY = null,
-                        biomeId = null,
+                        surfaceY = surfaceY,
+                        biomeId = biome,
                         isSpawnChunk = false,
                     ),
                 isTransientFailure = false,
@@ -273,6 +293,44 @@ class RegionFileMetadataProvider(
 
     private fun readLong(compound: NbtCompound, key: String): Long? {
         return if (compound.contains(key)) compound.getLong(key).orElse(null) else null
+    }
+
+    private fun extractSurfaceY(root: NbtCompound): Int? {
+        val heightmaps = root.getCompound("Heightmaps").orElse(null)
+            ?: root.getCompound("Level").flatMap { it.getCompound("Heightmaps") }.orElse(null)
+            ?: return null
+
+        val packed = runCatching {
+            heightmaps.getLongArray("WORLD_SURFACE").orElse(null)
+        }.getOrNull() ?: return null
+
+        if (packed.isEmpty()) return null
+
+        // We sample the center of the chunk (local 8,8 => linear index 8 + 8 * 16 = 136).
+        val index = 8 + 8 * 16
+        val bitsPerEntry = max(1, ceil(log2(384.0)).toInt())
+        val bitIndex = index * bitsPerEntry
+        val longIndex = bitIndex / 64
+        val bitOffset = bitIndex % 64
+        if (longIndex >= packed.size) return null
+
+        val mask = (1L shl bitsPerEntry) - 1L
+        var value = (packed[longIndex] ushr bitOffset) and mask
+        if (bitOffset + bitsPerEntry > 64 && longIndex + 1 < packed.size) {
+            val spill = bitOffset + bitsPerEntry - 64
+            value = value or ((packed[longIndex + 1] and ((1L shl spill) - 1L)) shl (bitsPerEntry - spill))
+        }
+
+        if (value <= 0L) return null
+        return (value - 1L).toInt()
+    }
+
+    private fun extractBiomeId(root: NbtCompound): String? {
+        // NBT section palette layout varies across data versions. We extract the first biome id
+        // occurrence from the chunk payload representation as a conservative operator signal.
+        val raw = root.toString()
+        val match = BIOME_ID_REGEX.find(raw) ?: return null
+        return match.value
     }
 
     private fun classifyFailure(t: Throwable): ChunkScanUnresolvedReason {
@@ -361,5 +419,6 @@ class RegionFileMetadataProvider(
         private const val COMPRESSION_ZLIB = 2
         private const val COMPRESSION_NONE = 3
         private const val COMPRESSION_LZ4 = 4
+        private val BIOME_ID_REGEX = Regex("minecraft:[a-z0-9_./-]+")
     }
 }

@@ -1,11 +1,9 @@
 package ch.oliverlanz.memento.infrastructure.worldscan
 
 import ch.oliverlanz.memento.MementoConstants
-import ch.oliverlanz.memento.domain.renewal.election.RenewalElection
-import ch.oliverlanz.memento.domain.renewal.projection.RegionKey
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateAction
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCommittedSnapshot
-import ch.oliverlanz.memento.domain.worldmap.ChunkKey
+import ch.oliverlanz.memento.domain.worldmap.DominantStoneEffectSignal
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanProvenance
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
@@ -17,14 +15,37 @@ import net.minecraft.server.MinecraftServer
 import net.minecraft.util.WorldSavePath
 
 /**
- * Operator CSV observability writer.
+ * Operator worldview CSV writer.
  *
- * Contract:
- * - no previously emitted world-fact field is removed,
- * - projection/election columns are additive only,
- * - election ordering is read-only and deterministic from committed projection head.
+ * Locked contract (source of truth is local to this class):
+ * - header order and names are fixed by [LOCKED_SCHEMA],
+ * - writer must copy election ranks from committed snapshot and never recompute ranks,
+ * - writer emits chunk-granular rows; region purge rank is replicated across all chunks in that region,
+ * - rank/action and enum domains are fail-fast validated before file write.
  */
 object MementoCsvWriter {
+
+    private val LOCKED_SCHEMA = listOf(
+        "dimension",
+        "regionX",
+        "regionZ",
+        "chunkX",
+        "chunkZ",
+        "scanTick",
+        "inhabitedTicks",
+        "surfaceY",
+        "biome",
+        "isSpawn",
+        "dominantStone",
+        "dominantStoneEffect",
+        "chunkMemorable",
+        "chunkForgettable",
+        "renewalAction",
+        "renewalRank",
+        "source",
+        "status",
+    )
+    private const val REGION_WIDTH = 32
 
     fun writeOperatorWorldviewSnapshot(
         server: MinecraftServer,
@@ -36,45 +57,24 @@ object MementoCsvWriter {
 
         Files.createDirectories(path.parent)
 
-        val election = RenewalElection.evaluate(
-            input =
-                ch.oliverlanz.memento.domain.renewal.projection.RenewalElectionInput(
-                    generation = projectionSnapshot.generation,
-                    regionForgettableByRegion = projectionSnapshot.regionForgettableByRegion,
-                    chunkDerivationByChunk = projectionSnapshot.chunkDerivationByChunk,
-                ),
-            deterministicTransactionId = "csv-g${projectionSnapshot.generation}",
-        )
-        val projectedElection = RenewalElection.evaluate(
-            input =
-                ch.oliverlanz.memento.domain.renewal.projection.RenewalElectionInput(
-                    generation = projectionSnapshot.generation,
-                    regionForgettableByRegion = projectionSnapshot.regionForgettableByRegion,
-                    chunkDerivationByChunk = projectionSnapshot.chunkDerivationByChunk,
-                ),
-            deterministicTransactionId = "csv-projected-g${projectionSnapshot.generation}",
-            suppressAmbientChunkStrategy = false,
-        )
-        val rankedElection = RenewalElection.asRankedCandidates(election)
-        val projectedRankedElection = RenewalElection.asRankedCandidates(projectedElection)
+        val rankedElection = projectionSnapshot.rankedCandidates
 
-        val byRegion = rankedElection
-            .filter { it.id.action == RenewalCandidateAction.REGION_PRUNE }
-            .associateBy { keyOfRegion(it.id.worldKey, it.id.regionX, it.id.regionZ) }
-        val byChunk = rankedElection
-            .filter { it.id.action == RenewalCandidateAction.CHUNK_RENEW }
-            .associateBy { keyOfChunk(it.id.worldKey, it.id.chunkX, it.id.chunkZ) }
-        val projectedRankByRegion = projectedRankedElection
+        val rankByRegion = rankedElection
             .filter { it.id.action == RenewalCandidateAction.REGION_PRUNE }
             .associate { keyOfRegion(it.id.worldKey, it.id.regionX, it.id.regionZ) to it.rank }
-        val projectedRankByChunk = projectedRankedElection
+        val rankByChunk = rankedElection
             .filter { it.id.action == RenewalCandidateAction.CHUNK_RENEW }
             .associate { keyOfChunk(it.id.worldKey, it.id.chunkX, it.id.chunkZ) to it.rank }
 
+        val header = LOCKED_SCHEMA.joinToString(",")
+        require(
+            header == "dimension,regionX,regionZ,chunkX,chunkZ,scanTick,inhabitedTicks,surfaceY,biome,isSpawn,dominantStone,dominantStoneEffect,chunkMemorable,chunkForgettable,renewalAction,renewalRank,source,status"
+        ) {
+            "csv schema drift detected"
+        }
+
         val sb = StringBuilder()
-        // Baseline world snapshot fields (unchanged, no removals) + additive projection/election fields.
-        // Compatibility rule: new columns append-only.
-        sb.append("dimension,chunkX,chunkZ,scanTick,inhabitedTicks,dominantStone,surfaceY,biome,isSpawn,source,status,regionForgettable,memorable,eligibleChunkRenewal,renewalAction,renewalRank,dominantStoneSignal,dominantStoneEffect,ambientStrategy\n")
+        sb.append(header).append('\n')
 
         worldSnapshot
             .sortedWith(
@@ -88,46 +88,60 @@ object MementoCsvWriter {
                 val key = entry.key
                 val signals = entry.signals
                 val dim = key.world.value.toString()
+                val regionKey = keyOfRegion(dim, key.regionX, key.regionZ)
+                val chunkKey = keyOfChunk(dim, key.chunkX, key.chunkZ)
 
                 val dominant = entry.dominantStone.name
-                val dominantStoneSignal = entry.dominantStone.name
-                val dominantStoneEffect = entry.dominantStoneEffect.name
+                val dominantStoneEffect = mapDominantStoneEffect(entry.dominantStoneEffect)
+                validateDominantStoneEffect(dominantStoneEffect)
 
                 val derivation = projectionSnapshot.chunkDerivationByChunk[key]
-                val regionForgettable = projectionSnapshot.regionForgettableByRegion[
-                    RegionKey(worldId = dim, regionX = key.regionX, regionZ = key.regionZ)
-                ] == true
+                val regionRank = rankByRegion[regionKey]
+                val chunkRank = rankByChunk[chunkKey]
+                val action = when {
+                    regionRank != null -> "REGION_PURGE"
+                    chunkRank != null -> "CHUNK_RENEW"
+                    else -> "NONE"
+                }
+                validateRenewalAction(action)
 
-                val electedRegion = byRegion[keyOfRegion(dim, key.regionX, key.regionZ)]
-                val electedChunk = byChunk[keyOfChunk(dim, key.chunkX, key.chunkZ)]
-                val elected = electedRegion ?: electedChunk
-                val action = elected?.id?.action?.name ?: "NONE"
-                val projectedRank =
-                    projectedRankByRegion[keyOfRegion(dim, key.regionX, key.regionZ)]
-                        ?: projectedRankByChunk[keyOfChunk(dim, key.chunkX, key.chunkZ)]
-                val rank = projectedRank?.toString() ?: ""
-                val ambientStrategy = derivation?.ambientStrategy?.name ?: "NONE"
+                val rank = (regionRank ?: chunkRank)?.toString() ?: ""
+                require((action == "NONE") == rank.isEmpty()) {
+                    "rank/action invariant violated action=$action rank='$rank' key=$chunkKey"
+                }
 
-                sb.append(dim)
-                    .append(',').append(key.chunkX)
-                    .append(',').append(key.chunkZ)
-                    .append(',').append(entry.scanTick)
-                    .append(',').append(signals?.inhabitedTimeTicks?.toString() ?: "")
-                    .append(',').append(dominant)
-                    .append(',').append(signals?.surfaceY?.toString() ?: "")
-                    .append(',').append(signals?.biomeId ?: "")
-                    .append(',').append(if (signals?.isSpawnChunk == true) 1 else 0)
-                    .append(',').append(projectSource(entry.provenance))
-                    .append(',').append(projectStatus(entry))
-                    .append(',').append(if (regionForgettable) 1 else 0)
-                    .append(',').append(if (derivation?.memorable == true) 1 else 0)
-                    .append(',').append(if (derivation?.eligibleChunkRenewal == true) 1 else 0)
-                    .append(',').append(action)
-                    .append(',').append(rank)
-                    .append(',').append(dominantStoneSignal)
-                    .append(',').append(dominantStoneEffect)
-                    .append(',').append(ambientStrategy)
-                    .append('\n')
+                val chunkMemorable = derivation?.memorable == true
+                val chunkForgettable = when {
+                    action != "NONE" -> true
+                    derivation == null -> false
+                    else -> !chunkMemorable
+                }
+
+                val row = listOf(
+                    dim,
+                    key.regionX.toString(),
+                    key.regionZ.toString(),
+                    floorModChunk(key.chunkX).toString(),
+                    floorModChunk(key.chunkZ).toString(),
+                    entry.scanTick.toString(),
+                    signals?.inhabitedTimeTicks?.toString() ?: "",
+                    signals?.surfaceY?.toString() ?: "",
+                    signals?.biomeId ?: "",
+                    if (signals?.isSpawnChunk == true) "1" else "0",
+                    dominant,
+                    dominantStoneEffect,
+                    if (chunkMemorable) "1" else "0",
+                    if (chunkForgettable) "1" else "0",
+                    action,
+                    rank,
+                    projectSource(entry.provenance),
+                    projectStatus(entry),
+                )
+
+                require(row.size == LOCKED_SCHEMA.size) {
+                    "csv row width mismatch expected=${LOCKED_SCHEMA.size} actual=${row.size}"
+                }
+                sb.append(row.joinToString(",")).append('\n')
             }
 
         Files.writeString(path, sb.toString(), StandardCharsets.UTF_8)
@@ -161,5 +175,27 @@ object MementoCsvWriter {
 
     private fun keyOfChunk(worldKey: String, chunkX: Int?, chunkZ: Int?): String {
         return "$worldKey:${chunkX ?: ""}:${chunkZ ?: ""}"
+    }
+
+    private fun floorModChunk(globalChunk: Int): Int = Math.floorMod(globalChunk, REGION_WIDTH)
+
+    private fun mapDominantStoneEffect(effect: DominantStoneEffectSignal): String {
+        return when (effect) {
+            DominantStoneEffectSignal.NONE -> "NONE"
+            DominantStoneEffectSignal.LORE_PROTECT -> "PROTECT"
+            DominantStoneEffectSignal.WITHER_FORGET -> "RENEW"
+        }
+    }
+
+    private fun validateDominantStoneEffect(effect: String) {
+        require(effect == "NONE" || effect == "PROTECT" || effect == "RENEW") {
+            "unknown dominantStoneEffect='$effect'"
+        }
+    }
+
+    private fun validateRenewalAction(action: String) {
+        require(action == "NONE" || action == "CHUNK_RENEW" || action == "REGION_PURGE") {
+            "unknown renewalAction='$action'"
+        }
     }
 }
