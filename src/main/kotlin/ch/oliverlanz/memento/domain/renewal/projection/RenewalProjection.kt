@@ -8,7 +8,6 @@ import ch.oliverlanz.memento.domain.worldmap.ChunkScanSnapshotEntry
 import ch.oliverlanz.memento.domain.worldmap.DominantStoneEffectSignal
 import ch.oliverlanz.memento.domain.worldmap.DominantStoneSignal
 import ch.oliverlanz.memento.domain.worldmap.WorldMapService
-import ch.oliverlanz.memento.infrastructure.async.GlobalAsyncExclusionGate
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import java.util.concurrent.Callable
@@ -55,6 +54,8 @@ class RenewalProjection {
     }
 
     private var worldMapService: WorldMapService? = null
+    private var projectionCycleDriver: ProjectionCycleDriver = NoOpProjectionCycleDriver
+    private var projectionExecutionStrategy: ProjectionExecutionStrategy = GlobalGateProjectionExecutionStrategy
 
     private val stableListeners = CopyOnWriteArrayList<RenewalProjectionStableListener>()
 
@@ -111,7 +112,17 @@ class RenewalProjection {
         val materializedAffectedRegionCount: Int,
         val materializedContextRegionCount: Int,
         val fullSnapshotRecoveryUsed: Boolean,
+        val processedAffectedRegionWindow: List<RegionKey>,
+        val overflowRemainder: List<RegionKey>,
     )
+
+    fun setProjectionCycleDriver(driver: ProjectionCycleDriver?) {
+        projectionCycleDriver = driver ?: NoOpProjectionCycleDriver
+    }
+
+    fun setProjectionExecutionStrategy(strategy: ProjectionExecutionStrategy?) {
+        projectionExecutionStrategy = strategy ?: GlobalGateProjectionExecutionStrategy
+    }
 
     fun attach(service: WorldMapService) {
         worldMapService = service
@@ -285,22 +296,21 @@ class RenewalProjection {
             else -> sourceDirtyRegions.toList().sortedWith(regionOrder())
         }
 
-        val submit = GlobalAsyncExclusionGate.submitIfIdle(
+        val submit = projectionExecutionStrategy.submit(
             concept = MementoConcept.PROJECTION,
             owner = "renewal-projection",
-        ) {
-            Callable {
+            task = Callable {
                 computeCandidateView(
                     generation = generation,
                     sourceSnapshotByKey = sourceSeed,
                     sourceDirtySeed = dirtySeed,
                     fullSnapshotRecovery = cacheInvalidationRequested || scanRecomputeRequested,
                 )
-            }
-        }
+            },
+        )
 
         when (submit) {
-            is GlobalAsyncExclusionGate.SubmitResult.Busy -> {
+            is ProjectionExecutionStrategy.SubmitResult.Busy -> {
                 blockedOnGate = true
                 MementoLog.debug(
                     MementoConcept.PROJECTION,
@@ -311,7 +321,7 @@ class RenewalProjection {
                 )
             }
 
-            is GlobalAsyncExclusionGate.SubmitResult.Accepted -> {
+            is ProjectionExecutionStrategy.SubmitResult.Accepted -> {
                 generationHead = generation
                 blockedOnGate = false
                 supersededDuringInFlight = false
@@ -321,12 +331,28 @@ class RenewalProjection {
                 sourceDirtyRegions.clear()
                 dirtySinceMs = null
 
+                val startedAtMs = System.currentTimeMillis()
+
                 inFlight = InFlightJob(
                     generation = generation,
                     reason = reason,
-                    startedAtMs = System.currentTimeMillis(),
+                    startedAtMs = startedAtMs,
                     future = submit.future,
                 )
+
+                try {
+                    projectionCycleDriver.onDispatchStart(
+                        ProjectionDispatchStart(
+                            generation = generation,
+                            reason = reason.name,
+                            sourceDirtySeed = dirtySeed,
+                            fullSnapshotRecovery = reason == TriggerReason.CACHE_INVALIDATION || reason == TriggerReason.SCAN_COMPLETED,
+                            startedAtMs = startedAtMs,
+                        )
+                    )
+                } catch (t: Throwable) {
+                    MementoLog.error(MementoConcept.PROJECTION, "projection cycle driver failed at dispatch-start", t)
+                }
 
                 MementoLog.debug(
                     MementoConcept.PROJECTION,
@@ -422,6 +448,28 @@ class RenewalProjection {
         )
         publishedView = committed
 
+        if (result.overflowRemainder.isNotEmpty()) {
+            sourceDirtyRegions.addAll(result.overflowRemainder)
+            if (dirtySinceMs == null) {
+                dirtySinceMs = System.currentTimeMillis()
+            }
+        }
+
+        try {
+            projectionCycleDriver.onCommitCompleted(
+                ProjectionCommitCompleted(
+                    generation = committed.generation,
+                    reason = job.reason.name,
+                    durationMs = durationMs,
+                    processedAffectedRegionWindow = result.processedAffectedRegionWindow,
+                    overflowRemainder = result.overflowRemainder,
+                    committedView = committed,
+                )
+            )
+        } catch (t: Throwable) {
+            MementoLog.error(MementoConcept.PROJECTION, "projection cycle driver failed at commit-completed", t)
+        }
+
         supersededDuringInFlight = false
         blockedOnGate = false
 
@@ -474,6 +522,8 @@ class RenewalProjection {
                 materializedAffectedRegionCount = sourceDirty.size,
                 materializedContextRegionCount = 0,
                 fullSnapshotRecoveryUsed = fullSnapshotRecovery,
+                processedAffectedRegionWindow = emptyList(),
+                overflowRemainder = emptyList(),
             )
         }
 
@@ -486,6 +536,8 @@ class RenewalProjection {
                 materializedAffectedRegionCount = 0,
                 materializedContextRegionCount = 0,
                 fullSnapshotRecoveryUsed = fullSnapshotRecovery,
+                processedAffectedRegionWindow = emptyList(),
+                overflowRemainder = emptyList(),
             )
         }
 
@@ -507,6 +559,10 @@ class RenewalProjection {
         val affected = affectedAll
             .take(MementoConstants.MEMENTO_RENEWAL_MAX_AFFECTED_REGIONS_PER_DISPATCH)
             .toSortedSet(regionOrder())
+
+        val overflowRemainder = affectedAll
+            .drop(affected.size)
+            .toList()
 
         val clearTargets = linkedSetOf<RegionKey>().apply {
             addAll(deletedDirty)
@@ -637,6 +693,8 @@ class RenewalProjection {
             materializedAffectedRegionCount = clearTargets.size,
             materializedContextRegionCount = contextOnly.size,
             fullSnapshotRecoveryUsed = fullSnapshotRecovery,
+            processedAffectedRegionWindow = affected.toList(),
+            overflowRemainder = overflowRemainder,
         )
     }
 

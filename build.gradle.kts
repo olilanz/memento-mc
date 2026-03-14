@@ -55,6 +55,8 @@ dependencies {
     modImplementation("net.fabricmc:fabric-loader:$loaderVersionValue")
     modImplementation("net.fabricmc:fabric-language-kotlin:$kotlinLoaderVersionValue")
     modImplementation("net.fabricmc.fabric-api:fabric-api:$fabricVersionValue")
+
+    testImplementation(kotlin("test"))
 }
 
 tasks.processResources {
