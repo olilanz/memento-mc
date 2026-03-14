@@ -19,7 +19,7 @@ import ch.oliverlanz.memento.infrastructure.observability.MementoLog
  * - StoneMapService provides dominance projection consumed by renewal derivation.
  * - RenewalTracker owns RenewalBatch lifecycle and state transitions.
  */
-object WitherstoneRenewalBridge {
+object WitherstoneRenewalEventSubscriber {
     private var attached: Boolean = false
 
     fun attach() {

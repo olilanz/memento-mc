@@ -18,7 +18,7 @@ import java.nio.file.Path
  * - No API probing and no fallback paths.
  * - Missing/unreadable folders/files are logged and skipped.
  */
-class RegionDiscovery {
+internal class RegionDiscovery {
 
     fun discover(server: MinecraftServer, worlds: List<RegistryKey<World>>): WorldDiscoveryPlan {
         val root = server.getSavePath(WorldSavePath.ROOT)

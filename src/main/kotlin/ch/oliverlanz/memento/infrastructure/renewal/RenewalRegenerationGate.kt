@@ -28,7 +28,7 @@ import java.util.concurrent.ConcurrentHashMap
  *  - No domain state is advanced off-thread
  *  - Regeneration is acknowledged only via tickThreadProcess()
  */
-object RenewalRegenerationBridge {
+object RenewalRegenerationGate {
 
     private const val REGEN_ACK_SAMPLE_SIZE = 5
 

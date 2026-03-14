@@ -2,7 +2,6 @@ package ch.oliverlanz.memento.infrastructure.worldscan
 
 import ch.oliverlanz.memento.MementoConstants
 import ch.oliverlanz.memento.domain.renewal.election.RenewalElection
-import ch.oliverlanz.memento.domain.renewal.election.RenewalRankedElectionEntry
 import ch.oliverlanz.memento.domain.renewal.projection.RegionKey
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateAction
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCommittedSnapshot
@@ -56,21 +55,21 @@ object MementoCsvWriter {
             deterministicTransactionId = "csv-projected-g${projectionSnapshot.generation}",
             suppressAmbientChunkStrategy = false,
         )
-        val rankedElection = RenewalElection.asContinuousRankedEntries(election)
-        val projectedRankedElection = RenewalElection.asContinuousRankedEntries(projectedElection)
+        val rankedElection = RenewalElection.asRankedCandidates(election)
+        val projectedRankedElection = RenewalElection.asRankedCandidates(projectedElection)
 
         val byRegion = rankedElection
-            .filter { it.action == RenewalCandidateAction.REGION_PRUNE }
-            .associateBy { keyOfRegion(it.worldKey, it.regionX, it.regionZ) }
+            .filter { it.id.action == RenewalCandidateAction.REGION_PRUNE }
+            .associateBy { keyOfRegion(it.id.worldKey, it.id.regionX, it.id.regionZ) }
         val byChunk = rankedElection
-            .filter { it.action == RenewalCandidateAction.CHUNK_RENEW }
-            .associateBy { keyOfChunk(it.worldKey, it.chunkX, it.chunkZ) }
+            .filter { it.id.action == RenewalCandidateAction.CHUNK_RENEW }
+            .associateBy { keyOfChunk(it.id.worldKey, it.id.chunkX, it.id.chunkZ) }
         val projectedRankByRegion = projectedRankedElection
-            .filter { it.action == RenewalCandidateAction.REGION_PRUNE }
-            .associate { keyOfRegion(it.worldKey, it.regionX, it.regionZ) to it.rank }
+            .filter { it.id.action == RenewalCandidateAction.REGION_PRUNE }
+            .associate { keyOfRegion(it.id.worldKey, it.id.regionX, it.id.regionZ) to it.rank }
         val projectedRankByChunk = projectedRankedElection
-            .filter { it.action == RenewalCandidateAction.CHUNK_RENEW }
-            .associate { keyOfChunk(it.worldKey, it.chunkX, it.chunkZ) to it.rank }
+            .filter { it.id.action == RenewalCandidateAction.CHUNK_RENEW }
+            .associate { keyOfChunk(it.id.worldKey, it.id.chunkX, it.id.chunkZ) to it.rank }
 
         val sb = StringBuilder()
         // Baseline world snapshot fields (unchanged, no removals) + additive projection/election fields.
@@ -102,7 +101,7 @@ object MementoCsvWriter {
                 val electedRegion = byRegion[keyOfRegion(dim, key.regionX, key.regionZ)]
                 val electedChunk = byChunk[keyOfChunk(dim, key.chunkX, key.chunkZ)]
                 val elected = electedRegion ?: electedChunk
-                val action = elected?.action?.name ?: "NONE"
+                val action = elected?.id?.action?.name ?: "NONE"
                 val projectedRank =
                     projectedRankByRegion[keyOfRegion(dim, key.regionX, key.regionZ)]
                         ?: projectedRankByChunk[keyOfChunk(dim, key.chunkX, key.chunkZ)]

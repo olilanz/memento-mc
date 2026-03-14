@@ -5,6 +5,7 @@ import ch.oliverlanz.memento.domain.renewal.projection.AmbientRenewalStrategy
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateAction
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateId
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalElectionInput
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalRankedCandidate
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
@@ -14,16 +15,6 @@ data class ElectionResult(
     val transactionId: String,
     val electedRegions: List<RegionKey>,
     val electedChunks: List<ChunkKey>,
-)
-
-data class RenewalRankedElectionEntry(
-    val action: RenewalCandidateAction,
-    val rank: Int,
-    val worldKey: String,
-    val regionX: Int? = null,
-    val regionZ: Int? = null,
-    val chunkX: Int? = null,
-    val chunkZ: Int? = null,
 )
 
 /**
@@ -111,12 +102,12 @@ object RenewalElection {
         )
     }
 
-    fun asRankedCandidates(result: ElectionResult): List<ch.oliverlanz.memento.domain.renewal.projection.RenewalRankedCandidate> {
-        val out = mutableListOf<ch.oliverlanz.memento.domain.renewal.projection.RenewalRankedCandidate>()
+    fun asRankedCandidates(result: ElectionResult): List<RenewalRankedCandidate> {
+        val out = mutableListOf<RenewalRankedCandidate>()
         var rank = 1
 
         result.electedRegions.forEach { region ->
-            out += ch.oliverlanz.memento.domain.renewal.projection.RenewalRankedCandidate(
+            out += RenewalRankedCandidate(
                 id = RenewalCandidateId(
                     action = RenewalCandidateAction.REGION_PRUNE,
                     worldKey = region.worldId,
@@ -129,7 +120,7 @@ object RenewalElection {
         }
 
         result.electedChunks.forEach { chunk ->
-            out += ch.oliverlanz.memento.domain.renewal.projection.RenewalRankedCandidate(
+            out += RenewalRankedCandidate(
                 id = RenewalCandidateId(
                     action = RenewalCandidateAction.CHUNK_RENEW,
                     worldKey = chunk.world.value.toString(),
@@ -137,35 +128,6 @@ object RenewalElection {
                     chunkZ = chunk.chunkZ,
                 ),
                 rank = rank,
-            )
-            rank++
-        }
-
-        return out
-    }
-
-    fun asContinuousRankedEntries(result: ElectionResult): List<RenewalRankedElectionEntry> {
-        val out = mutableListOf<RenewalRankedElectionEntry>()
-        var rank = 1
-
-        result.electedRegions.forEach { region ->
-            out += RenewalRankedElectionEntry(
-                action = RenewalCandidateAction.REGION_PRUNE,
-                rank = rank,
-                worldKey = region.worldId,
-                regionX = region.regionX,
-                regionZ = region.regionZ,
-            )
-            rank++
-        }
-
-        result.electedChunks.forEach { chunk ->
-            out += RenewalRankedElectionEntry(
-                action = RenewalCandidateAction.CHUNK_RENEW,
-                rank = rank,
-                worldKey = chunk.world.value.toString(),
-                chunkX = chunk.chunkX,
-                chunkZ = chunk.chunkZ,
             )
             rank++
         }

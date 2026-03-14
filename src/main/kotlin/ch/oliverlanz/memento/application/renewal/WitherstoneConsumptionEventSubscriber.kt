@@ -14,7 +14,7 @@ import ch.oliverlanz.memento.infrastructure.observability.MementoLog
  * Naming invariant (locked):
  * - batchName == witherstoneName (StoneAuthority is the authority for batch naming)
  */
-object WitherstoneConsumptionBridge {
+object WitherstoneConsumptionEventSubscriber {
 
     fun onRenewalEvent(e: RenewalEvent) {
         if (e !is BatchCompleted) return

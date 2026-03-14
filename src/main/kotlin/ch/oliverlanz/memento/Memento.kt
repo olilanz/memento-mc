@@ -6,8 +6,8 @@ import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadDriver
 import ch.oliverlanz.memento.application.renewal.RenewalChunkLoadProvider
 import ch.oliverlanz.memento.application.renewal.RenewalInitialObserver
 import ch.oliverlanz.memento.application.renewal.AmbientRenewalHandler
-import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalBridge
-import ch.oliverlanz.memento.application.renewal.WitherstoneConsumptionBridge
+import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalEventSubscriber
+import ch.oliverlanz.memento.application.renewal.WitherstoneConsumptionEventSubscriber
 import ch.oliverlanz.memento.application.stone.StoneMaturityTimeBridge
 import ch.oliverlanz.memento.application.visualization.EffectsHost
 import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
@@ -19,12 +19,12 @@ import ch.oliverlanz.memento.domain.renewal.projection.WorldMapFactAppliedListen
 import ch.oliverlanz.memento.domain.renewal.RenewalBatchLifecycleTransition
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.renewal.RenewalTracker
-import ch.oliverlanz.memento.domain.renewal.RenewalChunkObservationBridge
+import ch.oliverlanz.memento.domain.renewal.RenewalChunkObservationAdapter
 import ch.oliverlanz.memento.domain.renewal.RenewalTrackerLogging
 import ch.oliverlanz.memento.domain.events.StoneLifecycleTrigger
 import ch.oliverlanz.memento.domain.stones.StoneAuthority
 import ch.oliverlanz.memento.domain.stones.StoneAuthorityWiring
-import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
+import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationGate
 import ch.oliverlanz.memento.infrastructure.pruning.WorldPruningService
 import ch.oliverlanz.memento.infrastructure.async.GlobalAsyncExclusionGate
 import ch.oliverlanz.memento.infrastructure.pulse.PulseCadence
@@ -90,7 +90,7 @@ object Memento : ModInitializer {
     }
 
     private val onLowPulse: (PulseClock) -> Unit = {
-        RenewalRegenerationBridge.tickThreadProcess()
+        RenewalRegenerationGate.tickThreadProcess()
         chunkLoadDriver?.logStateOnLowPulse()
     }
 
@@ -106,8 +106,8 @@ object Memento : ModInitializer {
     private val renewalEventListener: (RenewalEvent) -> Unit = { e ->
         renewalInitialObserver?.onRenewalEvent(e)
         renewalChunkLoadProvider?.onRenewalEvent(e)
-        RenewalRegenerationBridge.onRenewalEvent(e)
-        WitherstoneConsumptionBridge.onRenewalEvent(e)
+        RenewalRegenerationGate.onRenewalEvent(e)
+        WitherstoneConsumptionEventSubscriber.onRenewalEvent(e)
 
         if (e is RenewalBatchLifecycleTransition) {
             effectsHost?.onRenewalEvent(e)
@@ -175,14 +175,14 @@ object Memento : ModInitializer {
                 // Single fan-out point for chunk availability → domain renewal tracker
                 it.registerConsumer(object : ChunkAvailabilityListener {
                     override fun onChunkMetadata(world: ServerWorld, fact: ChunkMetadataFact) {
-                        RenewalChunkObservationBridge.onChunkLoaded(
+                        RenewalChunkObservationAdapter.onChunkLoaded(
                             world.registryKey,
                             ChunkPos(fact.key.chunkX, fact.key.chunkZ)
                         )
                     }
 
                     override fun onChunkUnloaded(world: ServerWorld, pos: ChunkPos) {
-                        RenewalChunkObservationBridge.onChunkUnloaded(world.registryKey, pos)
+                        RenewalChunkObservationAdapter.onChunkUnloaded(world.registryKey, pos)
                     }
                 })
             }
@@ -219,7 +219,7 @@ object Memento : ModInitializer {
             // Fan out domain events
             RenewalTracker.subscribe(renewalEventListener)
 
-            WitherstoneRenewalBridge.attach()
+            WitherstoneRenewalEventSubscriber.attach()
             CommandHandlers.attachStoneNameSuggestions()
             StoneAuthorityWiring.onServerStarted(server)
 
@@ -266,11 +266,11 @@ object Memento : ModInitializer {
             ambientRenewalHandler?.detach()
             ambientRenewalHandler = null
 
-            RenewalRegenerationBridge.clear()
+            RenewalRegenerationGate.clear()
             RenewalTrackerLogging.detach()
 
             StoneMaturityTimeBridge.detach()
-            WitherstoneRenewalBridge.detach()
+            WitherstoneRenewalEventSubscriber.detach()
             CommandHandlers.detachStoneNameSuggestions()
             StoneAuthority.attachWorldFactPublisher(null)
             StoneAuthorityWiring.onServerStopping()

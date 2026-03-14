@@ -1,7 +1,7 @@
 
 package ch.oliverlanz.memento.mixin
 
-import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationBridge
+import ch.oliverlanz.memento.infrastructure.renewal.RenewalRegenerationGate
 import net.minecraft.nbt.NbtCompound
 import net.minecraft.registry.RegistryKey
 import net.minecraft.util.math.ChunkPos
@@ -34,8 +34,8 @@ abstract class VersionedChunkStorageMixin {
         @Suppress("UNCHECKED_CAST")
         val dimensionKey = getStorageKey().dimension() as RegistryKey<World>
 
-        if (RenewalRegenerationBridge.shouldRegenerate(dimensionKey, chunkPos)) {
-            RenewalRegenerationBridge.recordRegenTriggered(dimensionKey, chunkPos)
+        if (RenewalRegenerationGate.shouldRegenerate(dimensionKey, chunkPos)) {
+            RenewalRegenerationGate.recordRegenTriggered(dimensionKey, chunkPos)
             cir.returnValue = CompletableFuture.completedFuture(Optional.empty())
         }
     }

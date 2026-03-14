@@ -11,7 +11,7 @@ import net.minecraft.world.World
  * - We trust the server's loaded worlds as the authoritative set.
  * - Ordering is deterministic.
  */
-class WorldDiscovery {
+internal class WorldDiscovery {
 
     fun discover(server: MinecraftServer): List<RegistryKey<World>> {
         return server.worlds

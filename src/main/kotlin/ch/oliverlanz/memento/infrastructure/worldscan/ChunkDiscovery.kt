@@ -18,7 +18,7 @@ import java.nio.file.Path
  * - Parsing chunk payloads (NBT)
  * - Using region timestamps
  */
-class ChunkDiscovery {
+internal class ChunkDiscovery {
 
 
     fun discover(plan: WorldDiscoveryPlan): WorldDiscoveryPlan {
