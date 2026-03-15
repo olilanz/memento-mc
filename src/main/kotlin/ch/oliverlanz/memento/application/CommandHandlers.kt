@@ -28,6 +28,10 @@ import ch.oliverlanz.memento.domain.stones.StoneView
 import ch.oliverlanz.memento.domain.stones.Witherstone
 import ch.oliverlanz.memento.domain.stones.WitherstoneState
 import ch.oliverlanz.memento.domain.stones.WitherstoneView
+import ch.oliverlanz.memento.domain.worldmap.WorldAnalysisLifecycleBoundary
+import ch.oliverlanz.memento.domain.worldmap.WorldAnalysisReadiness
+import ch.oliverlanz.memento.domain.worldmap.WorldAnalysisReadinessInput
+import ch.oliverlanz.memento.domain.worldmap.WorldAnalysisReadinessView
 import net.minecraft.entity.attribute.EntityAttributes
 import net.minecraft.entity.ItemEntity
 import net.minecraft.registry.Registries
@@ -178,6 +182,7 @@ object CommandHandlers {
 
     fun explainWorld(source: ServerCommandSource): Int {
         return try {
+            worldScanner?.ensureDiscoveryUniverse()
             val lines = formatExplainWorld(source)
             sendCompactReport(
                 source = source,
@@ -496,6 +501,7 @@ object CommandHandlers {
         }
 
         return try {
+            scanner.ensureDiscoveryUniverse()
             scanner.startActiveScan(source)
         } catch (e: Exception) {
             MementoLog.error(MementoConcept.OPERATOR, "command=scan failed", e)
@@ -507,8 +513,18 @@ object CommandHandlers {
     fun csv(source: ServerCommandSource): Int {
         MementoLog.info(MementoConcept.OPERATOR, "command=csv by={}", source.name)
 
-        val scanner = worldScanner
-        if (scanner == null) {
+        val readiness = worldAnalysisReadinessView(ensureDiscovery = true)
+        if (readiness == null) {
+            source.sendError(Text.literal("World analysis is not ready yet."))
+            return 0
+        }
+
+        if (!isReadinessAtLeastScanned(readiness.readiness)) {
+            source.sendError(Text.literal("[Memento] worldview export is unavailable before scan readiness reaches SCANNED."))
+            return 0
+        }
+
+        val scanner = worldScanner ?: run {
             source.sendError(Text.literal("Scanner is not ready yet."))
             return 0
         }
@@ -1041,22 +1057,21 @@ object CommandHandlers {
 
     private fun formatExplainWorld(source: ServerCommandSource): List<String> {
         val lines = mutableListOf("World explanation")
-        val scannerStatus = worldScanner?.statusView()
+        val readinessView = worldAnalysisReadinessView(ensureDiscovery = false)
         val projection = renewalProjection
         val projectionStatus = projection?.statusView()
         val snapshot = projection?.committedSnapshotOrNull()
 
-        if (scannerStatus == null) {
+        if (readinessView == null) {
             lines += "World knowledge completeness: scanner unavailable"
         } else {
-            val total = scannerStatus.worldMapTotal
-            val scanned = scannerStatus.worldMapScanned
-            val missing = scannerStatus.worldMapMissing
-            lines += if (total > 0) {
-                "World knowledge completeness: $scanned/$total known, $missing uncertain"
+            lines += if (readinessView.discoveredUniverseCount > 0) {
+                "World knowledge completeness: ${readinessView.knownCount}/${readinessView.discoveredUniverseCount} known, ${readinessView.uncertainCount} uncertain"
             } else {
                 "World knowledge completeness: no world facts collected yet"
             }
+            lines += "World readiness: ${readinessView.readiness.name.lowercase(Locale.ROOT)}"
+            lines += "World completeness: ${if (readinessView.complete) "complete" else "incomplete"}"
         }
 
         val candidates = snapshot?.rankedCandidates.orEmpty()
@@ -1075,6 +1090,36 @@ object CommandHandlers {
         lines += "Projection health: $health"
 
         return lines
+    }
+
+    private fun worldAnalysisReadinessView(ensureDiscovery: Boolean): WorldAnalysisReadinessView? {
+        val scanner = worldScanner ?: return null
+        if (ensureDiscovery) {
+            scanner.ensureDiscoveryUniverse()
+        }
+
+        val status = scanner.statusView()
+        val scanComplete = scanner.hasInitialScanCompleted()
+        val readiness = when {
+            status.worldMapTotal <= 0 -> WorldAnalysisReadiness.UNINITIALIZED
+            scanComplete && renewalProjection?.committedSnapshotOrNull() != null -> WorldAnalysisReadiness.ANALYZED
+            scanComplete -> WorldAnalysisReadiness.SCANNED
+            else -> WorldAnalysisReadiness.DISCOVERED
+        }
+
+        return WorldAnalysisLifecycleBoundary.evaluate(
+            WorldAnalysisReadinessInput(
+                discoveredUniverseCount = status.worldMapTotal,
+                knownCount = status.worldMapScanned,
+                uncertainCount = status.worldMapMissing,
+                scanComplete = scanComplete,
+                readiness = readiness,
+            )
+        )
+    }
+
+    private fun isReadinessAtLeastScanned(readiness: WorldAnalysisReadiness): Boolean {
+        return readiness == WorldAnalysisReadiness.SCANNED || readiness == WorldAnalysisReadiness.ANALYZED
     }
 
     private fun formatStoneInspect(source: ServerCommandSource, stone: Stone): List<String> {

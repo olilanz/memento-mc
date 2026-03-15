@@ -45,6 +45,11 @@ import net.minecraft.util.math.ChunkPos
  */
 class WorldScanner : ChunkAvailabilityListener {
 
+    data class DiscoveryStatusView(
+        val discoveredUniverseCount: Int,
+        val newlyEnsuredChunkRecords: Int,
+    )
+
     data class StatusView(
         val active: Boolean,
         val plannedChunks: Int,
@@ -349,30 +354,7 @@ class WorldScanner : ChunkAvailabilityListener {
         }
 
         // (Re)discover existing chunks and ensure they exist in the in-memory map.
-        val scanMap = ensureSubstrate()
-        val worlds = WorldDiscovery().discover(srv)
-        val discoveredRegions = RegionDiscovery().discover(srv, worlds)
-        val discoveredChunks = ChunkDiscovery().discover(discoveredRegions)
-
-        var ensured = 0
-        discoveredChunks.worlds.forEach { world ->
-            world.regions.forEach { region ->
-                region.chunks.forEach { slot ->
-                    val chunkX = region.x * 32 + slot.localX
-                    val chunkZ = region.z * 32 + slot.localZ
-                    val key =
-                            ChunkKey(
-                                    world = world.world,
-                                    regionX = region.x,
-                                    regionZ = region.z,
-                                    chunkX = chunkX,
-                                    chunkZ = chunkZ,
-                            )
-                    scanMap.ensureExists(key)
-                    ensured++
-                }
-            }
-        }
+        val (scanMap, discoveredChunks, ensured) = ensureDiscoveryUniverseInternal(srv)
 
         if (ensured == 0 && scanMap.totalChunks() == 0) {
             source.sendFeedback(
@@ -431,6 +413,59 @@ class WorldScanner : ChunkAvailabilityListener {
                 false
         )
         return 1
+    }
+
+    /**
+     * Discovery-only entrypoint used by command-layer readiness checks.
+     *
+     * This method does not start active scan mode.
+     */
+    fun ensureDiscoveryUniverse(): DiscoveryStatusView {
+        val srv = server ?: return DiscoveryStatusView(discoveredUniverseCount = 0, newlyEnsuredChunkRecords = 0)
+        val (scanMap, _, ensured) = ensureDiscoveryUniverseInternal(srv)
+        return DiscoveryStatusView(
+            discoveredUniverseCount = scanMap.totalChunks(),
+            newlyEnsuredChunkRecords = ensured,
+        )
+    }
+
+    private data class DiscoveryInternal(
+        val map: WorldMementoMap,
+        val discoveredChunks: WorldDiscoveryPlan,
+        val ensured: Int,
+    )
+
+    private fun ensureDiscoveryUniverseInternal(srv: MinecraftServer): DiscoveryInternal {
+        val scanMap = ensureSubstrate()
+        val worlds = WorldDiscovery().discover(srv)
+        val discoveredRegions = RegionDiscovery().discover(srv, worlds)
+        val discoveredChunks = ChunkDiscovery().discover(discoveredRegions)
+
+        var ensured = 0
+        discoveredChunks.worlds.forEach { world ->
+            world.regions.forEach { region ->
+                region.chunks.forEach { slot ->
+                    val chunkX = region.x * 32 + slot.localX
+                    val chunkZ = region.z * 32 + slot.localZ
+                    val key =
+                        ChunkKey(
+                            world = world.world,
+                            regionX = region.x,
+                            regionZ = region.z,
+                            chunkX = chunkX,
+                            chunkZ = chunkZ,
+                        )
+                    scanMap.ensureExists(key)
+                    ensured++
+                }
+            }
+        }
+
+        return DiscoveryInternal(
+            map = scanMap,
+            discoveredChunks = discoveredChunks,
+            ensured = ensured,
+        )
     }
 
     private fun maybeFinalizeActiveScan(map: WorldMementoMap) {
