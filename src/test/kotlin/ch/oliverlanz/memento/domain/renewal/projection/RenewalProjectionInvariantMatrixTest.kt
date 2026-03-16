@@ -30,6 +30,33 @@ import kotlin.test.assertTrue
 class RenewalProjectionInvariantMatrixTest {
 
     @Test
+    fun projection_results_are_subset_of_discovered_universe() {
+        val world = WorldFixtureBuilder.overworld()
+        val model = TestWorldModel.build {
+            chunk(world = world, chunkX = 0, chunkZ = 0, inhabitedTimeTicks = 5L, scanTick = 1L)
+            chunk(world = world, chunkX = 1, chunkZ = 0, inhabitedTimeTicks = 0L, scanTick = 2L)
+            chunk(world = world, chunkX = 64, chunkZ = 0, inhabitedTimeTicks = 0L, scanTick = 3L)
+        }
+
+        val harness = DomainTestHarness()
+        harness.ingest(model)
+        harness.runUntilIdle()
+
+        val committed = harness.committedView()
+        assertNotNull(committed)
+
+        val discoveredUniverse = model.chunks.map { it.key }.toSet()
+        val projectionKeys = committed.chunkDerivationByChunk.keys
+        val rankedChunkKeys = committed.rankedCandidates
+            .filter { it.id.action == RenewalCandidateAction.CHUNK_RENEW }
+            .mapNotNull { it.id.toChunkKeyOrNull() }
+            .toSet()
+
+        assertTrue(projectionKeys.all { it in discoveredUniverse })
+        assertTrue(rankedChunkKeys.all { it in discoveredUniverse })
+    }
+
+    @Test
     fun protection_invariant_protected_region_is_not_elected_for_region_purge() {
         val world = WorldFixtureBuilder.overworld()
 

@@ -12,6 +12,30 @@ import net.minecraft.world.World
 class WorldMementoMapContainmentTest {
 
     @Test
+    fun discovered_surface_includes_unscanned_chunks_while_scanned_surface_excludes_them() {
+        val map = WorldMementoMap()
+        val world = overworld()
+
+        val discoveredOnly = key(world, 10, 10)
+        val scanned = key(world, 11, 10)
+
+        map.ensureExists(discoveredOnly)
+        map.markScanned(
+            key = scanned,
+            scanTick = 33L,
+            provenance = ChunkScanProvenance.FILE_PRIMARY,
+        )
+
+        val discoveredUniverse = map.discoveredUniverseKeys().toSet()
+        val scannedSubset = map.snapshot().map { it.key }.toSet()
+
+        assertEquals(setOf(discoveredOnly, scanned), discoveredUniverse)
+        assertEquals(setOf(scanned), scannedSubset)
+        assertTrue(discoveredOnly in discoveredUniverse)
+        assertFalse(discoveredOnly in scannedSubset)
+    }
+
+    @Test
     fun scanned_subset_and_metadata_subset_remain_within_discovered_universe() {
         val map = WorldMementoMap()
         val world = overworld()
@@ -92,4 +116,3 @@ class WorldMementoMapContainmentTest {
             chunkZ = chunkZ,
         )
 }
-

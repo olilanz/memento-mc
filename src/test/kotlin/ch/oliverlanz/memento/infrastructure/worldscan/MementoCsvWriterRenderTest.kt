@@ -15,12 +15,68 @@ import ch.oliverlanz.memento.domain.worldmap.DominantStoneSignal
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import net.minecraft.registry.RegistryKey
 import net.minecraft.registry.RegistryKeys
 import net.minecraft.util.Identifier
 import net.minecraft.world.World
 
 class MementoCsvWriterRenderTest {
+
+    @Test
+    fun render_represents_unresolved_and_zero_inhabitance_without_inference_and_without_synthetic_non_existing_rows() {
+        val world = RegistryKey.of(RegistryKeys.WORLD, Identifier.of("minecraft:overworld"))
+
+        val unresolved = chunkKey(world, 0, 0)
+        val zero = chunkKey(world, 1, 0)
+
+        val worldSnapshot = listOf(
+            unresolvedEntry(unresolved, reason = ch.oliverlanz.memento.domain.worldmap.ChunkScanUnresolvedReason.FILE_IO_ERROR),
+            snapshotEntry(zero, inhabited = 0L),
+        )
+
+        val committed = RenewalCommittedSnapshot(
+            generation = 9L,
+            chunkDerivationByChunk = mapOf(
+                unresolved to RenewalChunkDerivation(memorable = false),
+                zero to RenewalChunkDerivation(memorable = false),
+            ),
+            regionForgettableByRegion = emptyMap(),
+            rankedCandidates = emptyList(),
+        )
+
+        val csv = MementoCsvWriter.renderOperatorWorldviewCsv(worldSnapshot, committed)
+        val lines = csv.trim().split('\n')
+        val header = lines.first()
+        val rows = lines.drop(1).map { parseRow(header, it) }
+
+        assertEquals(2, rows.size)
+
+        val unresolvedRow = rows.first { it.getValue("chunkX") == "0" && it.getValue("chunkZ") == "0" }
+        val zeroRow = rows.first { it.getValue("chunkX") == "1" && it.getValue("chunkZ") == "0" }
+
+        // scanned + unresolved is represented explicitly, with no inhabited inference.
+        assertEquals("FILE_IO_ERROR", unresolvedRow.getValue("status"))
+        assertEquals("", unresolvedRow.getValue("inhabitedTicks"))
+
+        // scanned + zero inhabitance is represented as explicit 0 and OK status.
+        assertEquals("0", zeroRow.getValue("inhabitedTicks"))
+        assertEquals("OK", zeroRow.getValue("status"))
+
+        // csv keys are contained in scanned subset and therefore in discovered universe.
+        val scannedKeys = worldSnapshot.map { it.key }.toSet()
+        val exportedKeys = rows.map { row ->
+            chunkKey(
+                world = world,
+                x = row.getValue("regionX").toInt() * 32 + row.getValue("chunkX").toInt(),
+                z = row.getValue("regionZ").toInt() * 32 + row.getValue("chunkZ").toInt(),
+            )
+        }.toSet()
+        assertTrue(exportedKeys.all { it in scannedKeys })
+
+        // non-existing chunks must not be synthesized into csv output.
+        assertFalse(rows.any { it.getValue("chunkX") == "2" && it.getValue("chunkZ") == "0" })
+    }
 
     @Test
     fun render_preserves_locked_schema_and_row_universe_without_synthetic_rows() {
@@ -134,5 +190,19 @@ class MementoCsvWriterRenderTest {
             unresolvedReason = null,
         )
     }
-}
 
+    private fun unresolvedEntry(
+        key: ChunkKey,
+        reason: ch.oliverlanz.memento.domain.worldmap.ChunkScanUnresolvedReason,
+    ): ChunkScanSnapshotEntry {
+        return ChunkScanSnapshotEntry(
+            key = key,
+            signals = null,
+            dominantStone = DominantStoneSignal.NONE,
+            dominantStoneEffect = DominantStoneEffectSignal.NONE,
+            scanTick = 1L,
+            provenance = ChunkScanProvenance.FILE_PRIMARY,
+            unresolvedReason = reason,
+        )
+    }
+}
