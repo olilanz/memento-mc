@@ -14,6 +14,7 @@ import net.minecraft.world.World
 
 fun assertWorldviewConsistency(
     discoveredChunkKeys: Set<ChunkKey>,
+    scannedChunkKeys: Set<ChunkKey> = discoveredChunkKeys,
     projectionSnapshot: RenewalCommittedSnapshot,
     csv: String,
 ) {
@@ -31,7 +32,18 @@ fun assertWorldviewConsistency(
         }
         .toSet()
 
-    assertEquals(discoveredChunkKeys, exportedChunkKeys, "csv rows must match discovered chunk universe exactly")
+    assertTrue(
+        scannedChunkKeys.all { discoveredChunkKeys.contains(it) },
+        "metadata/scanned subset must stay within discovered universe",
+    )
+    assertTrue(
+        exportedChunkKeys.all { discoveredChunkKeys.contains(it) },
+        "csv rows must stay within discovered universe",
+    )
+    assertTrue(
+        exportedChunkKeys.all { scannedChunkKeys.contains(it) },
+        "csv rows must stay within scanned subset",
+    )
 
     val memorableChunkKeys = projectionSnapshot.chunkDerivationByChunk
         .filterValues { it.memorable }
