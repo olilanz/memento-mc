@@ -12,6 +12,20 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 
+/**
+ * Final determinism lock for the renewal domain pipeline.
+ *
+ * Invariants under test:
+ * - Same fact set, different ingestion orders (baseline/reversed/shuffled) produce identical
+ *   projection worldview, ranked election output, and CSV render.
+ * - Global worldview consistency invariants remain valid after stabilization.
+ *
+ * Boundary under test:
+ * - Domain-only path (`facts -> projection -> election -> csv`).
+ *
+ * Non-goals:
+ * - Application command handlers and Minecraft runtime integration behavior.
+ */
 class RenewalProjectionShuffledIngestionEquivalenceTest {
 
     @Test
@@ -149,4 +163,3 @@ class RenewalProjectionShuffledIngestionEquivalenceTest {
         val csv: String,
     )
 }
-

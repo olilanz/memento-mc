@@ -15,6 +15,18 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
+/**
+ * Invariant matrix for renewal projection/election behavior on small worlds.
+ *
+ * Invariants under test:
+ * - Protection invariant: protected regions are never elected for region purge.
+ * - Abandonment invariant: forgettable regions are elected and rank is replicated per region row.
+ * - Mixed-region anti-purge invariant: purge remains isolated to forgettable regions.
+ * - Deterministic ordering and ranked-key boundary containment.
+ *
+ * Non-goals:
+ * - Application command flows and Minecraft runtime integration are excluded.
+ */
 class RenewalProjectionInvariantMatrixTest {
 
     @Test

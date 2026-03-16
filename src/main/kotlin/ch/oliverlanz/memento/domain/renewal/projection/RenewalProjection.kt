@@ -41,6 +41,11 @@ fun interface RenewalProjectionStableListener {
  * - Unaffected regions remain bitwise identical across commits.
  * - Election is derived exclusively from committed state.
  * - No numeric ranking surfaces exist.
+ *
+ * Non-goals:
+ * - Command-layer orchestration or execution ownership.
+ * - Minecraft runtime lifecycle ownership.
+ * - Persistence of derived projection/election state into factual world memory.
  */
 class RenewalProjection {
 

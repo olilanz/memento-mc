@@ -12,6 +12,16 @@ import net.minecraft.world.World
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
+/**
+ * Determinism contract tests for election over identical projection input.
+ *
+ * Invariants under test:
+ * - Equivalent projection input produces equivalent elected region/chunk sets.
+ * - Election behavior is stable when explicit transaction identity is fixed.
+ *
+ * Non-goals:
+ * - Projection derivation behavior and runtime execution integration.
+ */
 class RenewalElectionDeterminismFromProjectionTest {
 
     @Test
@@ -48,4 +58,3 @@ class RenewalElectionDeterminismFromProjectionTest {
         assertEquals(a.electedChunks, b.electedChunks)
     }
 }
-

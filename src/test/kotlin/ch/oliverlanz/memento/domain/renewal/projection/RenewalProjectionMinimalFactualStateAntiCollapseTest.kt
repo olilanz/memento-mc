@@ -10,6 +10,20 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
+/**
+ * Locks anti-collapse invariants for minimal factual world states.
+ *
+ * Invariants under test:
+ * - Scan-state semantics remain distinct (`nonzero`, `zero`, `unresolved`, `missing`).
+ * - CSV row universe equals discovered factual chunk universe.
+ * - Projection/election/CSV remain deterministic for equivalent fact sets.
+ *
+ * Boundary under test:
+ * - Domain projection + CSV mapping behavior only.
+ *
+ * Non-goals:
+ * - Application command behavior and Minecraft integration runtime are not covered.
+ */
 class RenewalProjectionMinimalFactualStateAntiCollapseTest {
 
     @Test

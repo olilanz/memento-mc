@@ -5,6 +5,20 @@ import net.minecraft.registry.RegistryKey
 import net.minecraft.world.World
 
 /**
+ * Renewal projection/election type contracts.
+ *
+ * These types define the boundary between derived projection state and election
+ * selection identity:
+ * - projection outputs remain derived from factual world memory,
+ * - candidate identities are stable and deterministic,
+ * - candidate-to-chunk conversion never synthesizes new world keys.
+ *
+ * Non-goals:
+ * - runtime execution orchestration,
+ * - command-layer lifecycle state,
+ * - persistence of derived renewal state.
+ */
+/**
  * Boolean projection output attached to a factual chunk key.
  */
 /**

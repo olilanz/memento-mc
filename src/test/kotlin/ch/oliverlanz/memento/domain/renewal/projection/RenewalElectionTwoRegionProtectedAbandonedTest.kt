@@ -14,6 +14,18 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
+/**
+ * Locks minimal two-region election semantics at the projection/election/CSV boundary.
+ *
+ * Invariants under test:
+ * - Protected regions are not elected for `REGION_PURGE`.
+ * - Abandoned regions are elected deterministically.
+ * - Region rank is replicated across emitted rows of the elected region only.
+ * - Same facts and ingestion order yield stable ranked candidates and CSV output.
+ *
+ * Non-goals:
+ * - Runtime command execution and Minecraft engine lifecycle are outside this scope.
+ */
 class RenewalElectionTwoRegionProtectedAbandonedTest {
 
     @Test
@@ -154,4 +166,3 @@ class RenewalElectionTwoRegionProtectedAbandonedTest {
         }
     }
 }
-

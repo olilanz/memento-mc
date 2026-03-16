@@ -9,6 +9,17 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 
+/**
+ * Locks stone-effect fact propagation invariants at the projection boundary.
+ *
+ * Invariants under test:
+ * - `LORE_PROTECT` dominance marks chunk as memorable.
+ * - `WITHER_FORGET` dominance marks explicit renewal intent.
+ * - Stone-effect facts remain factual inputs and are not re-derived in tests.
+ *
+ * Non-goals:
+ * - Command-layer behavior and Minecraft runtime integration are out of scope.
+ */
 class RenewalProjectionStoneEffectFactPropagationTest {
 
     @Test
@@ -67,4 +78,3 @@ class RenewalProjectionStoneEffectFactPropagationTest {
         assertEquals(true, derivation.explicitRenewalIntent)
     }
 }
-

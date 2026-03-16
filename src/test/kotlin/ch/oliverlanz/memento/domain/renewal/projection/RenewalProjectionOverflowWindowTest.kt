@@ -7,6 +7,17 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
+/**
+ * Projection overflow-window behavior and convergence tests.
+ *
+ * Invariants under test:
+ * - A single projection cycle respects affected-region window caps.
+ * - Overflow remainder is retained and converges over subsequent cycles.
+ * - Equivalent fact sets converge to equivalent committed worldview under order variation.
+ *
+ * Non-goals:
+ * - Runtime orchestration beyond projection-cycle boundaries.
+ */
 class RenewalProjectionOverflowWindowTest {
 
     @Test

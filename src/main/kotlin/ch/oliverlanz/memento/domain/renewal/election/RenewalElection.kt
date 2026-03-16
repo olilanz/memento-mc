@@ -21,11 +21,21 @@ data class ElectionResult(
 /**
  * Deterministic election authority over boolean projection outputs.
  *
+ * Ownership boundary:
+ * - Consumes committed projection input only.
+ * - Produces deterministic elected region/chunk sets and ranked candidates.
+ * - Does not mutate WorldMap or projection caches.
+ *
  * Election policy:
  * - region-prune candidates first in deterministic order
  * - chunk-renew candidates are derived independently from chunk-local eligibility
  * - region-first ordering is an execution policy, not a derivation dependency
  * - no numeric scoring surfaces
+ *
+ * Non-goals:
+ * - command execution orchestration,
+ * - runtime chunk lifecycle integration,
+ * - deriving projection-world facts.
  */
 object RenewalElection {
 

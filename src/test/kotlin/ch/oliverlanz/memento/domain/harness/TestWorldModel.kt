@@ -10,12 +10,16 @@ import net.minecraft.registry.RegistryKey
 import net.minecraft.world.World
 
 /**
- * Canonical scenario host for deterministic domain-harness tests.
+ * Canonical factual fixture model for deterministic renewal domain tests.
  *
  * Source-of-truth constraints:
  * - Stores only synthetic world input facts.
  * - Never stores derived projection/election outputs as source truth.
  * - Keeps world/region/chunk identity stable for deterministic replay.
+ *
+ * Determinism constraints:
+ * - Builder output ordering is canonicalized by world/region/chunk identity.
+ * - Equivalent fact sets produce stable fixture identity independent of call order.
  */
 data class TestWorldModel(
     val chunks: List<TestChunkFact>,

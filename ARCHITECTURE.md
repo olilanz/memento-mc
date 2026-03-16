@@ -501,6 +501,34 @@ Moving local policy from this document into class headers does not
 reduce force; it relocates ownership to the component that enforces the
 policy at runtime.
 
+### Testing Strategy and Verification Boundaries
+
+Testing strategy currently prioritizes deterministic validation of the
+domain layer.
+
+The active domain harness verifies the renewal data path:
+
+- factual world inputs
+- projection derivation
+- election ranking/selection
+- CSV worldview mapping
+
+Current domain-focused fixture coverage includes:
+
+- stone topology/lifecycle influence effects as projected world facts
+- world-map factual administration surfaces
+- influence projection, memorability, and forgettability behavior
+- renewal election invariants and deterministic ordering
+
+Current explicit boundary:
+
+- Application-layer command wiring and Minecraft runtime integration are
+  not yet covered by this deterministic domain harness.
+
+This boundary is intentional. It preserves high-signal deterministic
+regression protection where authority and invariants are concentrated,
+while avoiding mixed concerns between domain logic and runtime plumbing.
+
 ------------------------------------------------------------------------
 
 ## 6. Illustrative flows
