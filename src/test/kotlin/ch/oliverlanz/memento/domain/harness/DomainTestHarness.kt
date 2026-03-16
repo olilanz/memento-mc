@@ -31,6 +31,8 @@ class DomainTestHarness {
                     source = fact.source,
                     unresolvedReason = fact.unresolvedReason,
                     signals = fact.signals,
+                    dominantStone = fact.dominantStone,
+                    dominantStoneEffect = fact.dominantStoneEffect,
                     scanTick = fact.scanTick,
                 )
             )
