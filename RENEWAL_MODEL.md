@@ -89,6 +89,11 @@ It advances gradually, maintaining spatial coherence.
 Candidate areas are derived from continuous world-space evaluation and resolved
 at chunk granularity before renewal is considered.
 
+In runtime architecture, chunk existence discovery and chunk metadata
+observation are separate signals. Discovery establishes which chunks
+exist; scanning and ambient observation progressively enrich metadata
+used by downstream derivation.
+
 ---
 
 ## Influence resolution and eligibility
