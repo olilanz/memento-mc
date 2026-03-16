@@ -17,6 +17,10 @@ import net.minecraft.util.WorldSavePath
 /**
  * Operator worldview CSV writer.
  *
+ * Authority boundary:
+ * - Produces an observational export artifact; it is not a domain-state authority.
+ * - Consumes provided world/projection read surfaces and must not infer missing world facts.
+ *
  * Locked contract (source of truth is local to this class):
  * - header order and names are fixed by [LOCKED_SCHEMA],
  * - writer must copy election ranks from committed snapshot and never recompute ranks,

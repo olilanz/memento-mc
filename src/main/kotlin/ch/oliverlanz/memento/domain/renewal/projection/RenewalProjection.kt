@@ -23,6 +23,10 @@ fun interface RenewalProjectionStableListener {
 /**
  * Partitioned boolean renewal projection.
  *
+ * Authority boundary:
+ * - RenewalProjection is a derived evaluation boundary, not factual-world state authority.
+ * - WorldMapService owns institutional-memory mutation; projection consumes read surfaces only.
+ *
  * Projection boundary contract:
  * - Projection state is fully derived from WorldMap substrate facts.
  * - Projection-derived state is never persisted back into WorldMap.
@@ -41,6 +45,7 @@ fun interface RenewalProjectionStableListener {
  * - Unaffected regions remain bitwise identical across commits.
  * - Election is derived exclusively from committed state.
  * - No numeric ranking surfaces exist.
+ * - Snapshot terminology is projection-scoped; WorldMap itself is not a snapshot boundary.
  *
  * Non-goals:
  * - Command-layer orchestration or execution ownership.

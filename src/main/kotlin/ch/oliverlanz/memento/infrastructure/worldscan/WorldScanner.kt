@@ -30,10 +30,15 @@ import net.minecraft.util.math.ChunkPos
  * World scanner.
  *
  * Responsibility boundaries:
- * - Owns scan lifecycle and map convergence accounting.
- * - Owns file-primary scan startup and metadata ingestion into the map.
+ * - Owns discovery and scan orchestration lifecycles.
+ * - Owns file-primary metadata extraction and fact publication pathways.
  * - Receives chunk availability via the ChunkLoadDriver's propagation callback for passive
  *   ambient enrichment.
+ *
+ * Invariant references:
+ * - WorldMapService is sole mutation authority for world-memory substrate.
+ * - WorldScanner must not mutate WorldMementoMap directly; it publishes discovery/metadata facts.
+ * - Baseline scan completion gate remains distinct from discovery-progress semantics.
  *
  * This class implements [ChunkAvailabilityListener] (driver pushes availability).
  *
@@ -455,8 +460,10 @@ class WorldScanner : ChunkAvailabilityListener {
                             chunkX = chunkX,
                             chunkZ = chunkZ,
                         )
-                    scanMap.ensureExists(key)
-                    ensured++
+                    val inserted = worldMapService?.ingestDiscoveryOnTickThread(key) == true
+                    if (inserted) {
+                        ensured++
+                    }
                 }
             }
         }
