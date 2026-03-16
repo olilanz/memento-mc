@@ -182,6 +182,24 @@ class WorldMementoMap {
     /** Number of chunks with signals attached (i.e. scanned). */
     fun scannedChunks(): Int = scannedCount.get()
 
+    /**
+     * Deterministic discovered-universe read surface (all known chunk keys, scanned or unscanned).
+     */
+    fun discoveredUniverseKeys(): List<ChunkKey> {
+        return records.keys
+            .asSequence()
+            .sortedWith(
+                compareBy(
+                    { it.world.value.toString() },
+                    { it.regionX },
+                    { it.regionZ },
+                    { it.chunkX },
+                    { it.chunkZ },
+                )
+            )
+            .toList()
+    }
+
     /** Number of chunks still missing signals (best-effort, monotonic under normal use). */
     fun missingCount(): Int = (records.size - scannedCount.get()).coerceAtLeast(0)
 

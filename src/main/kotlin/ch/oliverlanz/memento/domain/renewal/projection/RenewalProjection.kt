@@ -710,7 +710,7 @@ class RenewalProjection {
 
     private fun rebuildSourceCacheFromWorldSnapshot(reason: String) {
         val service = worldMapService ?: return
-        val snapshot = service.substrate().snapshot()
+        val snapshot = service.observedScannedEntries()
         chunkSourceByKey.clear()
         snapshot.forEach { entry ->
             chunkSourceByKey[entry.key] = entry

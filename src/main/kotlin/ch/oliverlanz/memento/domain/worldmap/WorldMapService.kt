@@ -22,6 +22,12 @@ import net.minecraft.server.MinecraftServer
  * through [applyFactOnTickThread] on the server tick thread.
  */
 class WorldMapService {
+    data class CoverageView(
+        val discoveredUniverseCount: Int,
+        val scannedSubsetCount: Int,
+        val missingMetadataCount: Int,
+    )
+
     private val map = WorldMementoMap()
 
     @Volatile private var attached: Boolean = false
@@ -59,6 +65,20 @@ class WorldMapService {
     }
 
     fun substrate(): WorldMementoMap = map
+
+    /** Explicit discovered-universe vs scanned-subset read surface for consumers. */
+    fun coverageView(): CoverageView =
+        CoverageView(
+            discoveredUniverseCount = map.totalChunks(),
+            scannedSubsetCount = map.scannedChunks(),
+            missingMetadataCount = map.missingCount(),
+        )
+
+    /** Explicit scanned-subset read surface (projection/CSV observational consumers). */
+    fun observedScannedEntries(): List<ChunkScanSnapshotEntry> = map.snapshot()
+
+    /** Explicit discovered-universe read surface (all known chunks, scanned or unscanned). */
+    fun discoveredUniverseKeys(): List<ChunkKey> = map.discoveredUniverseKeys()
 
     /**
      * Discovery ingestion boundary on tick thread.

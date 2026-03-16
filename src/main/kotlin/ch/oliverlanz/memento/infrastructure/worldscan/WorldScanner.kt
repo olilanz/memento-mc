@@ -277,15 +277,15 @@ class WorldScanner : ChunkAvailabilityListener {
      * Lightweight read-only status surface for operator inspection.
      */
     fun statusView(): StatusView {
-        val map = mapSnapshot()
+        val coverage = worldMapService?.coverageView()
         val now = System.currentTimeMillis()
         return StatusView(
             active = activeScan.get(),
             plannedChunks = plannedChunks,
             pendingQueuedFacts = pendingFileFacts.size,
-            worldMapTotal = map?.totalChunks() ?: 0,
-            worldMapScanned = map?.scannedChunks() ?: 0,
-            worldMapMissing = map?.missingCount() ?: 0,
+            worldMapTotal = coverage?.discoveredUniverseCount ?: 0,
+            worldMapScanned = coverage?.scannedSubsetCount ?: 0,
+            worldMapMissing = coverage?.missingMetadataCount ?: 0,
             providerStatus = fileMetadataProvider?.status(),
             runningDurationMs = activeSinceMs?.let { (now - it).coerceAtLeast(0L) },
             lastCompletedDurationMs = lastCompletedDurationMs,
@@ -300,7 +300,7 @@ class WorldScanner : ChunkAvailabilityListener {
 
     /** Read-only committed world-fact snapshot for operator observability exports. */
     fun committedWorldSnapshot(): List<ChunkScanSnapshotEntry> {
-        return mapSnapshot()?.snapshot().orEmpty()
+        return worldMapService?.observedScannedEntries().orEmpty()
     }
 
     fun detach() {
