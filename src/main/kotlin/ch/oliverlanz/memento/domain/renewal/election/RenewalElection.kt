@@ -1,7 +1,6 @@
 package ch.oliverlanz.memento.domain.renewal.election
 
 import ch.oliverlanz.memento.domain.renewal.projection.RegionKey
-import ch.oliverlanz.memento.domain.renewal.projection.AmbientRenewalStrategy
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateAction
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateId
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalElectionInput
@@ -44,7 +43,6 @@ object RenewalElection {
     fun evaluate(
         input: RenewalElectionInput,
         deterministicTransactionId: String? = null,
-        suppressAmbientChunkStrategy: Boolean = true,
         includeExplicitStoneIntent: Boolean = false,
     ): ElectionResult {
         // Domain-separation contract:
@@ -74,17 +72,7 @@ object RenewalElection {
                 // Explicit stone intent remains actionable.
                 if (derivation.explicitRenewalIntent) return@filter includeExplicitStoneIntent
 
-                if (!suppressAmbientChunkStrategy) {
-                    // Diagnostic/projection view: include ambient chunk strategy.
-                    return@filter true
-                }
-
-                // Release cut gate (explicit and local):
-                // ambient chunk strategy remains projected/observable,
-                // but is intentionally unelected for execution.
-                if (derivation.ambientStrategy == AmbientRenewalStrategy.CHUNK) return@filter false
-
-                // No stone intent and ambient-chunk path suppressed: not actionable in election.
+                // No explicit stone intent: not actionable in chunk election.
                 false
             }
             .map { (key, _) -> key }

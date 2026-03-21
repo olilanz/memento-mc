@@ -512,13 +512,11 @@ class RenewalProjection {
         sourceDirtySeed: List<RegionKey>,
         fullSnapshotRecovery: Boolean,
     ): CandidateView {
-        // Phase contract (boolean partitioned derivation):
-        // Pass 1: region forgettable (region-only).
-        // Pass 2: memorable source chunks (absolute inhabited threshold OR lore influence).
-        // Pass 3: memorability expansion (radius = MEMENTO_RENEWAL_MEMORABLE_EXPANSION_RADIUS_CHUNKS).
-        // Pass 4: chunk eligibility = !memorable (stone-driven path is independent from region forgettability).
-        //
-        // Region prune and chunk renewal eligibility are separate domains and must not be conflated.
+        // Canonical local derivation semantics:
+        // - Chunk memorability is authoritative at chunk level (lore OR inhabited-neighborhood threshold).
+        // - Region eligibility is derived directly from chunk memorability only.
+        // - No intermediate chunk-level classification is used as region-eligibility input.
+        // - Region prune and chunk renewal eligibility are separate domains and must not be conflated.
         val sourceDirty = sourceDirtySeed.toSortedSet(regionOrder())
 
         if (sourceSnapshotByKey.isEmpty()) {
@@ -606,50 +604,44 @@ class RenewalProjection {
             .filter { materializedRegions.contains(regionOf(it.key)) }
             .groupBy { regionOf(it.key) }
 
-        val regionHasInhabited = linkedMapOf<RegionKey, Boolean>()
-        val regionHasLore = linkedMapOf<RegionKey, Boolean>()
-        val regionHasWitherForget = linkedMapOf<RegionKey, Boolean>()
+        val allEntriesInMaterialized = entriesByRegion.values.flatten()
+        val inhabitedByChunk = linkedMapOf<ChunkKey, Long>()
+        allEntriesInMaterialized.forEach { entry ->
+            inhabitedByChunk[entry.key] = entry.signals?.inhabitedTimeTicks ?: 0L
+        }
 
+        val chunkMemorableByKey = linkedMapOf<ChunkKey, Boolean>()
+        allEntriesInMaterialized.forEach { entry ->
+            val key = entry.key
+            val hasLoreProtect = entry.dominantStoneEffect == DominantStoneEffectSignal.LORE_PROTECT
+            val inhabitedNeighborhoodSum = (-1..1).sumOf { dx ->
+                (-1..1).sumOf { dz ->
+                    val neighbor = ChunkKey(
+                        world = key.world,
+                        regionX = Math.floorDiv(key.chunkX + dx, 32),
+                        regionZ = Math.floorDiv(key.chunkZ + dz, 32),
+                        chunkX = key.chunkX + dx,
+                        chunkZ = key.chunkZ + dz,
+                    )
+                    inhabitedByChunk[neighbor] ?: 0L
+                }
+            }
+            chunkMemorableByKey[key] =
+                hasLoreProtect || inhabitedNeighborhoodSum >= MementoConstants.MEMENTO_RENEWAL_MEMORABLE_INHABITED_TICKS_THRESHOLD
+        }
+
+        // Region eligibility is derived directly from chunk memorability presence/absence.
+        val regionMemorableByRegion = linkedMapOf<RegionKey, Boolean>()
         materializedRegions.sortedWith(regionOrder()).forEach { region ->
             val entries = entriesByRegion[region].orEmpty()
-            regionHasInhabited[region] = entries.any { (it.signals?.inhabitedTimeTicks ?: 0L) > 0L }
-            regionHasLore[region] = entries.any { entry ->
-                entry.dominantStoneEffect == DominantStoneEffectSignal.LORE_PROTECT
-            }
-            regionHasWitherForget[region] = entries.any { entry ->
-                entry.dominantStoneEffect == DominantStoneEffectSignal.WITHER_FORGET
-            }
+            regionMemorableByRegion[region] = entries.any { entry -> chunkMemorableByKey[entry.key] == true }
         }
 
         val regionForgettableUpdates = linkedMapOf<RegionKey, Boolean>()
         affected.forEach { region ->
-            val neighbors = neighborRegions8(region)
-            val localInhabited = regionHasInhabited[region] == true
-            val localLore = regionHasLore[region] == true
-            val localWitherForget = regionHasWitherForget[region] == true
-            val neighborInhabited = neighbors.any { regionHasInhabited[it] == true }
-            val neighborLore = neighbors.any { regionHasLore[it] == true }
-            val neighborWitherForget = neighbors.any { regionHasWitherForget[it] == true }
-
-            regionForgettableUpdates[region] = when {
-                localLore || neighborLore -> false
-                localWitherForget || neighborWitherForget -> true
-                else -> !(localInhabited || neighborInhabited)
-            }
-        }
-
-        val allEntriesInMaterialized = entriesByRegion.values.flatten()
-        val memorableSourcePackedByWorld = linkedMapOf<RegistryKey<World>, MutableSet<Long>>()
-        allEntriesInMaterialized.forEach { entry ->
-            val inhabitedTicks = entry.signals?.inhabitedTimeTicks ?: 0L
-            val hasLoreProtect = entry.dominantStoneEffect == DominantStoneEffectSignal.LORE_PROTECT
-            val hasWitherForget = entry.dominantStoneEffect == DominantStoneEffectSignal.WITHER_FORGET
-
-            if (hasLoreProtect || (!hasWitherForget && inhabitedTicks >= MementoConstants.MEMENTO_RENEWAL_MEMORABLE_INHABITED_TICKS_THRESHOLD)) {
-                memorableSourcePackedByWorld
-                    .computeIfAbsent(entry.key.world) { linkedSetOf() }
-                    .add(packChunk(entry.key.chunkX, entry.key.chunkZ))
-            }
+            val localMemorable = regionMemorableByRegion[region] == true
+            val neighborMemorable = neighborRegions8(region).any { regionMemorableByRegion[it] == true }
+            regionForgettableUpdates[region] = !(localMemorable || neighborMemorable)
         }
 
         val chunkDerivationUpdates = linkedMapOf<ChunkKey, RenewalChunkDerivation>()
@@ -657,38 +649,23 @@ class RenewalProjection {
             val entries = entriesByRegion[region].orEmpty()
             entries.forEach { entry ->
                 val key = entry.key
-                val packed = packChunk(key.chunkX, key.chunkZ)
-                val sourceSet = memorableSourcePackedByWorld[key.world].orEmpty()
-                val hasLoreProtect = entry.dominantStoneEffect == DominantStoneEffectSignal.LORE_PROTECT
                 val hasWitherForget = entry.dominantStoneEffect == DominantStoneEffectSignal.WITHER_FORGET
                 val regionForgettable = regionForgettableUpdates[region] == true
+                val memorable = chunkMemorableByKey[key] == true
 
-                val memorable = when {
-                    hasLoreProtect -> true
-                    hasWitherForget -> false
-                    sourceSet.contains(packed) -> true
-                    else -> hasSourceWithinRadius(
-                        candidate = key,
-                        sourcePacked = sourceSet,
-                        radius = MementoConstants.MEMENTO_RENEWAL_MEMORABLE_EXPANSION_RADIUS_CHUNKS,
-                    )
-                }
-
-                // Diagnostic ambient execution preference derived from existing projection facts.
-                // - REGION: ambient renewal would be handled by region pruning.
-                // - CHUNK: ambient renewal would require chunk-level handling, but is currently unelected.
-                // - NONE: no ambient renewal path is currently indicated.
+                // Diagnostic ambient execution preference derived from projection authority.
+                // - REGION: ambient renewal is region-authoritative for this chunk's region.
+                // - NONE: ambient region authority is not active for this chunk's region.
                 val ambientStrategy = when {
                     regionForgettable -> AmbientRenewalStrategy.REGION
-                    !memorable -> AmbientRenewalStrategy.CHUNK
                     else -> AmbientRenewalStrategy.NONE
                 }
 
                 chunkDerivationUpdates[key] = RenewalChunkDerivation(
                     memorable = memorable,
-                    // Stone-driven chunk renewal is intentionally independent of region forgettability.
-                    // Chunk renewal eligibility is derived from chunk-local memorability/protection only.
-                    eligibleChunkRenewal = !memorable,
+                    // Stone-driven/operator chunk renewal remains structurally separate from
+                    // ambient region authority for this slice.
+                    eligibleChunkRenewal = hasWitherForget,
                     ambientStrategy = ambientStrategy,
                     explicitRenewalIntent = hasWitherForget,
                 )

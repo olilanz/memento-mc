@@ -1,6 +1,5 @@
 package ch.oliverlanz.memento.domain.renewal.election
 
-import ch.oliverlanz.memento.domain.renewal.projection.AmbientRenewalStrategy
 import ch.oliverlanz.memento.domain.renewal.projection.RegionKey
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalChunkDerivation
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalElectionInput
@@ -37,7 +36,6 @@ class RenewalElectionDeterminismFromProjectionTest {
                 chunk to RenewalChunkDerivation(
                     memorable = false,
                     eligibleChunkRenewal = true,
-                    ambientStrategy = AmbientRenewalStrategy.NONE,
                     explicitRenewalIntent = true,
                 )
             ),

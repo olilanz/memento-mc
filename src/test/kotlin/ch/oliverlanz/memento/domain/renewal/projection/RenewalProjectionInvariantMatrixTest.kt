@@ -202,6 +202,52 @@ class RenewalProjectionInvariantMatrixTest {
     }
 
     @Test
+    fun no_chunk_ambient_backdoor_non_memorable_chunk_outside_forgettable_region_is_not_actionable() {
+        val world = WorldFixtureBuilder.overworld()
+
+        val model = TestWorldModel.build {
+            // Region (0,0): memorable via lore-protect.
+            chunk(
+                world = world,
+                chunkX = 0,
+                chunkZ = 0,
+                inhabitedTimeTicks = 0L,
+                scanTick = 1L,
+                dominantStone = DominantStoneSignal.LORE,
+                dominantStoneEffect = DominantStoneEffectSignal.LORE_PROTECT,
+            )
+
+            // Region (1,0): non-memorable chunk adjacent to memorable region.
+            // Must not become ambient-actionable by any chunk-level backdoor.
+            chunk(world = world, chunkX = 32, chunkZ = 0, inhabitedTimeTicks = 0L, scanTick = 2L)
+        }
+
+        val harness = DomainTestHarness()
+        harness.ingest(model)
+        harness.runUntilIdle()
+
+        val committed = harness.committedView()
+        assertNotNull(committed)
+
+        val adjacentRegion = RegionKey(worldId = world.value.toString(), regionX = 1, regionZ = 0)
+        assertEquals(false, committed.regionForgettableByRegion[adjacentRegion])
+
+        val csv = MementoCsvWriter.renderOperatorWorldviewCsv(toSnapshot(model), committed)
+        val rows = rowsByChunkAbsolute(csv)
+        val adjacentChunk = rows.getValue("32,0")
+
+        assertEquals("NONE", adjacentChunk.getValue("renewalAction"))
+        assertEquals("0", adjacentChunk.getValue("chunkForgettable"))
+        assertEquals("0", adjacentChunk.getValue("chunkMemorable"))
+
+        assertWorldviewConsistency(
+            discoveredChunkKeys = model.chunks.map { it.key }.toSet(),
+            projectionSnapshot = committed,
+            csv = csv,
+        )
+    }
+
+    @Test
     fun deterministic_ordering_and_ranked_key_boundary_hold_for_equivalent_fact_sets() {
         val world = WorldFixtureBuilder.overworld()
         val model = TestWorldModel.build {

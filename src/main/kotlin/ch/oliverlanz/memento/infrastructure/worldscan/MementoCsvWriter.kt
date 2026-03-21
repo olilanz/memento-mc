@@ -1,6 +1,7 @@
 package ch.oliverlanz.memento.infrastructure.worldscan
 
 import ch.oliverlanz.memento.MementoConstants
+import ch.oliverlanz.memento.domain.renewal.projection.RegionKey
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateAction
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCommittedSnapshot
 import ch.oliverlanz.memento.domain.worldmap.DominantStoneEffectSignal
@@ -132,11 +133,9 @@ object MementoCsvWriter {
                 }
 
                 val chunkMemorable = derivation?.memorable == true
-                val chunkForgettable = when {
-                    action != "NONE" -> true
-                    derivation == null -> false
-                    else -> !chunkMemorable
-                }
+                val chunkForgettable = projectionSnapshot.regionForgettableByRegion[
+                    RegionKey(worldId = dim, regionX = key.regionX, regionZ = key.regionZ)
+                ] == true
 
                 val row = listOf(
                     dim,

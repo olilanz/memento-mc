@@ -5,7 +5,6 @@ import ch.oliverlanz.memento.domain.renewal.projection.RenewalCommittedSnapshot
 import ch.oliverlanz.memento.domain.renewal.projection.toChunkKeyOrNull
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import net.minecraft.registry.RegistryKey
 import net.minecraft.registry.RegistryKeys
@@ -62,15 +61,25 @@ fun assertWorldviewConsistency(
     assertTrue(rankedChunkKeys.all { discoveredChunkKeys.contains(it) }, "ranked chunk candidates must be discovered")
 
     rows.forEach { row ->
-        val memorable = row.getValue("chunkMemorable") == "1"
-        val forgettable = row.getValue("chunkForgettable") == "1"
-        assertFalse(memorable && forgettable, "chunkMemorable and chunkForgettable must not both be 1")
-
         val rank = row.getValue("renewalRank")
         val action = row.getValue("renewalAction")
         if (rank.isNotEmpty()) {
             assertTrue(action == "REGION_PURGE" || action == "CHUNK_RENEW", "ranked rows must carry ranked action")
         }
+
+        val regionForgettable = projectionSnapshot.regionForgettableByRegion[
+            ch.oliverlanz.memento.domain.renewal.projection.RegionKey(
+                worldId = row.getValue("dimension"),
+                regionX = row.getValue("regionX").toInt(),
+                regionZ = row.getValue("regionZ").toInt(),
+            )
+        ] == true
+        val rowForgettable = row.getValue("chunkForgettable") == "1"
+        assertEquals(
+            regionForgettable,
+            rowForgettable,
+            "chunkForgettable must reflect region authority only",
+        )
     }
 
     val regionRanks = rows

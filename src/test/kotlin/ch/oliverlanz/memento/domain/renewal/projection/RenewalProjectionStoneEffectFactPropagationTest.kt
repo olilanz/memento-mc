@@ -74,7 +74,9 @@ class RenewalProjectionStoneEffectFactPropagationTest {
         val key = model.chunks.single().key
         val derivation = committed.chunkDerivationByChunk[key]
         assertNotNull(derivation)
-        assertEquals(false, derivation.memorable)
+        // Lock invariant: wither contributes explicit renewal intent but does not
+        // define/suppress memorability authority.
+        assertEquals(true, derivation.memorable)
         assertEquals(true, derivation.explicitRenewalIntent)
     }
 }

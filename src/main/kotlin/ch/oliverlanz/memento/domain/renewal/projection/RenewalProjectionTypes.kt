@@ -27,24 +27,27 @@ import net.minecraft.world.World
  * This is not an action and not a second eligibility authority.
  *
  * - [REGION]: ambient renewal would be handled by region pruning.
- * - [CHUNK]: ambient renewal would require chunk-level handling, but is currently unelected.
  * - [NONE]: no ambient renewal path is currently indicated.
  */
 enum class AmbientRenewalStrategy {
     REGION,
-    CHUNK,
     NONE,
 }
 
 data class RenewalChunkDerivation(
     val memorable: Boolean = false,
+    /**
+     * Stone/operator chunk-renew eligibility only.
+     *
+     * Ambient renewal authority is region-scoped and is never derived from this field.
+     */
     val eligibleChunkRenewal: Boolean = false,
     val ambientStrategy: AmbientRenewalStrategy = AmbientRenewalStrategy.NONE,
     /**
      * Stone-intent marker derived from dominant WITHER_FORGET influence.
      *
-     * This is used to keep stone-driven operator renewal actionable while
-     * ambient chunk strategy is temporarily suppressed in election.
+     * This keeps stone-driven/operator renewal actionable while ambient
+     * authority remains region-scoped.
      */
     val explicitRenewalIntent: Boolean = false,
 )

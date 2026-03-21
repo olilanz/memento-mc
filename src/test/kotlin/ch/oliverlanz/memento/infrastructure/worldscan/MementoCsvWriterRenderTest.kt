@@ -58,10 +58,12 @@ class MementoCsvWriterRenderTest {
         // scanned + unresolved is represented explicitly, with no inhabited inference.
         assertEquals("FILE_IO_ERROR", unresolvedRow.getValue("status"))
         assertEquals("", unresolvedRow.getValue("inhabitedTicks"))
+        assertEquals("0", unresolvedRow.getValue("chunkForgettable"))
 
         // scanned + zero inhabitance is represented as explicit 0 and OK status.
         assertEquals("0", zeroRow.getValue("inhabitedTicks"))
         assertEquals("OK", zeroRow.getValue("status"))
+        assertEquals("0", zeroRow.getValue("chunkForgettable"))
 
         // csv keys are contained in scanned subset and therefore in discovered universe.
         val scannedKeys = worldSnapshot.map { it.key }.toSet()
@@ -149,6 +151,11 @@ class MementoCsvWriterRenderTest {
         assertEquals("REGION_PURGE", rowC1.getValue("renewalAction"))
         assertEquals("REGION_PURGE", rowC2.getValue("renewalAction"))
         assertEquals("NONE", rowC3.getValue("renewalAction"))
+
+        // chunkForgettable reflects region-level forgettable authority on chunk rows.
+        assertEquals("1", rowC1.getValue("chunkForgettable"))
+        assertEquals("1", rowC2.getValue("chunkForgettable"))
+        assertEquals("0", rowC3.getValue("chunkForgettable"))
 
         assertEquals("1", rowC1.getValue("renewalRank"))
         assertEquals("1", rowC2.getValue("renewalRank"))
