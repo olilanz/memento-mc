@@ -2,6 +2,8 @@ package ch.oliverlanz.memento.domain.renewal.projection
 
 import ch.oliverlanz.memento.MementoConstants
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
+import net.minecraft.registry.RegistryKey
+import net.minecraft.world.World
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -19,6 +21,12 @@ data class MemorabilitySignal(
  * - Distance calculations in this class MUST use those fields directly.
  * - No coordinate normalization or coordinate-form inference is performed here.
  *
+ * Kernel and implementation lock:
+ * - Effective influence kernel is Chebyshev radius 2 (distance weights outside radius are 0).
+ * - Implementation uses ephemeral per-computation world+chunk lookup for local neighborhood reads.
+ * - This is a semantics-preserving optimization of the legacy all-pairs formulation
+ *   (guarded by exact-equivalence tests).
+ *
  * Pure function contract:
  * - output keys are exactly the input chunk universe
  * - no synthetic chunks are materialized
@@ -26,20 +34,34 @@ data class MemorabilitySignal(
  */
 object ProjectionMemorability {
     const val MEMORABLE_THRESHOLD: Double = MementoConstants.MEMENTO_RENEWAL_MEMORABLE_THRESHOLD
+    private const val MEMORABLE_RADIUS_CHUNKS: Int = MementoConstants.MEMENTO_RENEWAL_MEMORABLE_EXPANSION_RADIUS_CHUNKS
 
     fun computeForChunks(
         inhabitedTicksByChunk: Map<ChunkKey, Long>,
         loreProtectedChunks: Set<ChunkKey>,
     ): Map<ChunkKey, MemorabilitySignal> {
         val baseByChunk = inhabitedTicksByChunk.mapValues { (_, ticks) -> baseSignal(ticks) }
+        val baseByWorldChunk = baseByChunk.entries.associateBy(
+            keySelector = { (key, _) -> WorldChunkRef(key.world, key.chunkX, key.chunkZ) },
+            valueTransform = { (_, base) -> base },
+        )
 
         return inhabitedTicksByChunk.keys.associateWith { target ->
             var index = 0.0
-            baseByChunk.forEach { (source, base) ->
-                if (source.world != target.world) return@forEach
-                val distance = chebyshevDistance(target, source)
-                val weight = weightForChebyshevDistance(distance)
-                if (weight > 0.0) {
+            for (dx in -MEMORABLE_RADIUS_CHUNKS..MEMORABLE_RADIUS_CHUNKS) {
+                for (dz in -MEMORABLE_RADIUS_CHUNKS..MEMORABLE_RADIUS_CHUNKS) {
+                    val distance = max(abs(dx), abs(dz))
+                    val weight = weightForChebyshevDistance(distance)
+                    if (weight <= 0.0) continue
+
+                    val base = baseByWorldChunk[
+                        WorldChunkRef(
+                            world = target.world,
+                            chunkX = target.chunkX + dx,
+                            chunkZ = target.chunkZ + dz,
+                        ),
+                    ] ?: continue
+
                     index += base * weight
                 }
             }
@@ -79,24 +101,11 @@ object ProjectionMemorability {
             else -> 0.0
         }
 
-    private fun chebyshevDistance(a: ChunkKey, b: ChunkKey): Int {
-        val ax = worldChunkX(a)
-        val az = worldChunkZ(a)
-        val bx = worldChunkX(b)
-        val bz = worldChunkZ(b)
-
-        val dx = abs(ax - bx)
-        val dz = abs(az - bz)
-        return max(dx, dz)
-    }
-
-    private fun worldChunkX(key: ChunkKey): Int {
-        return key.chunkX
-    }
-
-    private fun worldChunkZ(key: ChunkKey): Int {
-        return key.chunkZ
-    }
+    private data class WorldChunkRef(
+        val world: RegistryKey<World>,
+        val chunkX: Int,
+        val chunkZ: Int,
+    )
 
     private fun clamp01(v: Double): Double = min(1.0, max(0.0, v))
 }

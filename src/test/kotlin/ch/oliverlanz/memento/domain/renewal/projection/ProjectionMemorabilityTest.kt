@@ -5,6 +5,8 @@ import net.minecraft.registry.RegistryKey
 import net.minecraft.registry.RegistryKeys
 import net.minecraft.util.Identifier
 import net.minecraft.world.World
+import kotlin.math.abs
+import kotlin.math.max
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -230,6 +232,54 @@ class ProjectionMemorabilityTest {
         assertEquals(0.0, out.getValue(farByWorld).memorabilityIndex)
     }
 
+    // Semantics-preserving optimization locks ------------------------------------------------
+
+    @Test
+    fun optimized_local_kernel_matches_legacy_all_pairs_exactly() {
+        val input = linkedMapOf(
+            key(-7, -7) to 0L,
+            key(-3, 4) to 19L,
+            key(-2, -1) to 20L,
+            key(-1, 0) to 120L,
+            key(0, 0) to 600L,
+            key(1, 0) to 601L,
+            key(2, 2) to 2400L,
+            key(3, 3) to 12L,
+            key(8, -2) to 99L,
+            absoluteKeyFromRegionLocal(regionX = -1, regionZ = 0, localChunkX = 31, localChunkZ = 0) to 300L,
+            absoluteKeyFromRegionLocal(regionX = 0, regionZ = 0, localChunkX = 0, localChunkZ = 0) to 301L,
+            absoluteKeyFromRegionLocal(regionX = 5, regionZ = -4, localChunkX = 10, localChunkZ = 12) to 700L,
+        )
+        val loreProtected = setOf(
+            key(3, 3),
+            absoluteKeyFromRegionLocal(regionX = 5, regionZ = -4, localChunkX = 10, localChunkZ = 12),
+        )
+
+        val optimized = ProjectionMemorability.computeForChunks(input, loreProtectedChunks = loreProtected)
+        val legacy = legacyAllPairsComputeForChunks(input, loreProtectedChunks = loreProtected)
+
+        assertEquals(legacy, optimized)
+    }
+
+    @Test
+    fun far_outside_radius_two_contributors_do_not_change_target_signal() {
+        val target = key(0, 0)
+        val near = key(2, 1)
+        val far = key(20, 20)
+
+        val baseline = ProjectionMemorability.computeForChunks(
+            inhabitedTicksByChunk = mapOf(target to 120L, near to 600L),
+            loreProtectedChunks = emptySet(),
+        ).getValue(target)
+
+        val withFar = ProjectionMemorability.computeForChunks(
+            inhabitedTicksByChunk = mapOf(target to 120L, near to 600L, far to 20_000L),
+            loreProtectedChunks = emptySet(),
+        ).getValue(target)
+
+        assertEquals(baseline, withFar)
+    }
+
     // Determinism / universe invariants -----------------------------------------------------
 
     private fun key(chunkX: Int, chunkZ: Int): ChunkKey =
@@ -254,4 +304,54 @@ class ProjectionMemorabilityTest {
             chunkX = regionX * 32 + localChunkX,
             chunkZ = regionZ * 32 + localChunkZ,
         )
+
+    private fun legacyAllPairsComputeForChunks(
+        inhabitedTicksByChunk: Map<ChunkKey, Long>,
+        loreProtectedChunks: Set<ChunkKey>,
+    ): Map<ChunkKey, MemorabilitySignal> {
+        val baseByChunk = inhabitedTicksByChunk.mapValues { (_, ticks) -> legacyBaseSignal(ticks) }
+        return inhabitedTicksByChunk.keys.associateWith { target ->
+            var index = 0.0
+            baseByChunk.forEach { (source, base) ->
+                if (source.world != target.world) return@forEach
+                val distance = max(abs(target.chunkX - source.chunkX), abs(target.chunkZ - source.chunkZ))
+                val weight = legacyWeightForChebyshevDistance(distance)
+                if (weight > 0.0) {
+                    index += base * weight
+                }
+            }
+            MemorabilitySignal(
+                memorabilityIndex = index,
+                memorable = loreProtectedChunks.contains(target) || index >= ProjectionMemorability.MEMORABLE_THRESHOLD,
+            )
+        }
+    }
+
+    private fun legacyWeightForChebyshevDistance(distance: Int): Double =
+        when (distance) {
+            0 -> 1.00
+            1 -> 0.35
+            2 -> 0.12
+            else -> 0.0
+        }
+
+    private fun legacyBaseSignal(ticks: Long): Double {
+        val t = ticks.toDouble()
+        val low = 20.0
+        val medium = 120.0
+        val high = 600.0
+        return when {
+            t < low -> 0.0
+            t < medium -> 0.20 * clamp01((t - low) / (medium - low))
+            t < high -> 0.20 + 0.80 * clamp01((t - medium) / (high - medium))
+            else -> 1.0
+        }
+    }
+
+    private fun clamp01(v: Double): Double =
+        when {
+            v < 0.0 -> 0.0
+            v > 1.0 -> 1.0
+            else -> v
+        }
 }

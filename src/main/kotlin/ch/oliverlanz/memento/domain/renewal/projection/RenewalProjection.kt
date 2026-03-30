@@ -64,7 +64,7 @@ class RenewalProjection {
     private companion object {
         // NOTE:
         // Dirty-expansion dependency radius must remain >= memorability expansion radius.
-        // Current coupling: 1 region ring == 32 chunks, memorability radius == 24 chunks.
+        // Current coupling: 1 region ring == 32 chunks, memorability radius == 2 chunks.
         // If memorability radius changes, dirty expansion rules must be updated accordingly.
         private const val AFFECTED_EXPANSION_RING_REGIONS = 1
         private const val CONTEXT_EXPANSION_RING_REGIONS = 1

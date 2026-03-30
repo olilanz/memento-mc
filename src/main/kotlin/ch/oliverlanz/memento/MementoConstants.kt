@@ -242,13 +242,12 @@ object MementoConstants {
     const val MEMENTO_RENEWAL_MAX_AFFECTED_REGIONS_PER_DISPATCH: Int = 256
 
     /**
-     * Memorability expansion radius in chunks around memorable source chunks.
+     * Memorability influence radius in chunks for projection memorability kernel.
      *
-     * NOTE:
-     * Dirty-expansion dependency radius must remain >= memorability expansion radius.
-     * If this value changes, projection dirty expansion rules must be updated accordingly.
+     * Current kernel only assigns positive weight for Chebyshev distance 0..2.
+     * Dirty-expansion dependency radius must remain >= this value.
      */
-    const val MEMENTO_RENEWAL_MEMORABLE_EXPANSION_RADIUS_CHUNKS: Int = 24
+    const val MEMENTO_RENEWAL_MEMORABLE_EXPANSION_RADIUS_CHUNKS: Int = 2
 
     /** Absolute inhabited-time threshold bands for memorability base signal mapping. */
     const val MEMENTO_RENEWAL_MEMORABILITY_LOW_TICKS: Long = 20L
