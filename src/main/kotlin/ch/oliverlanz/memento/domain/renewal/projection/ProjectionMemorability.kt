@@ -14,6 +14,11 @@ data class MemorabilitySignal(
 /**
  * Projection-owned memorability policy.
  *
+ * Coordinate invariant lock:
+ * - [ChunkKey.chunkX] and [ChunkKey.chunkZ] are absolute world chunk coordinates.
+ * - Distance calculations in this class MUST use those fields directly.
+ * - No coordinate normalization or coordinate-form inference is performed here.
+ *
  * Pure function contract:
  * - output keys are exactly the input chunk universe
  * - no synthetic chunks are materialized
@@ -75,11 +80,23 @@ object ProjectionMemorability {
         }
 
     private fun chebyshevDistance(a: ChunkKey, b: ChunkKey): Int {
-        val dx = abs(a.chunkX - b.chunkX)
-        val dz = abs(a.chunkZ - b.chunkZ)
+        val ax = worldChunkX(a)
+        val az = worldChunkZ(a)
+        val bx = worldChunkX(b)
+        val bz = worldChunkZ(b)
+
+        val dx = abs(ax - bx)
+        val dz = abs(az - bz)
         return max(dx, dz)
+    }
+
+    private fun worldChunkX(key: ChunkKey): Int {
+        return key.chunkX
+    }
+
+    private fun worldChunkZ(key: ChunkKey): Int {
+        return key.chunkZ
     }
 
     private fun clamp01(v: Double): Double = min(1.0, max(0.0, v))
 }
-

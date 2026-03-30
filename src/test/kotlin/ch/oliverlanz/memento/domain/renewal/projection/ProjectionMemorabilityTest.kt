@@ -9,10 +9,21 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
+/**
+ * Invariant lock suite for projection memorability policy.
+ *
+ * Why this test class exists:
+ * - Memorability must be computed in one globally consistent world-chunk coordinate space.
+ * - Distance is Chebyshev in world space, not mixed local/absolute heuristics.
+ * - Output universe must equal input universe (no synthetic chunk keys).
+ * - Signal (`memorabilityIndex`) and decision (`memorable`) stay separable, including lore override.
+ */
 class ProjectionMemorabilityTest {
 
     private val world: RegistryKey<World> =
         RegistryKey.of(RegistryKeys.WORLD, Identifier.of("minecraft:overworld"))
+
+    // Signal behavior invariants -------------------------------------------------------------
 
     @Test
     fun low_ticks_are_filtered_below_threshold() {
@@ -140,6 +151,87 @@ class ProjectionMemorabilityTest {
         assertEquals(true, withLore.memorable)
     }
 
+    // Geometry invariants -------------------------------------------------------------------
+
+    @Test
+    fun cross_region_adjacency_receives_influence_across_boundary() {
+        // Invariant: world-space neighbors across region boundaries must influence each other.
+        val a = absoluteKeyFromRegionLocal(regionX = 0, regionZ = 0, localChunkX = 31, localChunkZ = 31)
+        val b = absoluteKeyFromRegionLocal(regionX = 1, regionZ = 1, localChunkX = 0, localChunkZ = 0)
+
+        val out = ProjectionMemorability.computeForChunks(
+            inhabitedTicksByChunk = mapOf(a to 600L, b to 0L),
+            loreProtectedChunks = emptySet(),
+        )
+
+        assertTrue(out.getValue(b).memorabilityIndex > 0.0)
+    }
+
+    @Test
+    fun same_local_coords_in_distant_regions_do_not_create_false_adjacency() {
+        // Invariant: identical local chunk coords in different regions are NOT spatially adjacent.
+        val a = absoluteKeyFromRegionLocal(regionX = 0, regionZ = 0, localChunkX = 10, localChunkZ = 10)
+        val b = absoluteKeyFromRegionLocal(regionX = 5, regionZ = 5, localChunkX = 10, localChunkZ = 10)
+
+        val out = ProjectionMemorability.computeForChunks(
+            inhabitedTicksByChunk = mapOf(a to 600L, b to 0L),
+            loreProtectedChunks = emptySet(),
+        )
+
+        assertEquals(0.0, out.getValue(b).memorabilityIndex)
+    }
+
+    @Test
+    fun origin_crossing_negative_to_zero_regions_is_adjacent() {
+        // Invariant: crossing region sign boundaries must preserve geometric adjacency semantics.
+        val a = absoluteKeyFromRegionLocal(regionX = -1, regionZ = -1, localChunkX = 31, localChunkZ = 31)
+        val b = absoluteKeyFromRegionLocal(regionX = 0, regionZ = 0, localChunkX = 0, localChunkZ = 0)
+
+        val out = ProjectionMemorability.computeForChunks(
+            inhabitedTicksByChunk = mapOf(a to 600L, b to 0L),
+            loreProtectedChunks = emptySet(),
+        )
+
+        assertTrue(out.getValue(b).memorabilityIndex > 0.0)
+    }
+
+    @Test
+    fun single_strong_source_stays_spatially_centered_in_world_space() {
+        // Invariant: strongest signal remains centered at source/immediate neighborhood, not offset elsewhere.
+        val source = absoluteKeyFromRegionLocal(regionX = 2, regionZ = 3, localChunkX = 31, localChunkZ = 31)
+        val neighbor = absoluteKeyFromRegionLocal(regionX = 3, regionZ = 3, localChunkX = 0, localChunkZ = 31)
+        val distantSameLocal = absoluteKeyFromRegionLocal(regionX = 7, regionZ = 8, localChunkX = 31, localChunkZ = 31)
+
+        val out = ProjectionMemorability.computeForChunks(
+            inhabitedTicksByChunk = mapOf(source to 600L, neighbor to 0L, distantSameLocal to 0L),
+            loreProtectedChunks = emptySet(),
+        )
+
+        val max = out.maxByOrNull { it.value.memorabilityIndex }!!.key
+        assertTrue(max == source || max == neighbor)
+        assertEquals(0.0, out.getValue(distantSameLocal).memorabilityIndex)
+    }
+
+    @Test
+    fun mixed_coordinate_invariant_region_times_32_plus_chunk_is_unconditional() {
+        // Invariant anchor: global coordinate mapping is unconditional
+        // (global = region * 32 + localChunk), with no coordinate-form inference.
+        // Invariant anchor: region=-5, chunk=10 => world chunk coordinate must be -150.
+        val source = absoluteKeyFromRegionLocal(regionX = -5, regionZ = 0, localChunkX = 10, localChunkZ = 10)
+        val adjacentByWorld = absoluteKeyFromRegionLocal(regionX = -5, regionZ = 0, localChunkX = 11, localChunkZ = 10)
+        val farByWorld = absoluteKeyFromRegionLocal(regionX = 0, regionZ = 0, localChunkX = 10, localChunkZ = 10)
+
+        val out = ProjectionMemorability.computeForChunks(
+            inhabitedTicksByChunk = mapOf(source to 600L, adjacentByWorld to 0L, farByWorld to 0L),
+            loreProtectedChunks = emptySet(),
+        )
+
+        assertTrue(out.getValue(adjacentByWorld).memorabilityIndex > 0.0)
+        assertEquals(0.0, out.getValue(farByWorld).memorabilityIndex)
+    }
+
+    // Determinism / universe invariants -----------------------------------------------------
+
     private fun key(chunkX: Int, chunkZ: Int): ChunkKey =
         ChunkKey(
             world = world,
@@ -147,5 +239,19 @@ class ProjectionMemorabilityTest {
             regionZ = Math.floorDiv(chunkZ, 32),
             chunkX = chunkX,
             chunkZ = chunkZ,
+        )
+
+    private fun absoluteKeyFromRegionLocal(
+        regionX: Int,
+        regionZ: Int,
+        localChunkX: Int,
+        localChunkZ: Int,
+    ): ChunkKey =
+        ChunkKey(
+            world = world,
+            regionX = regionX,
+            regionZ = regionZ,
+            chunkX = regionX * 32 + localChunkX,
+            chunkZ = regionZ * 32 + localChunkZ,
         )
 }
