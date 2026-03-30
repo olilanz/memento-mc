@@ -61,10 +61,30 @@ fun assertWorldviewConsistency(
     assertTrue(rankedChunkKeys.all { discoveredChunkKeys.contains(it) }, "ranked chunk candidates must be discovered")
 
     rows.forEach { row ->
+        val chunkKey = ChunkKey(
+            world = worldKey(row.getValue("dimension")),
+            regionX = row.getValue("regionX").toInt(),
+            regionZ = row.getValue("regionZ").toInt(),
+            chunkX = row.getValue("regionX").toInt() * 32 + row.getValue("chunkX").toInt(),
+            chunkZ = row.getValue("regionZ").toInt() * 32 + row.getValue("chunkZ").toInt(),
+        )
+        val derivation = projectionSnapshot.chunkDerivationByChunk[chunkKey]
+
         val rank = row.getValue("renewalRank")
         val action = row.getValue("renewalAction")
         if (rank.isNotEmpty()) {
             assertTrue(action == "REGION_PURGE" || action == "CHUNK_RENEW", "ranked rows must carry ranked action")
+        }
+
+        val indexText = row.getValue("memorabilityIndex")
+        if (derivation != null) {
+            val expected = "%.6f".format(java.util.Locale.ROOT, derivation.memorabilityIndex)
+            assertEquals(expected, indexText, "memorabilityIndex must reflect projection derivation exactly")
+
+            val rowMemorable = row.getValue("chunkMemorable") == "1"
+            assertEquals(derivation.memorable, rowMemorable, "chunkMemorable must reflect projection derivation")
+        } else {
+            assertEquals("", indexText, "memorabilityIndex must be empty only when derivation is absent")
         }
 
         val regionForgettable = projectionSnapshot.regionForgettableByRegion[

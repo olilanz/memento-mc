@@ -35,6 +35,8 @@ enum class AmbientRenewalStrategy {
 }
 
 data class RenewalChunkDerivation(
+    /** Continuous memorability signal derived by projection policy artifact. */
+    val memorabilityIndex: Double = 0.0,
     val memorable: Boolean = false,
     /**
      * Stone/operator chunk-renew eligibility only.

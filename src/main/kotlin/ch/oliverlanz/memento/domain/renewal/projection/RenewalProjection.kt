@@ -610,25 +610,19 @@ class RenewalProjection {
             inhabitedByChunk[entry.key] = entry.signals?.inhabitedTimeTicks ?: 0L
         }
 
-        val chunkMemorableByKey = linkedMapOf<ChunkKey, Boolean>()
-        allEntriesInMaterialized.forEach { entry ->
-            val key = entry.key
-            val hasLoreProtect = entry.dominantStoneEffect == DominantStoneEffectSignal.LORE_PROTECT
-            val inhabitedNeighborhoodSum = (-1..1).sumOf { dx ->
-                (-1..1).sumOf { dz ->
-                    val neighbor = ChunkKey(
-                        world = key.world,
-                        regionX = Math.floorDiv(key.chunkX + dx, 32),
-                        regionZ = Math.floorDiv(key.chunkZ + dz, 32),
-                        chunkX = key.chunkX + dx,
-                        chunkZ = key.chunkZ + dz,
-                    )
-                    inhabitedByChunk[neighbor] ?: 0L
-                }
-            }
-            chunkMemorableByKey[key] =
-                hasLoreProtect || inhabitedNeighborhoodSum >= MementoConstants.MEMENTO_RENEWAL_MEMORABLE_INHABITED_TICKS_THRESHOLD
-        }
+        val loreProtectedChunks = allEntriesInMaterialized
+            .asSequence()
+            .filter { it.dominantStoneEffect == DominantStoneEffectSignal.LORE_PROTECT }
+            .map { it.key }
+            .toSet()
+
+        val memorabilitySignalsByChunk = ProjectionMemorability.computeForChunks(
+            inhabitedTicksByChunk = inhabitedByChunk,
+            loreProtectedChunks = loreProtectedChunks,
+        )
+
+        val chunkMemorableByKey = memorabilitySignalsByChunk
+            .mapValues { (_, signal) -> signal.memorable }
 
         // Region eligibility is derived directly from chunk memorability presence/absence.
         val regionMemorableByRegion = linkedMapOf<RegionKey, Boolean>()
@@ -662,6 +656,7 @@ class RenewalProjection {
                 }
 
                 chunkDerivationUpdates[key] = RenewalChunkDerivation(
+                    memorabilityIndex = memorabilitySignalsByChunk[key]?.memorabilityIndex ?: 0.0,
                     memorable = memorable,
                     // Stone-driven/operator chunk renewal remains structurally separate from
                     // ambient region authority for this slice.

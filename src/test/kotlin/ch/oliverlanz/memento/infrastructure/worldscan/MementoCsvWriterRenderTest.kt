@@ -38,8 +38,8 @@ class MementoCsvWriterRenderTest {
         val committed = RenewalCommittedSnapshot(
             generation = 9L,
             chunkDerivationByChunk = mapOf(
-                unresolved to RenewalChunkDerivation(memorable = false),
-                zero to RenewalChunkDerivation(memorable = false),
+                unresolved to RenewalChunkDerivation(memorabilityIndex = 0.0, memorable = false),
+                zero to RenewalChunkDerivation(memorabilityIndex = 0.125, memorable = false),
             ),
             regionForgettableByRegion = emptyMap(),
             rankedCandidates = emptyList(),
@@ -59,11 +59,13 @@ class MementoCsvWriterRenderTest {
         assertEquals("FILE_IO_ERROR", unresolvedRow.getValue("status"))
         assertEquals("", unresolvedRow.getValue("inhabitedTicks"))
         assertEquals("0", unresolvedRow.getValue("chunkForgettable"))
+        assertEquals("0.000000", unresolvedRow.getValue("memorabilityIndex"))
 
         // scanned + zero inhabitance is represented as explicit 0 and OK status.
         assertEquals("0", zeroRow.getValue("inhabitedTicks"))
         assertEquals("OK", zeroRow.getValue("status"))
         assertEquals("0", zeroRow.getValue("chunkForgettable"))
+        assertEquals("0.125000", zeroRow.getValue("memorabilityIndex"))
 
         // csv keys are contained in scanned subset and therefore in discovered universe.
         val scannedKeys = worldSnapshot.map { it.key }.toSet()
@@ -97,9 +99,9 @@ class MementoCsvWriterRenderTest {
         val committed = RenewalCommittedSnapshot(
             generation = 7L,
             chunkDerivationByChunk = mapOf(
-                c1 to RenewalChunkDerivation(memorable = true),
-                c2 to RenewalChunkDerivation(memorable = false),
-                c3 to RenewalChunkDerivation(memorable = false),
+                c1 to RenewalChunkDerivation(memorabilityIndex = 0.900001, memorable = true),
+                c2 to RenewalChunkDerivation(memorabilityIndex = 0.100000, memorable = false),
+                c3 to RenewalChunkDerivation(memorabilityIndex = 0.200000, memorable = false),
             ),
             regionForgettableByRegion = mapOf(
                 RegionKey(worldId = world.value.toString(), regionX = 0, regionZ = 0) to true,
@@ -120,7 +122,7 @@ class MementoCsvWriterRenderTest {
         val csv = MementoCsvWriter.renderOperatorWorldviewCsv(worldSnapshot, committed)
         val lines = csv.trim().split('\n')
 
-        val expectedHeader = "dimension,regionX,regionZ,chunkX,chunkZ,scanTick,inhabitedTicks,surfaceY,biome,isSpawn,dominantStone,dominantStoneEffect,chunkMemorable,chunkForgettable,renewalAction,renewalRank,source,status"
+        val expectedHeader = "dimension,regionX,regionZ,chunkX,chunkZ,scanTick,inhabitedTicks,surfaceY,biome,isSpawn,dominantStone,dominantStoneEffect,memorabilityIndex,chunkMemorable,chunkForgettable,renewalAction,renewalRank,source,status"
         assertEquals(expectedHeader, lines.first())
 
         val rows = lines.drop(1).map { parseRow(expectedHeader, it) }
@@ -152,6 +154,10 @@ class MementoCsvWriterRenderTest {
         assertEquals("REGION_PURGE", rowC2.getValue("renewalAction"))
         assertEquals("NONE", rowC3.getValue("renewalAction"))
 
+        assertEquals("0.900001", rowC1.getValue("memorabilityIndex"))
+        assertEquals("0.100000", rowC2.getValue("memorabilityIndex"))
+        assertEquals("0.200000", rowC3.getValue("memorabilityIndex"))
+
         // chunkForgettable reflects region-level forgettable authority on chunk rows.
         assertEquals("1", rowC1.getValue("chunkForgettable"))
         assertEquals("1", rowC2.getValue("chunkForgettable"))
@@ -162,6 +168,31 @@ class MementoCsvWriterRenderTest {
         assertEquals("", rowC3.getValue("renewalRank"))
 
         assertFalse(rows.any { it.getValue("regionX") == "2" })
+    }
+
+    @Test
+    fun render_exports_algorithmic_index_while_lore_override_keeps_chunk_memorable() {
+        val world = RegistryKey.of(RegistryKeys.WORLD, Identifier.of("minecraft:overworld"))
+        val loreChunk = chunkKey(world, 0, 0)
+
+        val worldSnapshot = listOf(snapshotEntry(loreChunk, inhabited = 0L))
+
+        val committed = RenewalCommittedSnapshot(
+            generation = 11L,
+            chunkDerivationByChunk = mapOf(
+                loreChunk to RenewalChunkDerivation(memorabilityIndex = 0.000000, memorable = true),
+            ),
+            regionForgettableByRegion = emptyMap(),
+            rankedCandidates = emptyList(),
+        )
+
+        val csv = MementoCsvWriter.renderOperatorWorldviewCsv(worldSnapshot, committed)
+        val lines = csv.trim().split('\n')
+        val header = lines.first()
+        val row = parseRow(header, lines[1])
+
+        assertEquals("0.000000", row.getValue("memorabilityIndex"))
+        assertEquals("1", row.getValue("chunkMemorable"))
     }
 
     private fun parseRow(header: String, line: String): Map<String, String> {

@@ -12,6 +12,7 @@ import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.Locale
 import net.minecraft.server.MinecraftServer
 import net.minecraft.util.WorldSavePath
 
@@ -43,6 +44,7 @@ object MementoCsvWriter {
         "isSpawn",
         "dominantStone",
         "dominantStoneEffect",
+        "memorabilityIndex",
         "chunkMemorable",
         "chunkForgettable",
         "renewalAction",
@@ -90,7 +92,7 @@ object MementoCsvWriter {
 
         val header = LOCKED_SCHEMA.joinToString(",")
         require(
-            header == "dimension,regionX,regionZ,chunkX,chunkZ,scanTick,inhabitedTicks,surfaceY,biome,isSpawn,dominantStone,dominantStoneEffect,chunkMemorable,chunkForgettable,renewalAction,renewalRank,source,status"
+            header == "dimension,regionX,regionZ,chunkX,chunkZ,scanTick,inhabitedTicks,surfaceY,biome,isSpawn,dominantStone,dominantStoneEffect,memorabilityIndex,chunkMemorable,chunkForgettable,renewalAction,renewalRank,source,status"
         ) {
             "csv schema drift detected"
         }
@@ -133,6 +135,7 @@ object MementoCsvWriter {
                 }
 
                 val chunkMemorable = derivation?.memorable == true
+                val memorabilityIndex = derivation?.memorabilityIndex
                 val chunkForgettable = projectionSnapshot.regionForgettableByRegion[
                     RegionKey(worldId = dim, regionX = key.regionX, regionZ = key.regionZ)
                 ] == true
@@ -150,6 +153,7 @@ object MementoCsvWriter {
                     if (signals?.isSpawnChunk == true) "1" else "0",
                     dominant,
                     dominantStoneEffect,
+                    memorabilityIndex?.let { String.format(Locale.ROOT, "%.6f", it) } ?: "",
                     if (chunkMemorable) "1" else "0",
                     if (chunkForgettable) "1" else "0",
                     action,
