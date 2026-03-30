@@ -250,12 +250,12 @@ object MementoConstants {
     const val MEMENTO_RENEWAL_MEMORABLE_EXPANSION_RADIUS_CHUNKS: Int = 2
 
     /** Absolute inhabited-time threshold bands for memorability base signal mapping. */
-    const val MEMENTO_RENEWAL_MEMORABILITY_LOW_TICKS: Long = 20L
-    const val MEMENTO_RENEWAL_MEMORABILITY_MEDIUM_TICKS: Long = 120L
-    const val MEMENTO_RENEWAL_MEMORABILITY_HIGH_TICKS: Long = 600L
+    const val MEMENTO_RENEWAL_MEMORABILITY_LOW_TICKS: Long = 50L
+    const val MEMENTO_RENEWAL_MEMORABILITY_MEDIUM_TICKS: Long = 300L
+    const val MEMENTO_RENEWAL_MEMORABILITY_HIGH_TICKS: Long = 2000L
 
     /** Threshold converting memorability index to boolean memorable state. */
-    const val MEMENTO_RENEWAL_MEMORABLE_THRESHOLD: Double = 0.55
+    const val MEMENTO_RENEWAL_MEMORABLE_THRESHOLD: Double = 0.75
 
     /** Backup suffix used by force-prune region file cut-over (`r.x.z.mca` -> `r.x.z.mca.memento.backup`). */
     const val MEMENTO_RENEW_FORCE_BACKUP_SUFFIX: String = ".memento.backup"
