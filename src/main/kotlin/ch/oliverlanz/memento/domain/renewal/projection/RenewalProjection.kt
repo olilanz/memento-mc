@@ -37,12 +37,19 @@ fun interface RenewalProjectionStableListener {
  *
  * Invariants:
  * - Projection state is fully derived and recomputable.
+ * - Required universe (D_projection_required) is exactly factual projection-input keys.
+ * - Operational denominator rule for this slice: D_projection_required == chunkSourceByKey.size
+ *   (every tracked factual source entry requires a derivation row).
+ * - Covered universe (N_projection_covered) is exactly committed derivation keys intersected with required universe.
+ * - Completeness is true only when covered == required and no pending projection work remains.
+ * - Internal bookkeeping (for example overflow carry) must not semantically invalidate completeness without new facts.
  * - Region-level eligibility is derived from region forgettability only.
  * - Chunk-level eligibility is derived independently and does not consult region forgettability.
  * - Protection dominance is encoded before execution by stone-authority/derivation surfaces.
  * - No mixed arbitration state exists between region and chunk mechanisms.
  * - Only affected-dirty regions are mutated at commit.
  * - Unaffected regions remain bitwise identical across commits.
+ * - Finite fact bursts must converge: overflow continuation drains without introducing artificial debounce stalls.
  * - Election is derived exclusively from committed state.
  * - No numeric ranking surfaces exist.
  * - Snapshot terminology is projection-scoped; WorldMap itself is not a snapshot boundary.
@@ -186,10 +193,23 @@ class RenewalProjection {
         val now = System.currentTimeMillis()
         val runningDuration = inFlight?.let { now - it.startedAtMs }
         val published = publishedView
+        // Concrete denominator semantics for this locked slice:
+        // every tracked factual source row is in the required derivation universe.
+        val projectionRequiredUniverseCount = chunkSourceByKey.size
+        val projectionCoveredUniverseCount = chunkDerivationByKey.keys.count { key -> chunkSourceByKey.containsKey(key) }
+        val projectionComplete =
+            projectionRequiredUniverseCount > 0 &&
+                projectionCoveredUniverseCount == projectionRequiredUniverseCount &&
+                sourceDirtyRegions.isEmpty()
+        val projectionQuiescent = projectionComplete && !hasPendingChanges()
         return RenewalProjectionStatusView(
             pendingWorkSetSize = sourceDirtyRegions.size,
             trackedChunks = chunkDerivationByKey.size,
             trackedRegions = regionForgettableByRegion.size,
+            projectionRequiredUniverseCount = projectionRequiredUniverseCount,
+            projectionCoveredUniverseCount = projectionCoveredUniverseCount,
+            projectionComplete = projectionComplete,
+            projectionQuiescent = projectionQuiescent,
             committedGeneration = published.generation,
             blockedOnGate = blockedOnGate,
             runningDurationMs = runningDuration,
@@ -460,12 +480,23 @@ class RenewalProjection {
 
         if (result.overflowRemainder.isNotEmpty()) {
             sourceDirtyRegions.addAll(result.overflowRemainder)
-            if (dirtySinceMs == null) {
-                dirtySinceMs = System.currentTimeMillis()
-            }
+            // Overflow remainder is bookkeeping continuation of the same factual universe,
+            // not new external input. Keep draining without debounce wait so finite bursts
+            // converge deterministically under bounded windows.
+            dirtySinceMs =
+                (System.currentTimeMillis() - MementoConstants.MEMENTO_RENEWAL_PROJECTION_DIRTY_REGION_DEBOUNCE_MS)
+                    .coerceAtLeast(0L)
         }
 
         try {
+            val requiredUniverseCount = chunkSourceByKey.size
+            val coveredUniverseCount = chunkDerivationByKey.keys.count { key -> chunkSourceByKey.containsKey(key) }
+            val completeAtCommit =
+                requiredUniverseCount > 0 &&
+                    coveredUniverseCount == requiredUniverseCount &&
+                    sourceDirtyRegions.isEmpty() &&
+                    result.overflowRemainder.isEmpty()
+
             projectionCycleDriver.onCommitCompleted(
                 ProjectionCommitCompleted(
                     generation = committed.generation,
@@ -473,6 +504,9 @@ class RenewalProjection {
                     durationMs = durationMs,
                     processedAffectedRegionWindow = result.processedAffectedRegionWindow,
                     overflowRemainder = result.overflowRemainder,
+                    projectionRequiredUniverseCount = requiredUniverseCount,
+                    projectionCoveredUniverseCount = coveredUniverseCount,
+                    projectionComplete = completeAtCommit,
                     committedView = committed,
                 )
             )

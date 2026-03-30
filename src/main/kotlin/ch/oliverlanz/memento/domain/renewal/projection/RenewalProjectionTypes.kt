@@ -59,6 +59,14 @@ data class RenewalProjectionStatusView(
     val pendingWorkSetSize: Int,
     val trackedChunks: Int,
     val trackedRegions: Int,
+    /** D_projection_required: required derivation universe from factual projection input. */
+    val projectionRequiredUniverseCount: Int,
+    /** N_projection_covered: committed derivation coverage over required universe. */
+    val projectionCoveredUniverseCount: Int,
+    /** True only when required universe is fully covered and no projection work remains. */
+    val projectionComplete: Boolean,
+    /** True only when projection is complete and fully idle. */
+    val projectionQuiescent: Boolean,
     val committedGeneration: Long,
     val blockedOnGate: Boolean = false,
     val runningDurationMs: Long? = null,

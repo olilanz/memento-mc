@@ -22,6 +22,11 @@ data class ProjectionCommitCompleted(
     val durationMs: Long,
     val processedAffectedRegionWindow: List<RegionKey>,
     val overflowRemainder: List<RegionKey>,
+    /** D_projection_required at commit time. */
+    val projectionRequiredUniverseCount: Int,
+    /** N_projection_covered at commit time. */
+    val projectionCoveredUniverseCount: Int,
+    /** Commit-time completeness truth (coverage + no pending projection work). */
+    val projectionComplete: Boolean,
     val committedView: RenewalPublishedView,
 )
-
