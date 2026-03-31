@@ -1,6 +1,8 @@
 package ch.oliverlanz.memento.domain.harness
 
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
+import ch.oliverlanz.memento.domain.worldmap.DominantStoneEffectSignal
+import ch.oliverlanz.memento.domain.worldmap.DominantStoneSignal
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanProvenance
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanUnresolvedReason
 import ch.oliverlanz.memento.domain.worldmap.ChunkSignals
@@ -8,12 +10,16 @@ import net.minecraft.registry.RegistryKey
 import net.minecraft.world.World
 
 /**
- * Canonical scenario host for deterministic domain-harness tests.
+ * Canonical factual fixture model for deterministic renewal domain tests.
  *
  * Source-of-truth constraints:
  * - Stores only synthetic world input facts.
  * - Never stores derived projection/election outputs as source truth.
  * - Keeps world/region/chunk identity stable for deterministic replay.
+ *
+ * Determinism constraints:
+ * - Builder output ordering is canonicalized by world/region/chunk identity.
+ * - Equivalent fact sets produce stable fixture identity independent of call order.
  */
 data class TestWorldModel(
     val chunks: List<TestChunkFact>,
@@ -23,7 +29,9 @@ data class TestWorldModel(
         val scanTick: Long,
         val source: ChunkScanProvenance,
         val unresolvedReason: ChunkScanUnresolvedReason? = null,
-        val signals: ChunkSignals,
+        val signals: ChunkSignals? = null,
+        val dominantStone: DominantStoneSignal? = null,
+        val dominantStoneEffect: DominantStoneEffectSignal? = null,
     )
 
     companion object {
@@ -37,7 +45,7 @@ data class TestWorldModel(
             world: RegistryKey<World>,
             chunkX: Int,
             chunkZ: Int,
-            inhabitedTimeTicks: Long,
+            inhabitedTimeTicks: Long? = null,
             isSpawnChunk: Boolean = false,
             scanTick: Long = 1L,
             source: ChunkScanProvenance = ChunkScanProvenance.FILE_PRIMARY,
@@ -45,6 +53,8 @@ data class TestWorldModel(
             lastUpdateTicks: Long? = null,
             surfaceY: Int? = null,
             biomeId: String? = null,
+            dominantStone: DominantStoneSignal? = null,
+            dominantStoneEffect: DominantStoneEffectSignal? = null,
         ) {
             val key = ChunkKey(
                 world = world,
@@ -59,13 +69,17 @@ data class TestWorldModel(
                 scanTick = scanTick,
                 source = source,
                 unresolvedReason = unresolvedReason,
-                signals = ChunkSignals(
-                    inhabitedTimeTicks = inhabitedTimeTicks,
-                    lastUpdateTicks = lastUpdateTicks,
-                    surfaceY = surfaceY,
-                    biomeId = biomeId,
-                    isSpawnChunk = isSpawnChunk,
-                ),
+                signals = inhabitedTimeTicks?.let {
+                    ChunkSignals(
+                        inhabitedTimeTicks = it,
+                        lastUpdateTicks = lastUpdateTicks,
+                        surfaceY = surfaceY,
+                        biomeId = biomeId,
+                        isSpawnChunk = isSpawnChunk,
+                    )
+                },
+                dominantStone = dominantStone,
+                dominantStoneEffect = dominantStoneEffect,
             )
         }
 
@@ -81,4 +95,3 @@ data class TestWorldModel(
         }
     }
 }
-

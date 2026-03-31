@@ -23,6 +23,10 @@ fun interface RenewalProjectionStableListener {
 /**
  * Partitioned boolean renewal projection.
  *
+ * Authority boundary:
+ * - RenewalProjection is a derived evaluation boundary, not factual-world state authority.
+ * - WorldMapService owns institutional-memory mutation; projection consumes read surfaces only.
+ *
  * Projection boundary contract:
  * - Projection state is fully derived from WorldMap substrate facts.
  * - Projection-derived state is never persisted back into WorldMap.
@@ -33,24 +37,61 @@ fun interface RenewalProjectionStableListener {
  *
  * Invariants:
  * - Projection state is fully derived and recomputable.
+ * - Required universe (D_projection_required) is exactly factual projection-input keys.
+ * - Operational denominator rule for this slice: D_projection_required == chunkSourceByKey.size
+ *   (every tracked factual source entry requires a derivation row).
+ * - Covered universe (N_projection_covered) is exactly committed derivation keys intersected with required universe.
+ * - Completeness is true only when covered == required and no pending projection work remains.
+ * - Internal bookkeeping (for example overflow carry) must not semantically invalidate completeness without new facts.
  * - Region-level eligibility is derived from region forgettability only.
  * - Chunk-level eligibility is derived independently and does not consult region forgettability.
  * - Protection dominance is encoded before execution by stone-authority/derivation surfaces.
  * - No mixed arbitration state exists between region and chunk mechanisms.
  * - Only affected-dirty regions are mutated at commit.
  * - Unaffected regions remain bitwise identical across commits.
+ * - Finite fact bursts must converge: overflow continuation drains without introducing artificial debounce stalls.
  * - Election is derived exclusively from committed state.
  * - No numeric ranking surfaces exist.
+ * - Snapshot terminology is projection-scoped; WorldMap itself is not a snapshot boundary.
+ * - Chunk memorability derivation is pipeline-ordered: signal first, then memorable decision.
+ * - Memorability decision must be derived from memorability index and lore override only.
+ * - Region forgettability remains downstream of chunk memorable derivation.
+ *
+ * Pipeline-clarity gate (execution discipline):
+ * - Before any memorability behavior changes, pass boundaries must be explicit and sequential.
+ * - Structural extraction must not alter projection outputs.
+ * - Passes must not share mutable cross-pass state.
+ * - No pass interleaving or iterative pass feedback is allowed.
+ *
+ * Non-goals:
+ * - Command-layer orchestration or execution ownership.
+ * - Minecraft runtime lifecycle ownership.
+ * - Persistence of derived projection/election state into factual world memory.
  */
 class RenewalProjection {
 
-    private companion object {
-        // NOTE:
-        // Dirty-expansion dependency radius must remain >= memorability expansion radius.
-        // Current coupling: 1 region ring == 32 chunks, memorability radius == 24 chunks.
-        // If memorability radius changes, dirty expansion rules must be updated accordingly.
-        private const val AFFECTED_EXPANSION_RING_REGIONS = 1
+    companion object {
+        private const val CHUNKS_PER_REGION_EDGE = 32
         private const val CONTEXT_EXPANSION_RING_REGIONS = 1
+
+        private fun dependencyRadiusChunksForInvalidation(): Int =
+            MementoConstants.MEMENTO_RENEWAL_MEMORABLE_EXPANSION_RADIUS_CHUNKS +
+                MementoConstants.MEMENTO_RENEWAL_MEMORABLE_HALO_RADIUS_CHUNKS
+
+        private fun regionRingForDependencyRadiusChunks(radiusChunks: Int): Int {
+            if (radiusChunks <= 0) return 0
+            return (radiusChunks + CHUNKS_PER_REGION_EDGE - 1) / CHUNKS_PER_REGION_EDGE
+        }
+
+        private fun affectedExpansionRingRegions(): Int =
+            regionRingForDependencyRadiusChunks(dependencyRadiusChunksForInvalidation())
+
+        internal fun dependencyRadiusChunksForInvalidationForTesting(): Int = dependencyRadiusChunksForInvalidation()
+
+        internal fun regionRingForDependencyRadiusChunksForTesting(radiusChunks: Int): Int =
+            regionRingForDependencyRadiusChunks(radiusChunks)
+
+        internal fun affectedExpansionRingRegionsForTesting(): Int = affectedExpansionRingRegions()
     }
 
     private var worldMapService: WorldMapService? = null
@@ -176,10 +217,23 @@ class RenewalProjection {
         val now = System.currentTimeMillis()
         val runningDuration = inFlight?.let { now - it.startedAtMs }
         val published = publishedView
+        // Concrete denominator semantics for this locked slice:
+        // every tracked factual source row is in the required derivation universe.
+        val projectionRequiredUniverseCount = chunkSourceByKey.size
+        val projectionCoveredUniverseCount = chunkDerivationByKey.keys.count { key -> chunkSourceByKey.containsKey(key) }
+        val projectionComplete =
+            projectionRequiredUniverseCount > 0 &&
+                projectionCoveredUniverseCount == projectionRequiredUniverseCount &&
+                sourceDirtyRegions.isEmpty()
+        val projectionQuiescent = projectionComplete && !hasPendingChanges()
         return RenewalProjectionStatusView(
             pendingWorkSetSize = sourceDirtyRegions.size,
             trackedChunks = chunkDerivationByKey.size,
             trackedRegions = regionForgettableByRegion.size,
+            projectionRequiredUniverseCount = projectionRequiredUniverseCount,
+            projectionCoveredUniverseCount = projectionCoveredUniverseCount,
+            projectionComplete = projectionComplete,
+            projectionQuiescent = projectionQuiescent,
             committedGeneration = published.generation,
             blockedOnGate = blockedOnGate,
             runningDurationMs = runningDuration,
@@ -450,12 +504,23 @@ class RenewalProjection {
 
         if (result.overflowRemainder.isNotEmpty()) {
             sourceDirtyRegions.addAll(result.overflowRemainder)
-            if (dirtySinceMs == null) {
-                dirtySinceMs = System.currentTimeMillis()
-            }
+            // Overflow remainder is bookkeeping continuation of the same factual universe,
+            // not new external input. Keep draining without debounce wait so finite bursts
+            // converge deterministically under bounded windows.
+            dirtySinceMs =
+                (System.currentTimeMillis() - MementoConstants.MEMENTO_RENEWAL_PROJECTION_DIRTY_REGION_DEBOUNCE_MS)
+                    .coerceAtLeast(0L)
         }
 
         try {
+            val requiredUniverseCount = chunkSourceByKey.size
+            val coveredUniverseCount = chunkDerivationByKey.keys.count { key -> chunkSourceByKey.containsKey(key) }
+            val completeAtCommit =
+                requiredUniverseCount > 0 &&
+                    coveredUniverseCount == requiredUniverseCount &&
+                    sourceDirtyRegions.isEmpty() &&
+                    result.overflowRemainder.isEmpty()
+
             projectionCycleDriver.onCommitCompleted(
                 ProjectionCommitCompleted(
                     generation = committed.generation,
@@ -463,6 +528,9 @@ class RenewalProjection {
                     durationMs = durationMs,
                     processedAffectedRegionWindow = result.processedAffectedRegionWindow,
                     overflowRemainder = result.overflowRemainder,
+                    projectionRequiredUniverseCount = requiredUniverseCount,
+                    projectionCoveredUniverseCount = coveredUniverseCount,
+                    projectionComplete = completeAtCommit,
                     committedView = committed,
                 )
             )
@@ -502,13 +570,11 @@ class RenewalProjection {
         sourceDirtySeed: List<RegionKey>,
         fullSnapshotRecovery: Boolean,
     ): CandidateView {
-        // Phase contract (boolean partitioned derivation):
-        // Pass 1: region forgettable (region-only).
-        // Pass 2: memorable source chunks (absolute inhabited threshold OR lore influence).
-        // Pass 3: memorability expansion (radius = MEMENTO_RENEWAL_MEMORABLE_EXPANSION_RADIUS_CHUNKS).
-        // Pass 4: chunk eligibility = !memorable (stone-driven path is independent from region forgettability).
-        //
-        // Region prune and chunk renewal eligibility are separate domains and must not be conflated.
+        // Canonical local derivation semantics:
+        // - Chunk memorability is authoritative at chunk level (lore OR inhabited-neighborhood threshold).
+        // - Region eligibility is derived directly from chunk memorability only.
+        // - No intermediate chunk-level classification is used as region-eligibility input.
+        // - Region prune and chunk renewal eligibility are separate domains and must not be conflated.
         val sourceDirty = sourceDirtySeed.toSortedSet(regionOrder())
 
         if (sourceSnapshotByKey.isEmpty()) {
@@ -552,7 +618,7 @@ class RenewalProjection {
             .filter { !allKnownRegions.contains(it) }
             .toSortedSet(regionOrder())
 
-        val affectedAll = expandRing(sourceDirty, AFFECTED_EXPANSION_RING_REGIONS)
+        val affectedAll = expandRing(sourceDirty, affectedExpansionRingRegions())
             .filter { allKnownRegions.contains(it) }
             .toSortedSet(regionOrder())
 
@@ -596,50 +662,38 @@ class RenewalProjection {
             .filter { materializedRegions.contains(regionOf(it.key)) }
             .groupBy { regionOf(it.key) }
 
-        val regionHasInhabited = linkedMapOf<RegionKey, Boolean>()
-        val regionHasLore = linkedMapOf<RegionKey, Boolean>()
-        val regionHasWitherForget = linkedMapOf<RegionKey, Boolean>()
+        val allEntriesInMaterialized = entriesByRegion.values.flatten()
+        val inhabitedByChunk = linkedMapOf<ChunkKey, Long>()
+        allEntriesInMaterialized.forEach { entry ->
+            inhabitedByChunk[entry.key] = entry.signals?.inhabitedTimeTicks ?: 0L
+        }
 
+        val loreProtectedChunks = allEntriesInMaterialized
+            .asSequence()
+            .filter { it.dominantStoneEffect == DominantStoneEffectSignal.LORE_PROTECT }
+            .map { it.key }
+            .toSet()
+
+        val memorabilityIndexByChunk = ProjectionMemorability.computeMemorabilityIndex(
+            inhabitedTicksByChunk = inhabitedByChunk,
+        )
+        val chunkMemorableByKey = ProjectionMemorability.deriveChunkMemorable(
+            memorabilityIndexByChunk = memorabilityIndexByChunk,
+            loreProtectedChunks = loreProtectedChunks,
+        )
+
+        // Region eligibility is derived directly from chunk memorability presence/absence.
+        val regionMemorableByRegion = linkedMapOf<RegionKey, Boolean>()
         materializedRegions.sortedWith(regionOrder()).forEach { region ->
             val entries = entriesByRegion[region].orEmpty()
-            regionHasInhabited[region] = entries.any { (it.signals?.inhabitedTimeTicks ?: 0L) > 0L }
-            regionHasLore[region] = entries.any { entry ->
-                entry.dominantStoneEffect == DominantStoneEffectSignal.LORE_PROTECT
-            }
-            regionHasWitherForget[region] = entries.any { entry ->
-                entry.dominantStoneEffect == DominantStoneEffectSignal.WITHER_FORGET
-            }
+            regionMemorableByRegion[region] = entries.any { entry -> chunkMemorableByKey[entry.key] == true }
         }
 
         val regionForgettableUpdates = linkedMapOf<RegionKey, Boolean>()
         affected.forEach { region ->
-            val neighbors = neighborRegions8(region)
-            val localInhabited = regionHasInhabited[region] == true
-            val localLore = regionHasLore[region] == true
-            val localWitherForget = regionHasWitherForget[region] == true
-            val neighborInhabited = neighbors.any { regionHasInhabited[it] == true }
-            val neighborLore = neighbors.any { regionHasLore[it] == true }
-            val neighborWitherForget = neighbors.any { regionHasWitherForget[it] == true }
-
-            regionForgettableUpdates[region] = when {
-                localLore || neighborLore -> false
-                localWitherForget || neighborWitherForget -> true
-                else -> !(localInhabited || neighborInhabited)
-            }
-        }
-
-        val allEntriesInMaterialized = entriesByRegion.values.flatten()
-        val memorableSourcePackedByWorld = linkedMapOf<RegistryKey<World>, MutableSet<Long>>()
-        allEntriesInMaterialized.forEach { entry ->
-            val inhabitedTicks = entry.signals?.inhabitedTimeTicks ?: 0L
-            val hasLoreProtect = entry.dominantStoneEffect == DominantStoneEffectSignal.LORE_PROTECT
-            val hasWitherForget = entry.dominantStoneEffect == DominantStoneEffectSignal.WITHER_FORGET
-
-            if (hasLoreProtect || (!hasWitherForget && inhabitedTicks >= MementoConstants.MEMENTO_RENEWAL_MEMORABLE_INHABITED_TICKS_THRESHOLD)) {
-                memorableSourcePackedByWorld
-                    .computeIfAbsent(entry.key.world) { linkedSetOf() }
-                    .add(packChunk(entry.key.chunkX, entry.key.chunkZ))
-            }
+            val localMemorable = regionMemorableByRegion[region] == true
+            val neighborMemorable = neighborRegions8(region).any { regionMemorableByRegion[it] == true }
+            regionForgettableUpdates[region] = !(localMemorable || neighborMemorable)
         }
 
         val chunkDerivationUpdates = linkedMapOf<ChunkKey, RenewalChunkDerivation>()
@@ -647,38 +701,24 @@ class RenewalProjection {
             val entries = entriesByRegion[region].orEmpty()
             entries.forEach { entry ->
                 val key = entry.key
-                val packed = packChunk(key.chunkX, key.chunkZ)
-                val sourceSet = memorableSourcePackedByWorld[key.world].orEmpty()
-                val hasLoreProtect = entry.dominantStoneEffect == DominantStoneEffectSignal.LORE_PROTECT
                 val hasWitherForget = entry.dominantStoneEffect == DominantStoneEffectSignal.WITHER_FORGET
                 val regionForgettable = regionForgettableUpdates[region] == true
+                val memorable = chunkMemorableByKey[key] == true
 
-                val memorable = when {
-                    hasLoreProtect -> true
-                    hasWitherForget -> false
-                    sourceSet.contains(packed) -> true
-                    else -> hasSourceWithinRadius(
-                        candidate = key,
-                        sourcePacked = sourceSet,
-                        radius = MementoConstants.MEMENTO_RENEWAL_MEMORABLE_EXPANSION_RADIUS_CHUNKS,
-                    )
-                }
-
-                // Diagnostic ambient execution preference derived from existing projection facts.
-                // - REGION: ambient renewal would be handled by region pruning.
-                // - CHUNK: ambient renewal would require chunk-level handling, but is currently unelected.
-                // - NONE: no ambient renewal path is currently indicated.
+                // Diagnostic ambient execution preference derived from projection authority.
+                // - REGION: ambient renewal is region-authoritative for this chunk's region.
+                // - NONE: ambient region authority is not active for this chunk's region.
                 val ambientStrategy = when {
                     regionForgettable -> AmbientRenewalStrategy.REGION
-                    !memorable -> AmbientRenewalStrategy.CHUNK
                     else -> AmbientRenewalStrategy.NONE
                 }
 
                 chunkDerivationUpdates[key] = RenewalChunkDerivation(
+                    memorabilityIndex = memorabilityIndexByChunk[key] ?: 0.0,
                     memorable = memorable,
-                    // Stone-driven chunk renewal is intentionally independent of region forgettability.
-                    // Chunk renewal eligibility is derived from chunk-local memorability/protection only.
-                    eligibleChunkRenewal = !memorable,
+                    // Stone-driven/operator chunk renewal remains structurally separate from
+                    // ambient region authority for this slice.
+                    eligibleChunkRenewal = hasWitherForget,
                     ambientStrategy = ambientStrategy,
                     explicitRenewalIntent = hasWitherForget,
                 )
@@ -700,7 +740,7 @@ class RenewalProjection {
 
     private fun rebuildSourceCacheFromWorldSnapshot(reason: String) {
         val service = worldMapService ?: return
-        val snapshot = service.substrate().snapshot()
+        val snapshot = service.observedScannedEntries()
         chunkSourceByKey.clear()
         snapshot.forEach { entry ->
             chunkSourceByKey[entry.key] = entry

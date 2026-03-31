@@ -8,10 +8,26 @@ import net.minecraft.server.MinecraftServer
 /**
  * Domain-owned lifecycle and ingestion authority for the authoritative world map.
  *
+ * Invariant references:
+ * - WorldMapService is the sole mutation authority for WorldMementoMap institutional memory.
+ * - Infrastructure publishes boundary-safe discovery/metadata facts; it does not mutate map state.
+ * - All authoritative map mutation executes on tick thread.
+ *
+ * Responsibility boundary:
+ * - Owns substrate lifecycle for server attach/detach.
+ * - Owns ingestion and merge policy for factual updates.
+ * - Exposes observational read surfaces over live institutional memory.
+ *
  * Infrastructure components stage/prepare metadata, but authoritative map mutation happens only
  * through [applyFactOnTickThread] on the server tick thread.
  */
 class WorldMapService {
+    data class CoverageView(
+        val discoveredUniverseCount: Int,
+        val scannedSubsetCount: Int,
+        val missingMetadataCount: Int,
+    )
+
     private val map = WorldMementoMap()
 
     @Volatile private var attached: Boolean = false
@@ -49,6 +65,35 @@ class WorldMapService {
     }
 
     fun substrate(): WorldMementoMap = map
+
+    /** Explicit discovered-universe vs scanned-subset read surface for consumers. */
+    fun coverageView(): CoverageView =
+        CoverageView(
+            discoveredUniverseCount = map.totalChunks(),
+            scannedSubsetCount = map.scannedChunks(),
+            missingMetadataCount = map.missingCount(),
+        )
+
+    /** Explicit scanned-subset read surface (projection/CSV observational consumers). */
+    fun observedScannedEntries(): List<ChunkScanSnapshotEntry> = map.snapshot()
+
+    /** Explicit discovered-universe read surface (all known chunks, scanned or unscanned). */
+    fun discoveredUniverseKeys(): List<ChunkKey> = map.discoveredUniverseKeys()
+
+    /**
+     * Discovery ingestion boundary on tick thread.
+     *
+     * Merge semantics:
+     * - merge-only
+     * - idempotent
+     * - non-destructive (does not overwrite metadata)
+     *
+     * @return true when discovery inserted a new chunk existence record.
+     */
+    fun ingestDiscoveryOnTickThread(key: ChunkKey): Boolean {
+        if (!attached) return false
+        return map.ensureExistsAndReportInserted(key)
+    }
 
     /**
      * Applies one metadata fact directly on the server tick thread.

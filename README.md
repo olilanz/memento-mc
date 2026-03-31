@@ -205,7 +205,8 @@ Natural Renewal in this workflow uses the region-based mechanism in
 forgettable outskirts.\
 The operator decides when to apply it.
 
-The world map used for renewal decisions is rebuilt from scanning world data.
+The world map used for renewal decisions is built from discovered chunk
+existence and progressively enriched by metadata observations.
 
 ------------------------------------------------------------------------
 

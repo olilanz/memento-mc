@@ -12,6 +12,19 @@ import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import java.util.concurrent.Callable
 import java.util.concurrent.CompletableFuture
 
+/**
+ * Deterministic domain-harness boundary for renewal projection/election tests.
+ *
+ * Purpose:
+ * - Ingest factual chunk metadata into projection through the same domain fact boundary.
+ * - Drive projection cadence deterministically without background scheduler variability.
+ * - Expose commit/dispatch observations for invariant assertions.
+ *
+ * Boundary and non-goals:
+ * - This harness validates domain behavior only.
+ * - It does not validate application-command wiring or Minecraft runtime integration.
+ * - It does not introduce alternative eligibility/election logic.
+ */
 class DomainTestHarness {
     private val worldMapService = WorldMapService()
     private val projection = RenewalProjection()
@@ -31,6 +44,8 @@ class DomainTestHarness {
                     source = fact.source,
                     unresolvedReason = fact.unresolvedReason,
                     signals = fact.signals,
+                    dominantStone = fact.dominantStone,
+                    dominantStoneEffect = fact.dominantStoneEffect,
                     scanTick = fact.scanTick,
                 )
             )

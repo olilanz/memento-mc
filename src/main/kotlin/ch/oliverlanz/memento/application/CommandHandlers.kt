@@ -16,6 +16,7 @@ import ch.oliverlanz.memento.domain.renewal.projection.RegionKey
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateAction
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateId
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCommittedSnapshot
+import ch.oliverlanz.memento.domain.renewal.projection.RenewalProjectionStatusView
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalRankedCandidate
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalProjection
 import ch.oliverlanz.memento.domain.renewal.projection.toChunkKeyOrNull
@@ -78,6 +79,7 @@ object CommandHandlers {
     private const val LIST_MAX_ROWS = 4
     private const val DEFAULT_EXPLAIN_TOP_LIMIT = 10
     private const val DO_RENEWAL_MAX_REGION_BATCH = 10
+    private const val WORLDVIEW_UNAVAILABLE_LINE = "Worldview availability: unavailable (requires scan complete + projection complete)"
 
     private enum class SuggestedStoneKind {
         ANY,
@@ -183,7 +185,7 @@ object CommandHandlers {
     fun explainWorld(source: ServerCommandSource): Int {
         return try {
             worldScanner?.ensureDiscoveryUniverse()
-            val lines = formatExplainWorld(source)
+            val lines = formatExplainWorld()
             sendCompactReport(
                 source = source,
                 header = lines.first(),
@@ -202,11 +204,19 @@ object CommandHandlers {
         return try {
             val ambientAccepted = MementoConfigStore.isAmbientRenewalAccepted()
             val projection = renewalProjection
+            val projectionStatus = projection?.statusView()
             val snapshot = projection?.committedSnapshotOrNull()
+            val worldviewUnavailableLine = worldviewAvailabilityLineForProjection(projectionStatus)
             // Presentation boundary only:
             // This explain surface aggregates already-derived mechanism outputs for operators.
             // It must not merge, alter, or feed back into region/chunk derivation semantics.
-            val topCandidates = snapshot?.rankedCandidates?.take(DEFAULT_EXPLAIN_TOP_LIMIT).orEmpty()
+            // Worldview-facing operator surfaces must not expose partial projection truth.
+            // Gate authority is projectionComplete; committed snapshot presence alone is insufficient.
+            val topCandidates = if (worldviewUnavailableLine == null) {
+                snapshot?.rankedCandidates?.take(DEFAULT_EXPLAIN_TOP_LIMIT).orEmpty()
+            } else {
+                emptyList()
+            }
             val topRegionCandidates = topCandidates.filter { it.id.action == RenewalCandidateAction.REGION_PRUNE }
             val topChunkCandidates = topCandidates.filter { it.id.action == RenewalCandidateAction.CHUNK_RENEW }
             val witherstones = StoneAuthority.list().filterIsInstance<Witherstone>().sortedBy { it.name }
@@ -255,6 +265,9 @@ object CommandHandlers {
                 },
                 false,
             )
+            if (worldviewUnavailableLine != null) {
+                source.sendFeedback({ Text.literal(worldviewUnavailableLine).formatted(Formatting.GRAY) }, false)
+            }
 
             source.sendFeedback({ Text.literal("Ambient renewal").formatted(Formatting.YELLOW) }, false)
             if (!ambientAccepted) {
@@ -271,7 +284,9 @@ object CommandHandlers {
             )
             if (topRegionCandidates.isEmpty()) {
                 val waitingInitialScan = worldScanner?.hasInitialScanCompleted() != true
-                if (waitingInitialScan) {
+                if (worldviewUnavailableLine != null) {
+                    source.sendFeedback({ Text.literal(worldviewUnavailableLine).formatted(Formatting.GRAY) }, false)
+                } else if (waitingInitialScan) {
                     source.sendFeedback(
                         { Text.literal("waiting: initial world scan must complete before operator renewal candidates are authoritative").formatted(Formatting.GRAY) },
                         false,
@@ -290,7 +305,11 @@ object CommandHandlers {
                 false,
             )
             if (topChunkCandidates.isEmpty()) {
-                source.sendFeedback({ Text.literal("none").formatted(Formatting.GRAY) }, false)
+                if (worldviewUnavailableLine != null) {
+                    source.sendFeedback({ Text.literal(worldviewUnavailableLine).formatted(Formatting.GRAY) }, false)
+                } else {
+                    source.sendFeedback({ Text.literal("none").formatted(Formatting.GRAY) }, false)
+                }
             } else {
                 topChunkCandidates.forEach { candidate ->
                     source.sendFeedback({ Text.literal(formatCandidateForExplain(candidate)).formatted(Formatting.GRAY) }, false)
@@ -325,6 +344,9 @@ object CommandHandlers {
             } else {
                 if (projection.hasPendingChanges()) blockingLines += "- projection update in progress"
                 if (!WorldPruningService.isIdle()) blockingLines += "- pruning service is busy"
+                if (worldviewUnavailableLine != null) {
+                    blockingLines += "- worldview unavailable until projection completeness is reached for the required universe"
+                }
             }
             blockingLines += blockers.take(DEFAULT_EXPLAIN_TOP_LIMIT)
 
@@ -521,6 +543,16 @@ object CommandHandlers {
 
         if (!isReadinessAtLeastScanned(readiness.readiness)) {
             source.sendError(Text.literal("[Memento] worldview export is unavailable before scan readiness reaches SCANNED."))
+            return 0
+        }
+
+        val projectionStatus = renewalProjection?.statusView()
+        if (projectionStatus?.projectionComplete != true) {
+            source.sendError(
+                Text.literal(
+                    "[Memento] worldview export is unavailable until projection completeness is reached for the required universe."
+                )
+            )
             return 0
         }
 
@@ -1055,7 +1087,7 @@ object CommandHandlers {
         return lines
     }
 
-    private fun formatExplainWorld(source: ServerCommandSource): List<String> {
+    private fun formatExplainWorld(): List<String> {
         val lines = mutableListOf("World explanation")
         val readinessView = worldAnalysisReadinessView(ensureDiscovery = false)
         val projection = renewalProjection
@@ -1074,6 +1106,19 @@ object CommandHandlers {
             lines += "World completeness: ${if (readinessView.complete) "complete" else "incomplete"}"
         }
 
+        if (projectionStatus?.projectionComplete != true) {
+            lines += WORLDVIEW_UNAVAILABLE_LINE
+            val health = when {
+                projection == null -> "projection unavailable"
+                projection.hasPendingChanges() -> "projection recomputation pending"
+                projectionStatus?.blockedOnGate == true -> "projection waiting for async gate"
+                projectionStatus?.runningDurationMs != null -> "projection recomputation running"
+                else -> "projection stable"
+            }
+            lines += "Projection health: $health"
+            return lines
+        }
+
         val candidates = snapshot?.rankedCandidates.orEmpty()
         val regionCandidates = candidates.count { it.id.action == RenewalCandidateAction.REGION_PRUNE }
         val chunkCandidates = candidates.count { it.id.action == RenewalCandidateAction.CHUNK_RENEW }
@@ -1081,15 +1126,24 @@ object CommandHandlers {
         lines += "Mechanism activity: natural=${if (regionCandidates > 0) "ready" else "none"}, stone-driven=${if (chunkCandidates > 0) "ready" else "none"}"
 
         val health = when {
-            projection == null -> "projection unavailable"
             projection.hasPendingChanges() -> "projection recomputation pending"
-            projectionStatus?.blockedOnGate == true -> "projection waiting for async gate"
-            projectionStatus?.runningDurationMs != null -> "projection recomputation running"
+            projectionStatus.blockedOnGate -> "projection waiting for async gate"
+            projectionStatus.runningDurationMs != null -> "projection recomputation running"
             else -> "projection stable"
         }
         lines += "Projection health: $health"
 
         return lines
+    }
+
+    private fun worldviewAvailabilityLineForProjection(projectionStatus: RenewalProjectionStatusView?): String? {
+        return if (projectionStatus?.projectionComplete != true) WORLDVIEW_UNAVAILABLE_LINE else null
+    }
+
+    internal fun testOnlyExplainWorldLines(): List<String> = formatExplainWorld()
+
+    internal fun testOnlyRenewalWorldviewAvailabilityLine(): String? {
+        return worldviewAvailabilityLineForProjection(renewalProjection?.statusView())
     }
 
     private fun worldAnalysisReadinessView(ensureDiscovery: Boolean): WorldAnalysisReadinessView? {
@@ -1100,9 +1154,10 @@ object CommandHandlers {
 
         val status = scanner.statusView()
         val scanComplete = scanner.hasInitialScanCompleted()
+        // ANALYZED requires projection completeness, not merely projection/snapshot presence.
         val readiness = when {
             status.worldMapTotal <= 0 -> WorldAnalysisReadiness.UNINITIALIZED
-            scanComplete && renewalProjection?.committedSnapshotOrNull() != null -> WorldAnalysisReadiness.ANALYZED
+            scanComplete && renewalProjection?.statusView()?.projectionComplete == true -> WorldAnalysisReadiness.ANALYZED
             scanComplete -> WorldAnalysisReadiness.SCANNED
             else -> WorldAnalysisReadiness.DISCOVERED
         }

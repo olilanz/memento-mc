@@ -340,11 +340,12 @@ It owns:
 `WorldMapService` maintains an in-memory representation of observed
 world state.
 
-The world map is derived entirely from scanning region files and is not
-persisted.
+The world map is derived from chunk existence discovery plus metadata
+observations from scanning and ambient ingestion, and is not persisted.
 
-On server start, the world map begins empty and is rebuilt through scan
-observation flow.
+On server start, asynchronous discovery progressively establishes chunk
+existence in the map. Baseline scan and ambient ingestion progressively
+enrich metadata over that discovered universe.
 
 No infrastructure component mutates `WorldMap` directly.
 
@@ -371,6 +372,11 @@ synchronization drift between region files and internal model state.
 
 The scanner is an infrastructure component that owns **filesystem
 discovery reconciliation and completion** for `/memento do scan`.
+
+Discovery and scan are distinct signals:
+
+- discovery establishes chunk existence
+- scan enriches chunk metadata observations
 
 Active scan is file-primary and single-pass. Chunk metadata is read from
 region/NBT files off-thread and emitted as metadata facts into
@@ -501,6 +507,34 @@ Moving local policy from this document into class headers does not
 reduce force; it relocates ownership to the component that enforces the
 policy at runtime.
 
+### Testing Strategy and Verification Boundaries
+
+Testing strategy currently prioritizes deterministic validation of the
+domain layer.
+
+The active domain harness verifies the renewal data path:
+
+- factual world inputs
+- projection derivation
+- election ranking/selection
+- CSV worldview mapping
+
+Current domain-focused fixture coverage includes:
+
+- stone topology/lifecycle influence effects as projected world facts
+- world-map factual administration surfaces
+- influence projection, memorability, and forgettability behavior
+- renewal election invariants and deterministic ordering
+
+Current explicit boundary:
+
+- Application-layer command wiring and Minecraft runtime integration are
+  not yet covered by this deterministic domain harness.
+
+This boundary is intentional. It preserves high-signal deterministic
+regression protection where authority and invariants are concentrated,
+while avoiding mixed concerns between domain logic and runtime plumbing.
+
 ------------------------------------------------------------------------
 
 ## 6. Illustrative flows
@@ -596,6 +630,16 @@ The following properties must remain true:
 
 -   WorldMapService is the sole world map lifecycle and mutation
     authority
+
+-   All domain reasoning must operate within discovered chunk universe
+
+-   Metadata subset is contained within discovered chunk universe
+
+-   Projection/election/CSV outputs are contained within discovered chunk
+    universe
+
+-   Snapshot terminology is reserved to projection boundary semantics;
+    WorldMap does not publish snapshots
 
 -   All domain interactions and mutations must execute on the server
     tick thread

@@ -1,7 +1,6 @@
 package ch.oliverlanz.memento.domain.renewal.election
 
 import ch.oliverlanz.memento.domain.renewal.projection.RegionKey
-import ch.oliverlanz.memento.domain.renewal.projection.AmbientRenewalStrategy
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateAction
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateId
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalElectionInput
@@ -21,11 +20,21 @@ data class ElectionResult(
 /**
  * Deterministic election authority over boolean projection outputs.
  *
+ * Ownership boundary:
+ * - Consumes committed projection input only.
+ * - Produces deterministic elected region/chunk sets and ranked candidates.
+ * - Does not mutate WorldMap or projection caches.
+ *
  * Election policy:
  * - region-prune candidates first in deterministic order
  * - chunk-renew candidates are derived independently from chunk-local eligibility
  * - region-first ordering is an execution policy, not a derivation dependency
  * - no numeric scoring surfaces
+ *
+ * Non-goals:
+ * - command execution orchestration,
+ * - runtime chunk lifecycle integration,
+ * - deriving projection-world facts.
  */
 object RenewalElection {
 
@@ -34,7 +43,6 @@ object RenewalElection {
     fun evaluate(
         input: RenewalElectionInput,
         deterministicTransactionId: String? = null,
-        suppressAmbientChunkStrategy: Boolean = true,
         includeExplicitStoneIntent: Boolean = false,
     ): ElectionResult {
         // Domain-separation contract:
@@ -64,17 +72,7 @@ object RenewalElection {
                 // Explicit stone intent remains actionable.
                 if (derivation.explicitRenewalIntent) return@filter includeExplicitStoneIntent
 
-                if (!suppressAmbientChunkStrategy) {
-                    // Diagnostic/projection view: include ambient chunk strategy.
-                    return@filter true
-                }
-
-                // Release cut gate (explicit and local):
-                // ambient chunk strategy remains projected/observable,
-                // but is intentionally unelected for execution.
-                if (derivation.ambientStrategy == AmbientRenewalStrategy.CHUNK) return@filter false
-
-                // No stone intent and ambient-chunk path suppressed: not actionable in election.
+                // No explicit stone intent: not actionable in chunk election.
                 false
             }
             .map { (key, _) -> key }

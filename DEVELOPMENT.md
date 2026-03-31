@@ -84,6 +84,24 @@ If the build succeeds and the server starts, the environment is correctly config
 
 Run the Gradle build task to compile and validate the project.
 
+### Running Tests
+
+Use Gradle test tasks for deterministic verification.
+
+- Full test suite:
+  - `./gradlew test`
+- Clean compile + test/build validation gate:
+  - `./gradlew build`
+
+For focused renewal-domain verification, run targeted classes, for example:
+
+- `./gradlew test --tests "ch.oliverlanz.memento.domain.renewal.projection.RenewalProjectionMinimalFactualStateAntiCollapseTest"`
+- `./gradlew test --tests "ch.oliverlanz.memento.domain.renewal.projection.RenewalProjectionInvariantMatrixTest"`
+- `./gradlew test --tests "ch.oliverlanz.memento.domain.renewal.projection.RenewalProjectionShuffledIngestionEquivalenceTest"`
+
+Current strategy emphasis is domain-layer determinism (projection/election/CSV)
+rather than application-layer command/runtime integration coverage.
+
 ---
 
 ### Run
@@ -139,4 +157,3 @@ The dev container forwards required ports automatically.
 
 - README.md — user-facing overview
 - ARCHITECTURE.md — system design and invariants
-

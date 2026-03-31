@@ -1,6 +1,7 @@
 package ch.oliverlanz.memento.infrastructure.worldscan
 
 import ch.oliverlanz.memento.MementoConstants
+import ch.oliverlanz.memento.domain.renewal.projection.RegionKey
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCandidateAction
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalCommittedSnapshot
 import ch.oliverlanz.memento.domain.worldmap.DominantStoneEffectSignal
@@ -11,11 +12,16 @@ import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.Locale
 import net.minecraft.server.MinecraftServer
 import net.minecraft.util.WorldSavePath
 
 /**
  * Operator worldview CSV writer.
+ *
+ * Authority boundary:
+ * - Produces an observational export artifact; it is not a domain-state authority.
+ * - Consumes provided world/projection read surfaces and must not infer missing world facts.
  *
  * Locked contract (source of truth is local to this class):
  * - header order and names are fixed by [LOCKED_SCHEMA],
@@ -38,6 +44,7 @@ object MementoCsvWriter {
         "isSpawn",
         "dominantStone",
         "dominantStoneEffect",
+        "memorabilityIndex",
         "chunkMemorable",
         "chunkForgettable",
         "renewalAction",
@@ -57,6 +64,23 @@ object MementoCsvWriter {
 
         Files.createDirectories(path.parent)
 
+        val csv = renderOperatorWorldviewCsv(worldSnapshot, projectionSnapshot)
+        Files.writeString(path, csv, StandardCharsets.UTF_8)
+        MementoLog.info(
+            MementoConcept.OPERATOR,
+            "csv worldview written path={} rows={} projectionGeneration={} rankedElectionEntries={}",
+            path,
+            worldSnapshot.size,
+            projectionSnapshot.generation,
+            projectionSnapshot.rankedCandidates.size,
+        )
+        return path
+    }
+
+    fun renderOperatorWorldviewCsv(
+        worldSnapshot: List<ChunkScanSnapshotEntry>,
+        projectionSnapshot: RenewalCommittedSnapshot,
+    ): String {
         val rankedElection = projectionSnapshot.rankedCandidates
 
         val rankByRegion = rankedElection
@@ -68,7 +92,7 @@ object MementoCsvWriter {
 
         val header = LOCKED_SCHEMA.joinToString(",")
         require(
-            header == "dimension,regionX,regionZ,chunkX,chunkZ,scanTick,inhabitedTicks,surfaceY,biome,isSpawn,dominantStone,dominantStoneEffect,chunkMemorable,chunkForgettable,renewalAction,renewalRank,source,status"
+            header == "dimension,regionX,regionZ,chunkX,chunkZ,scanTick,inhabitedTicks,surfaceY,biome,isSpawn,dominantStone,dominantStoneEffect,memorabilityIndex,chunkMemorable,chunkForgettable,renewalAction,renewalRank,source,status"
         ) {
             "csv schema drift detected"
         }
@@ -111,11 +135,10 @@ object MementoCsvWriter {
                 }
 
                 val chunkMemorable = derivation?.memorable == true
-                val chunkForgettable = when {
-                    action != "NONE" -> true
-                    derivation == null -> false
-                    else -> !chunkMemorable
-                }
+                val memorabilityIndex = derivation?.memorabilityIndex
+                val chunkForgettable = projectionSnapshot.regionForgettableByRegion[
+                    RegionKey(worldId = dim, regionX = key.regionX, regionZ = key.regionZ)
+                ] == true
 
                 val row = listOf(
                     dim,
@@ -130,6 +153,7 @@ object MementoCsvWriter {
                     if (signals?.isSpawnChunk == true) "1" else "0",
                     dominant,
                     dominantStoneEffect,
+                    memorabilityIndex?.let { String.format(Locale.ROOT, "%.6f", it) } ?: "",
                     if (chunkMemorable) "1" else "0",
                     if (chunkForgettable) "1" else "0",
                     action,
@@ -144,16 +168,7 @@ object MementoCsvWriter {
                 sb.append(row.joinToString(",")).append('\n')
             }
 
-        Files.writeString(path, sb.toString(), StandardCharsets.UTF_8)
-        MementoLog.info(
-            MementoConcept.OPERATOR,
-            "csv worldview written path={} rows={} projectionGeneration={} rankedElectionEntries={}",
-            path,
-            worldSnapshot.size,
-            projectionSnapshot.generation,
-            rankedElection.size,
-        )
-        return path
+        return sb.toString()
     }
 
     private fun projectSource(provenance: ChunkScanProvenance): String {

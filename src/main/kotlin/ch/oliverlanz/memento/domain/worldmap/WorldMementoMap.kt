@@ -39,13 +39,24 @@ enum class ChunkScanUnresolvedReason {
 }
 
 /**
- * Domain-owned world map for /memento scan.
+ * Domain factual substrate for world institutional memory.
+ *
+ * Authority boundary:
+ * - This type stores factual state only; it does not own mutation policy.
+ * - Mutation authority is owned by [WorldMapService] on tick thread.
+ *
+ * Invariant references:
+ * - WorldMapService is the sole mutation authority for WorldMementoMap institutional memory.
+ * - Chunk state is represented as two orthogonal signals:
+ *   1) existence (record present)
+ *   2) metadata observation ([scanTick], [signals], provenance/reason)
+ * - Metadata subset is contained within discovered universe (recorded keys).
  *
  * Semantics:
- * - The map is created from region file discovery (chunk existence).
- * - Metadata extraction progressively refines the map by attaching [ChunkSignals] to keys.
- * - A chunk is considered *scanned* when [scanTick] is present. Signals may legitimately be missing
- * (best-effort scanning under engine pressure).
+ * - Discovery establishes chunk existence via [ensureExists].
+ * - Metadata ingestion progressively enriches existing or newly observed keys.
+ * - A chunk is considered scanned when [scanTick] is present. Signals may legitimately be missing
+ *   (best-effort scanning/unresolved outcomes).
  *
  * Single source of truth (scanner invariant):
  * - missing == scanTick == null
@@ -75,6 +86,13 @@ class WorldMementoMap {
     /** Ensures the chunk exists in the map (without signals yet). */
     fun ensureExists(key: ChunkKey) {
         records.putIfAbsent(key, ChunkRecord())
+    }
+
+    /**
+     * Ensures chunk existence and returns true only when a new discovered entry was inserted.
+     */
+    fun ensureExistsAndReportInserted(key: ChunkKey): Boolean {
+        return records.putIfAbsent(key, ChunkRecord()) == null
     }
 
     fun contains(key: ChunkKey): Boolean = records.containsKey(key)
@@ -163,6 +181,24 @@ class WorldMementoMap {
 
     /** Number of chunks with signals attached (i.e. scanned). */
     fun scannedChunks(): Int = scannedCount.get()
+
+    /**
+     * Deterministic discovered-universe read surface (all known chunk keys, scanned or unscanned).
+     */
+    fun discoveredUniverseKeys(): List<ChunkKey> {
+        return records.keys
+            .asSequence()
+            .sortedWith(
+                compareBy(
+                    { it.world.value.toString() },
+                    { it.regionX },
+                    { it.regionZ },
+                    { it.chunkX },
+                    { it.chunkZ },
+                )
+            )
+            .toList()
+    }
 
     /** Number of chunks still missing signals (best-effort, monotonic under normal use). */
     fun missingCount(): Int = (records.size - scannedCount.get()).coerceAtLeast(0)
