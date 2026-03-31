@@ -166,8 +166,8 @@ class RenewalProjectionInvariantMatrixTest {
             chunk(world = world, chunkX = 65, chunkZ = 0, inhabitedTimeTicks = 0L, scanTick = 4L)
 
             // Region (4,0): strongly inhabited, must not purge
-            chunk(world = world, chunkX = 128, chunkZ = 0, inhabitedTimeTicks = 600L, scanTick = 5L)
-            chunk(world = world, chunkX = 129, chunkZ = 0, inhabitedTimeTicks = 120L, scanTick = 6L)
+            chunk(world = world, chunkX = 128, chunkZ = 0, inhabitedTimeTicks = 5000L, scanTick = 5L)
+            chunk(world = world, chunkX = 129, chunkZ = 0, inhabitedTimeTicks = 2000L, scanTick = 6L)
         }
 
         val harness = DomainTestHarness()

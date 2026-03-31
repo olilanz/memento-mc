@@ -14,32 +14,38 @@ data class MemorabilitySignal(
 )
 
 /**
- * Projection-owned memorability policy.
+ * Projection-owned memorability policy for chunk-level signal and decision derivation.
  *
  * Coordinate invariant lock:
  * - [ChunkKey.chunkX] and [ChunkKey.chunkZ] are absolute world chunk coordinates.
  * - Distance calculations in this class MUST use those fields directly.
  * - No coordinate normalization or coordinate-form inference is performed here.
  *
- * Kernel and implementation lock:
- * - Effective influence kernel is Chebyshev radius 2 (distance weights outside radius are 0).
- * - Implementation uses ephemeral per-computation world+chunk lookup for local neighborhood reads.
- * - This is a semantics-preserving optimization of the legacy all-pairs formulation
- *   (guarded by exact-equivalence tests).
+ * Pipeline contract lock:
+ * - Pass 1 derives [MemorabilitySignal.memorabilityIndex] from inhabited-time base signals.
+ * - Pass 2 derives [MemorabilitySignal.memorable] from memorability index plus lore override policy.
+ * - Dependency direction is strictly one-way: inhabitedTicks -> memorabilityIndex -> memorable.
+ * - Pass 2 must never feed back into Pass 1 inputs.
+ *
+ * Implementation status:
+ * - Pass 1 is implemented by [computeMemorabilityIndex].
+ * - Pass 2 is implemented by [deriveChunkMemorable].
+ * - [computeForChunks] is a thin composition wrapper preserving existing call sites.
  *
  * Pure function contract:
  * - output keys are exactly the input chunk universe
  * - no synthetic chunks are materialized
- * - no iterative/feedback passes (single-pass over base signals only)
+ * - no iterative/feedback propagation
  */
 object ProjectionMemorability {
-    const val MEMORABLE_THRESHOLD: Double = MementoConstants.MEMENTO_RENEWAL_MEMORABLE_THRESHOLD
+    const val MEMORABLE_THRESHOLD: Double = MementoConstants.MEMENTO_RENEWAL_MEMORABLE_THRESHOLD_CORE
+    private const val STRONG_MEMORABLE_THRESHOLD: Double = MementoConstants.MEMENTO_RENEWAL_MEMORABLE_THRESHOLD_STRONG
     private const val MEMORABLE_RADIUS_CHUNKS: Int = MementoConstants.MEMENTO_RENEWAL_MEMORABLE_EXPANSION_RADIUS_CHUNKS
+    private const val MEMORABLE_HALO_RADIUS_CHUNKS: Int = MementoConstants.MEMENTO_RENEWAL_MEMORABLE_HALO_RADIUS_CHUNKS
 
-    fun computeForChunks(
+    fun computeMemorabilityIndex(
         inhabitedTicksByChunk: Map<ChunkKey, Long>,
-        loreProtectedChunks: Set<ChunkKey>,
-    ): Map<ChunkKey, MemorabilitySignal> {
+    ): Map<ChunkKey, Double> {
         val baseByChunk = inhabitedTicksByChunk.mapValues { (_, ticks) -> baseSignal(ticks) }
         val baseByWorldChunk = baseByChunk.entries.associateBy(
             keySelector = { (key, _) -> WorldChunkRef(key.world, key.chunkX, key.chunkZ) },
@@ -62,13 +68,48 @@ object ProjectionMemorability {
                         ),
                     ] ?: continue
 
-                    index += base * weight
+                    index += (base * base) * weight
                 }
             }
+            index
+        }
+    }
 
+    fun deriveChunkMemorable(
+        memorabilityIndexByChunk: Map<ChunkKey, Double>,
+        loreProtectedChunks: Set<ChunkKey>,
+    ): Map<ChunkKey, Boolean> {
+        val indexByWorldChunk = memorabilityIndexByChunk.entries.associateBy(
+            keySelector = { (key, _) -> WorldChunkRef(key.world, key.chunkX, key.chunkZ) },
+            valueTransform = { (_, index) -> index },
+        )
+
+        return memorabilityIndexByChunk.mapValues { (key, index) ->
+            val coreMemorable = index >= MEMORABLE_THRESHOLD
+            val haloStrong = maxIndexWithinHalo(
+                target = key,
+                indexByWorldChunk = indexByWorldChunk,
+                radius = MEMORABLE_HALO_RADIUS_CHUNKS,
+            ) >= STRONG_MEMORABLE_THRESHOLD
+
+            loreProtectedChunks.contains(key) || coreMemorable || haloStrong
+        }
+    }
+
+    fun computeForChunks(
+        inhabitedTicksByChunk: Map<ChunkKey, Long>,
+        loreProtectedChunks: Set<ChunkKey>,
+    ): Map<ChunkKey, MemorabilitySignal> {
+        val memorabilityIndexByChunk = computeMemorabilityIndex(inhabitedTicksByChunk)
+        val chunkMemorableByChunk = deriveChunkMemorable(
+            memorabilityIndexByChunk = memorabilityIndexByChunk,
+            loreProtectedChunks = loreProtectedChunks,
+        )
+
+        return inhabitedTicksByChunk.keys.associateWith { target ->
             MemorabilitySignal(
-                memorabilityIndex = index,
-                memorable = loreProtectedChunks.contains(target) || index >= MEMORABLE_THRESHOLD,
+                memorabilityIndex = memorabilityIndexByChunk[target] ?: 0.0,
+                memorable = chunkMemorableByChunk[target] == true,
             )
         }
     }
@@ -93,13 +134,37 @@ object ProjectionMemorability {
         }
     }
 
-    private fun weightForChebyshevDistance(distance: Int): Double =
-        when (distance) {
-            0 -> 1.00
-            1 -> 0.35
-            2 -> 0.12
-            else -> 0.0
+    private fun weightForChebyshevDistance(distance: Int): Double {
+        if (distance > MEMORABLE_RADIUS_CHUNKS) return 0.0
+        return 1.0 / (1.0 + (distance * distance).toDouble())
+    }
+
+    private fun maxIndexWithinHalo(
+        target: ChunkKey,
+        indexByWorldChunk: Map<WorldChunkRef, Double>,
+        radius: Int,
+    ): Double {
+        var maxIndex = Double.NEGATIVE_INFINITY
+        for (dx in -radius..radius) {
+            for (dz in -radius..radius) {
+                val distance = max(abs(dx), abs(dz))
+                if (distance > radius) continue
+
+                val candidate = indexByWorldChunk[
+                    WorldChunkRef(
+                        world = target.world,
+                        chunkX = target.chunkX + dx,
+                        chunkZ = target.chunkZ + dz,
+                    ),
+                ] ?: continue
+
+                if (candidate > maxIndex) {
+                    maxIndex = candidate
+                }
+            }
         }
+        return maxIndex
+    }
 
     private data class WorldChunkRef(
         val world: RegistryKey<World>,

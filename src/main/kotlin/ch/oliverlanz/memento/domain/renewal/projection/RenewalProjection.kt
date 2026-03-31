@@ -53,6 +53,15 @@ fun interface RenewalProjectionStableListener {
  * - Election is derived exclusively from committed state.
  * - No numeric ranking surfaces exist.
  * - Snapshot terminology is projection-scoped; WorldMap itself is not a snapshot boundary.
+ * - Chunk memorability derivation is pipeline-ordered: signal first, then memorable decision.
+ * - Memorability decision must be derived from memorability index and lore override only.
+ * - Region forgettability remains downstream of chunk memorable derivation.
+ *
+ * Pipeline-clarity gate (execution discipline):
+ * - Before any memorability behavior changes, pass boundaries must be explicit and sequential.
+ * - Structural extraction must not alter projection outputs.
+ * - Passes must not share mutable cross-pass state.
+ * - No pass interleaving or iterative pass feedback is allowed.
  *
  * Non-goals:
  * - Command-layer orchestration or execution ownership.
@@ -61,13 +70,28 @@ fun interface RenewalProjectionStableListener {
  */
 class RenewalProjection {
 
-    private companion object {
-        // NOTE:
-        // Dirty-expansion dependency radius must remain >= memorability expansion radius.
-        // Current coupling: 1 region ring == 32 chunks, memorability radius == 2 chunks.
-        // If memorability radius changes, dirty expansion rules must be updated accordingly.
-        private const val AFFECTED_EXPANSION_RING_REGIONS = 1
+    companion object {
+        private const val CHUNKS_PER_REGION_EDGE = 32
         private const val CONTEXT_EXPANSION_RING_REGIONS = 1
+
+        private fun dependencyRadiusChunksForInvalidation(): Int =
+            MementoConstants.MEMENTO_RENEWAL_MEMORABLE_EXPANSION_RADIUS_CHUNKS +
+                MementoConstants.MEMENTO_RENEWAL_MEMORABLE_HALO_RADIUS_CHUNKS
+
+        private fun regionRingForDependencyRadiusChunks(radiusChunks: Int): Int {
+            if (radiusChunks <= 0) return 0
+            return (radiusChunks + CHUNKS_PER_REGION_EDGE - 1) / CHUNKS_PER_REGION_EDGE
+        }
+
+        private fun affectedExpansionRingRegions(): Int =
+            regionRingForDependencyRadiusChunks(dependencyRadiusChunksForInvalidation())
+
+        internal fun dependencyRadiusChunksForInvalidationForTesting(): Int = dependencyRadiusChunksForInvalidation()
+
+        internal fun regionRingForDependencyRadiusChunksForTesting(radiusChunks: Int): Int =
+            regionRingForDependencyRadiusChunks(radiusChunks)
+
+        internal fun affectedExpansionRingRegionsForTesting(): Int = affectedExpansionRingRegions()
     }
 
     private var worldMapService: WorldMapService? = null
@@ -594,7 +618,7 @@ class RenewalProjection {
             .filter { !allKnownRegions.contains(it) }
             .toSortedSet(regionOrder())
 
-        val affectedAll = expandRing(sourceDirty, AFFECTED_EXPANSION_RING_REGIONS)
+        val affectedAll = expandRing(sourceDirty, affectedExpansionRingRegions())
             .filter { allKnownRegions.contains(it) }
             .toSortedSet(regionOrder())
 
@@ -650,13 +674,13 @@ class RenewalProjection {
             .map { it.key }
             .toSet()
 
-        val memorabilitySignalsByChunk = ProjectionMemorability.computeForChunks(
+        val memorabilityIndexByChunk = ProjectionMemorability.computeMemorabilityIndex(
             inhabitedTicksByChunk = inhabitedByChunk,
+        )
+        val chunkMemorableByKey = ProjectionMemorability.deriveChunkMemorable(
+            memorabilityIndexByChunk = memorabilityIndexByChunk,
             loreProtectedChunks = loreProtectedChunks,
         )
-
-        val chunkMemorableByKey = memorabilitySignalsByChunk
-            .mapValues { (_, signal) -> signal.memorable }
 
         // Region eligibility is derived directly from chunk memorability presence/absence.
         val regionMemorableByRegion = linkedMapOf<RegionKey, Boolean>()
@@ -690,7 +714,7 @@ class RenewalProjection {
                 }
 
                 chunkDerivationUpdates[key] = RenewalChunkDerivation(
-                    memorabilityIndex = memorabilitySignalsByChunk[key]?.memorabilityIndex ?: 0.0,
+                    memorabilityIndex = memorabilityIndexByChunk[key] ?: 0.0,
                     memorable = memorable,
                     // Stone-driven/operator chunk renewal remains structurally separate from
                     // ambient region authority for this slice.

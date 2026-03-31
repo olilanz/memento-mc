@@ -1,5 +1,6 @@
 package ch.oliverlanz.memento.domain.renewal.projection
 
+import ch.oliverlanz.memento.MementoConstants
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
 import net.minecraft.registry.RegistryKey
 import net.minecraft.registry.RegistryKeys
@@ -84,16 +85,129 @@ class ProjectionMemorabilityTest {
         val c = key(-1, 0)
 
         val isolated = ProjectionMemorability.computeForChunks(
-            inhabitedTicksByChunk = mapOf(target to 21L),
+            inhabitedTicksByChunk = mapOf(target to 60L),
             loreProtectedChunks = emptySet(),
         ).getValue(target)
 
         val clustered = ProjectionMemorability.computeForChunks(
-            inhabitedTicksByChunk = mapOf(target to 21L, a to 21L, b to 21L, c to 21L),
+            inhabitedTicksByChunk = mapOf(target to 60L, a to 60L, b to 60L, c to 60L),
             loreProtectedChunks = emptySet(),
         ).getValue(target)
 
         assertTrue(clustered.memorabilityIndex > isolated.memorabilityIndex)
+    }
+
+    @Test
+    fun pass1_center_contribution_uses_quadratic_base_signal() {
+        val center = key(0, 0)
+        val ticks = MementoConstants.MEMENTO_RENEWAL_MEMORABILITY_MEDIUM_TICKS
+
+        val out = ProjectionMemorability.computeForChunks(
+            inhabitedTicksByChunk = mapOf(center to ticks),
+            loreProtectedChunks = emptySet(),
+        )
+
+        val base = legacyBaseSignal(ticks)
+        val expectedQuadratic = base * base
+        val actual = out.getValue(center).memorabilityIndex
+
+        assertEquals(expectedQuadratic, actual)
+    }
+
+    @Test
+    fun pass1_direct_function_produces_signal_map_without_decision_coupling() {
+        val center = key(0, 0)
+        val neighbor = key(1, 0)
+
+        val index = ProjectionMemorability.computeMemorabilityIndex(
+            inhabitedTicksByChunk = mapOf(center to MementoConstants.MEMENTO_RENEWAL_MEMORABILITY_HIGH_TICKS, neighbor to 0L),
+        )
+
+        assertTrue(index.getValue(center) > index.getValue(neighbor))
+    }
+
+    @Test
+    fun pass1_radius_three_influence_reaches_distance_three_chunk() {
+        val source = key(0, 0)
+        val atDistanceThree = key(3, 0)
+
+        val out = ProjectionMemorability.computeForChunks(
+            inhabitedTicksByChunk = mapOf(source to MementoConstants.MEMENTO_RENEWAL_MEMORABILITY_HIGH_TICKS, atDistanceThree to 0L),
+            loreProtectedChunks = emptySet(),
+        )
+
+        assertTrue(out.getValue(atDistanceThree).memorabilityIndex > 0.0)
+    }
+
+    @Test
+    fun pass2_strong_center_creates_one_hop_halo_memorable_neighbor() {
+        val center = key(0, 0)
+        val neighbor = key(1, 0)
+
+        val out = ProjectionMemorability.computeForChunks(
+            inhabitedTicksByChunk = mapOf(center to MementoConstants.MEMENTO_RENEWAL_MEMORABILITY_HIGH_TICKS, neighbor to 0L),
+            loreProtectedChunks = emptySet(),
+        )
+
+        assertEquals(true, out.getValue(neighbor).memorable)
+    }
+
+    @Test
+    fun pass2_direct_function_reads_index_only_and_applies_halo_rule() {
+        val center = key(0, 0)
+        val neighbor = key(1, 0)
+        val far = key(2, 0)
+
+        val decision = ProjectionMemorability.deriveChunkMemorable(
+            memorabilityIndexByChunk = mapOf(
+                center to MementoConstants.MEMENTO_RENEWAL_MEMORABLE_THRESHOLD_STRONG,
+                neighbor to 0.0,
+                far to 0.0,
+            ),
+            loreProtectedChunks = emptySet(),
+        )
+
+        assertEquals(true, decision.getValue(neighbor))
+        assertEquals(false, decision.getValue(far))
+    }
+
+    @Test
+    fun pass2_halo_does_not_chain_beyond_one_hop() {
+        val center = key(0, 0)
+        val hop1 = key(1, 0)
+        val hop2 = key(2, 0)
+
+        val out = ProjectionMemorability.computeForChunks(
+            inhabitedTicksByChunk = mapOf(
+                center to MementoConstants.MEMENTO_RENEWAL_MEMORABILITY_HIGH_TICKS,
+                hop1 to 0L,
+                hop2 to 0L,
+            ),
+            loreProtectedChunks = emptySet(),
+        )
+
+        assertEquals(true, out.getValue(hop1).memorable)
+        assertEquals(false, out.getValue(hop2).memorable)
+    }
+
+    @Test
+    fun pass2_weak_scattered_medium_signals_do_not_create_artificial_halo() {
+        val a = key(0, 0)
+        val b = key(2, 0)
+        val c = key(0, 2)
+        val target = key(1, 1)
+
+        val out = ProjectionMemorability.computeForChunks(
+            inhabitedTicksByChunk = mapOf(
+                a to MementoConstants.MEMENTO_RENEWAL_MEMORABILITY_MEDIUM_TICKS,
+                b to MementoConstants.MEMENTO_RENEWAL_MEMORABILITY_MEDIUM_TICKS,
+                c to MementoConstants.MEMENTO_RENEWAL_MEMORABILITY_MEDIUM_TICKS,
+                target to 0L,
+            ),
+            loreProtectedChunks = emptySet(),
+        )
+
+        assertEquals(false, out.getValue(target).memorable)
     }
 
     @Test
@@ -130,11 +244,20 @@ class ProjectionMemorabilityTest {
 
         val out = ProjectionMemorability.computeForChunks(input, loreProtectedChunks = emptySet())
 
-        out.values.forEach { signal ->
+        for ((key, signal) in out) {
             assertTrue(signal.memorabilityIndex.isFinite())
             assertTrue(signal.memorabilityIndex >= 0.0)
+
+            val maxNeighborIndexWithinHalo = out
+                .filterKeys { neighbor ->
+                    val distance = max(abs(neighbor.chunkX - key.chunkX), abs(neighbor.chunkZ - key.chunkZ))
+                    distance <= MementoConstants.MEMENTO_RENEWAL_MEMORABLE_HALO_RADIUS_CHUNKS
+                }
+                .maxOf { (_, neighborSignal) -> neighborSignal.memorabilityIndex }
+
             assertEquals(
-                signal.memorabilityIndex >= ProjectionMemorability.MEMORABLE_THRESHOLD,
+                signal.memorabilityIndex >= ProjectionMemorability.MEMORABLE_THRESHOLD ||
+                    maxNeighborIndexWithinHalo >= MementoConstants.MEMENTO_RENEWAL_MEMORABLE_THRESHOLD_STRONG,
                 signal.memorable,
             )
         }
@@ -317,7 +440,7 @@ class ProjectionMemorabilityTest {
                 val distance = max(abs(target.chunkX - source.chunkX), abs(target.chunkZ - source.chunkZ))
                 val weight = legacyWeightForChebyshevDistance(distance)
                 if (weight > 0.0) {
-                    index += base * weight
+                    index += (base * base) * weight
                 }
             }
             MemorabilitySignal(
@@ -328,18 +451,17 @@ class ProjectionMemorabilityTest {
     }
 
     private fun legacyWeightForChebyshevDistance(distance: Int): Double =
-        when (distance) {
-            0 -> 1.00
-            1 -> 0.35
-            2 -> 0.12
-            else -> 0.0
+        if (distance > MementoConstants.MEMENTO_RENEWAL_MEMORABLE_EXPANSION_RADIUS_CHUNKS) {
+            0.0
+        } else {
+            1.0 / (1.0 + (distance * distance).toDouble())
         }
 
     private fun legacyBaseSignal(ticks: Long): Double {
         val t = ticks.toDouble()
-        val low = 20.0
-        val medium = 120.0
-        val high = 600.0
+        val low = MementoConstants.MEMENTO_RENEWAL_MEMORABILITY_LOW_TICKS.toDouble()
+        val medium = MementoConstants.MEMENTO_RENEWAL_MEMORABILITY_MEDIUM_TICKS.toDouble()
+        val high = MementoConstants.MEMENTO_RENEWAL_MEMORABILITY_HIGH_TICKS.toDouble()
         return when {
             t < low -> 0.0
             t < medium -> 0.20 * clamp01((t - low) / (medium - low))

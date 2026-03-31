@@ -244,18 +244,27 @@ object MementoConstants {
     /**
      * Memorability influence radius in chunks for projection memorability kernel.
      *
-     * Current kernel only assigns positive weight for Chebyshev distance 0..2.
+     * Current kernel assigns positive weight for Chebyshev distance 0..R1.
      * Dirty-expansion dependency radius must remain >= this value.
      */
-    const val MEMENTO_RENEWAL_MEMORABLE_EXPANSION_RADIUS_CHUNKS: Int = 2
+    const val MEMENTO_RENEWAL_MEMORABLE_EXPANSION_RADIUS_CHUNKS: Int = 3
 
     /** Absolute inhabited-time threshold bands for memorability base signal mapping. */
     const val MEMENTO_RENEWAL_MEMORABILITY_LOW_TICKS: Long = 50L
     const val MEMENTO_RENEWAL_MEMORABILITY_MEDIUM_TICKS: Long = 300L
     const val MEMENTO_RENEWAL_MEMORABILITY_HIGH_TICKS: Long = 2000L
 
-    /** Threshold converting memorability index to boolean memorable state. */
-    const val MEMENTO_RENEWAL_MEMORABLE_THRESHOLD: Double = 0.75
+    /** Core threshold converting memorability index to boolean memorable state. */
+    const val MEMENTO_RENEWAL_MEMORABLE_THRESHOLD_CORE: Double = 0.75
+
+    /** Strong-signal threshold that can project one-hop halo protection. */
+    const val MEMENTO_RENEWAL_MEMORABLE_THRESHOLD_STRONG: Double = 0.90
+
+    /** Halo radius in chunks for strong-signal memorable extension. */
+    const val MEMENTO_RENEWAL_MEMORABLE_HALO_RADIUS_CHUNKS: Int = 1
+
+    /** Backward-compat alias for previous single-threshold naming. */
+    const val MEMENTO_RENEWAL_MEMORABLE_THRESHOLD: Double = MEMENTO_RENEWAL_MEMORABLE_THRESHOLD_CORE
 
     /** Backup suffix used by force-prune region file cut-over (`r.x.z.mca` -> `r.x.z.mca.memento.backup`). */
     const val MEMENTO_RENEW_FORCE_BACKUP_SUFFIX: String = ".memento.backup"
