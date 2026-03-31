@@ -11,6 +11,7 @@ import ch.oliverlanz.memento.infrastructure.worldstorage.WorldStorageService
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.util.ArrayDeque
 import java.util.concurrent.Future
 import net.minecraft.registry.RegistryKey
 import net.minecraft.server.MinecraftServer
@@ -116,8 +117,25 @@ object WorldPruningService {
     private data class SubmittedBatchOperation(
         val requested: Int,
         val submitted: Int,
-        val acceptedTargets: List<Pair<RegistryKey<World>, RegionKey>>,
-        val future: Future<BatchCompletion>,
+        val preflightCompletions: MutableList<Completion>,
+        val pendingEligibleTargets: ArrayDeque<Pair<RegistryKey<World>, RegionKey>>,
+        val asyncCompletions: MutableList<Completion>,
+        var inFlight: InFlightRegionOperation? = null,
+    )
+
+    private data class InFlightRegionOperation(
+        val dimension: RegistryKey<World>,
+        val region: RegionKey,
+        val future: Future<Completion>,
+    )
+
+    internal data class GuardInput(
+        val requestedDimensionId: String,
+        val region: RegionKey,
+        val phase: String?,
+        val dimensionMatches: Boolean,
+        val worldPresent: Boolean,
+        val loaded: Boolean,
     )
 
     private data class RenameMember(
@@ -147,6 +165,10 @@ object WorldPruningService {
     @Volatile
     private var scanner: WorldScanner? = null
 
+    @Volatile internal var testGuardOverride: ((GuardInput) -> Completion?)? = null
+    @Volatile internal var testAsyncMutationOverride: ((RegistryKey<World>, RegionKey) -> Completion)? = null
+    @Volatile private var testMutationAttempts: Int = 0
+
     fun attach(server: MinecraftServer, scanner: WorldScanner) {
         this.server = server
         this.scanner = scanner
@@ -155,6 +177,9 @@ object WorldPruningService {
         submittedBatch = null
         lastCompletion = null
         lastBatchCompletion = null
+        testGuardOverride = null
+        testAsyncMutationOverride = null
+        testMutationAttempts = 0
     }
 
     fun detach() {
@@ -165,7 +190,18 @@ object WorldPruningService {
         submittedBatch = null
         lastCompletion = null
         lastBatchCompletion = null
+        testGuardOverride = null
+        testAsyncMutationOverride = null
+        testMutationAttempts = 0
     }
+
+    internal fun resetTestHooks() {
+        testGuardOverride = null
+        testAsyncMutationOverride = null
+        testMutationAttempts = 0
+    }
+
+    internal fun mutationAttemptsForTesting(): Int = testMutationAttempts
 
     fun statusView(): Pair<OperationState, Completion?> = state to lastCompletion
 
@@ -198,12 +234,13 @@ object WorldPruningService {
             return SubmitResult.Completed(completion)
         }
 
-        if (dimension.value.toString() != region.worldId) {
+        val dimensionId = dimension.value.toString()
+        if (dimensionId != region.worldId) {
             val completion = Completion(
                 region,
                 OutcomeCategory.SKIPPED_ERROR_RECOVERED,
                 Outcome.rejected_dimension_mismatch,
-                "requestedDimension=${dimension.value} decisionWorld=${region.worldId}",
+                "requestedDimension=$dimensionId decisionWorld=${region.worldId}",
             )
             state = OperationState.COMPLETED_FAILED
             lastCompletion = completion
@@ -212,17 +249,26 @@ object WorldPruningService {
 
         val world = srv.getWorld(dimension)
         if (world == null) {
-            val completion = Completion(region, OutcomeCategory.SKIPPED_ERROR_RECOVERED, Outcome.rename_failed, "unknown world='${dimension.value}'")
+            val completion = Completion(region, OutcomeCategory.SKIPPED_ERROR_RECOVERED, Outcome.rename_failed, "unknown world='$dimensionId'")
             state = OperationState.COMPLETED_FAILED
             lastCompletion = completion
             return SubmitResult.Completed(completion)
         }
 
-        if (hasAnyLoadedChunk(world, region.regionX, region.regionZ)) {
-            val completion = Completion(region, OutcomeCategory.SKIPPED_ERROR_RECOVERED, Outcome.rejected_loaded)
+        val guard = guardFailureForTesting(
+            GuardInput(
+                requestedDimensionId = dimensionId,
+                region = region,
+                phase = null,
+                dimensionMatches = true,
+                worldPresent = true,
+                loaded = hasAnyLoadedChunk(world, region.regionX, region.regionZ),
+            )
+        )
+        if (guard != null) {
             state = OperationState.COMPLETED_FAILED
-            lastCompletion = completion
-            return SubmitResult.Completed(completion)
+            lastCompletion = guard
+            return SubmitResult.Completed(guard)
         }
 
         val root = srv.getSavePath(WorldSavePath.ROOT)
@@ -278,7 +324,7 @@ object WorldPruningService {
 
         val boundedTargets = targets.take(MAX_BATCH_TARGETS)
         val srv = server
-        if (srv == null) {
+        if (srv == null && testGuardOverride == null) {
             return BatchSubmitResult.Completed(
                 requested = requested,
                 completions = boundedTargets.map { (_, region) ->
@@ -288,131 +334,210 @@ object WorldPruningService {
             )
         }
 
-        val submit = GlobalAsyncExclusionGate.submitIfIdle(
-            concept = MementoConcept.PRUNING,
-            owner = "world-pruning",
-        ) {
-            java.util.concurrent.Callable {
-                pruneBatch(root = srv.getSavePath(WorldSavePath.ROOT), targets = boundedTargets)
-            }
+        val busyOwner = GlobalAsyncExclusionGate.busyOwnerOrDetachedOrNull()
+        if (busyOwner != null) {
+            return BatchSubmitResult.Completed(
+                requested = requested,
+                completions = boundedTargets.map { (_, region) ->
+                    Completion(region, OutcomeCategory.SKIPPED_ERROR_RECOVERED, Outcome.rejected_busy, "activeOwner=$busyOwner")
+                },
+                detail = "busy",
+            )
         }
 
-        return when (submit) {
-            is GlobalAsyncExclusionGate.SubmitResult.Busy -> {
-                BatchSubmitResult.Completed(
-                    requested = requested,
-                    completions = boundedTargets.map { (_, region) ->
-                        Completion(region, OutcomeCategory.SKIPPED_ERROR_RECOVERED, Outcome.rejected_busy, "activeOwner=${submit.activeOwner}")
-                    },
-                    detail = "busy",
+        val preflightCompletions = mutableListOf<Completion>()
+        val eligibleTargets = ArrayDeque<Pair<RegistryKey<World>, RegionKey>>()
+
+        for ((dimension, region) in boundedTargets) {
+            val dimensionId = dimension.value.toString()
+            val world = if (dimensionId == region.worldId) srv?.getWorld(dimension) else null
+            val guard = guardFailure(
+                GuardInput(
+                    requestedDimensionId = dimensionId,
+                    region = region,
+                    phase = "preflight",
+                    dimensionMatches = (dimensionId == region.worldId),
+                    worldPresent = (world != null) || (srv == null && testGuardOverride != null),
+                    loaded = world?.let { hasAnyLoadedChunk(it, region.regionX, region.regionZ) } ?: false,
                 )
+            )
+            if (guard != null) {
+                preflightCompletions += guard
+                continue
             }
 
-            is GlobalAsyncExclusionGate.SubmitResult.Accepted -> {
-                state = OperationState.SUBMITTED
-                lastCompletion = null
-                lastBatchCompletion = null
-                submittedBatch = SubmittedBatchOperation(
-                    requested = requested,
-                    submitted = boundedTargets.size,
-                    acceptedTargets = boundedTargets,
-                    future = submit.future,
-                )
-                BatchSubmitResult.Submitted(
-                    requested = requested,
-                    submitted = boundedTargets.size,
-                    acceptedTargets = boundedTargets.map { it.second },
-                )
-            }
+            eligibleTargets.add(dimension to region)
         }
+
+        if (eligibleTargets.isEmpty()) {
+            return BatchSubmitResult.Completed(
+                requested = requested,
+                completions = preflightCompletions,
+                detail = "no_eligible_targets",
+            )
+        }
+
+        val acceptedTargets = eligibleTargets.map { it.second }
+        val admittedCount = acceptedTargets.size
+        state = OperationState.SUBMITTED
+        lastCompletion = null
+        lastBatchCompletion = null
+        submittedBatch = SubmittedBatchOperation(
+            requested = requested,
+            submitted = admittedCount,
+            preflightCompletions = preflightCompletions,
+            pendingEligibleTargets = eligibleTargets,
+            asyncCompletions = mutableListOf(),
+        )
+        return BatchSubmitResult.Submitted(
+            requested = requested,
+            submitted = admittedCount,
+            acceptedTargets = acceptedTargets,
+        )
     }
 
     fun tickThreadProcess() {
         val batch = submittedBatch
         if (batch != null) {
-            if (!batch.future.isDone) return
+            val srv = server
+            if (srv == null && testGuardOverride == null && testAsyncMutationOverride == null) {
+                val completions = buildList {
+                    addAll(batch.preflightCompletions)
+                    addAll(batch.asyncCompletions)
+                    batch.inFlight?.let { inflight ->
+                        add(
+                            Completion(
+                                target = inflight.region,
+                                category = OutcomeCategory.SKIPPED_ERROR_RECOVERED,
+                                outcome = Outcome.rename_failed,
+                                detail = "phase=execution server detached",
+                            )
+                        )
+                    }
+                    while (batch.pendingEligibleTargets.isNotEmpty()) {
+                        val (_, r) = batch.pendingEligibleTargets.removeFirst()
+                        add(
+                            Completion(
+                                target = r,
+                                category = OutcomeCategory.SKIPPED_ERROR_RECOVERED,
+                                outcome = Outcome.rename_failed,
+                                detail = "phase=execution server detached",
+                            )
+                        )
+                    }
+                }
+                submittedBatch = null
+                submitted = null
+                finalizeBatchCompletion(
+                    BatchCompletion(
+                        requested = batch.requested,
+                        submitted = batch.submitted,
+                        succeeded = completions.count { it.category == OutcomeCategory.SUCCESS },
+                        failed = completions.count { it.category != OutcomeCategory.SUCCESS },
+                        completions = completions,
+                    )
+                )
+                return
+            }
+
+            val inFlight = batch.inFlight
+            if (inFlight != null) {
+                if (!inFlight.future.isDone) return
+                val completion = try {
+                    inFlight.future.get()
+                } catch (t: Throwable) {
+                    Completion(inFlight.region, OutcomeCategory.SKIPPED_ERROR_RECOVERED, Outcome.rename_failed, t.message)
+                }
+                batch.asyncCompletions += completion
+                batch.inFlight = null
+
+                if (completion.category == OutcomeCategory.PARTIAL_STATE_REQUIRES_MANUAL_ACTION) {
+                    while (batch.pendingEligibleTargets.isNotEmpty()) {
+                        val (_, remainingRegion) = batch.pendingEligibleTargets.removeFirst()
+                        batch.asyncCompletions += Completion(
+                            target = remainingRegion,
+                            category = OutcomeCategory.SKIPPED_ERROR_RECOVERED,
+                            outcome = Outcome.aborted_due_to_partial_state,
+                            detail = "not attempted because previous region entered partial state requiring manual action",
+                        )
+                    }
+                }
+            }
+
+            while (batch.inFlight == null && batch.pendingEligibleTargets.isNotEmpty()) {
+                val (dimension, region) = batch.pendingEligibleTargets.first()
+                val world = srv?.getWorld(dimension)
+                val guard = guardFailure(
+                    GuardInput(
+                        requestedDimensionId = dimension.value.toString(),
+                        region = region,
+                        phase = "execution",
+                        dimensionMatches = true,
+                        worldPresent = (world != null) || (srv == null && testGuardOverride != null),
+                        loaded = world?.let { hasAnyLoadedChunk(it, region.regionX, region.regionZ) } ?: false,
+                    )
+                )
+                if (guard != null) {
+                    batch.pendingEligibleTargets.removeFirst()
+                    batch.asyncCompletions += guard
+                    continue
+                }
+
+                val submit = GlobalAsyncExclusionGate.submitIfIdle(
+                    concept = MementoConcept.PRUNING,
+                    owner = "world-pruning",
+                ) {
+                    java.util.concurrent.Callable {
+                        val testMutation = testAsyncMutationOverride
+                        if (testMutation != null) {
+                            testMutationAttempts += 1
+                            testMutation(dimension, region)
+                        } else {
+                            pruneRegionTriple(srv!!.getSavePath(WorldSavePath.ROOT), dimension, region)
+                        }
+                    }
+                }
+                when (submit) {
+                    is GlobalAsyncExclusionGate.SubmitResult.Busy -> {
+                        // Lock discipline: do not keep pending in-memory retries when the gate turns
+                        // busy after batch acceptance. Resolve remaining targets deterministically.
+                        while (batch.pendingEligibleTargets.isNotEmpty()) {
+                            val (_, pending) = batch.pendingEligibleTargets.removeFirst()
+                            batch.asyncCompletions += Completion(
+                                target = pending,
+                                category = OutcomeCategory.SKIPPED_ERROR_RECOVERED,
+                                outcome = Outcome.rejected_busy,
+                                detail = "phase=execution activeOwner=${submit.activeOwner}",
+                            )
+                        }
+                        break
+                    }
+                    is GlobalAsyncExclusionGate.SubmitResult.Accepted -> {
+                        batch.pendingEligibleTargets.removeFirst()
+                        batch.inFlight = InFlightRegionOperation(dimension, region, submit.future)
+                    }
+                }
+            }
+
+            if (batch.inFlight != null) return
+            if (batch.pendingEligibleTargets.isNotEmpty()) return
 
             submittedBatch = null
             submitted = null
 
-            val result = try {
-                batch.future.get()
-            } catch (t: Throwable) {
-                BatchCompletion(
-                    requested = batch.requested,
-                    submitted = batch.submitted,
-                    succeeded = 0,
-                    failed = batch.submitted,
-                    completions = batch.acceptedTargets.map { (_, region) ->
-                        Completion(region, OutcomeCategory.SKIPPED_ERROR_RECOVERED, Outcome.rename_failed, t.message)
-                    },
-                )
+            val merged = buildList {
+                addAll(batch.preflightCompletions)
+                addAll(batch.asyncCompletions)
             }
-
-            val success = result.failed == 0
-            state = if (success) OperationState.COMPLETED_SUCCESS else OperationState.COMPLETED_FAILED
-            lastBatchCompletion = result
-            lastCompletion = result.completions.lastOrNull()
-
-            MementoLog.info(
-                MementoConcept.PRUNING,
-                "world pruning batch result requested={} submitted={} succeeded={} failed={}",
-                result.requested,
-                result.submitted,
-                result.succeeded,
-                result.failed,
+            val succeeded = merged.count { it.category == OutcomeCategory.SUCCESS }
+            val result = BatchCompletion(
+                requested = batch.requested,
+                submitted = batch.submitted,
+                succeeded = succeeded,
+                failed = merged.size - succeeded,
+                completions = merged,
             )
-
-            if (result.failed == 0) {
-                OperatorMessages.info(
-                    server,
-                    "renewal batch completed: submitted=${result.submitted}, succeeded=${result.succeeded}, failed=${result.failed}.",
-                )
-            } else {
-                OperatorMessages.warn(
-                    server,
-                    "renewal batch completed with skipped regions: submitted=${result.submitted}, succeeded=${result.succeeded}, failed=${result.failed}.",
-                )
-            }
-
-            result.completions
-                .filter { it.category != OutcomeCategory.SUCCESS }
-                .forEach { completion ->
-                    val summary =
-                        "renewal region outcome class=${completion.category.name} outcome=${completion.outcome.name} world=${completion.target.worldId} r(${completion.target.regionX},${completion.target.regionZ}) detail=${completion.detail ?: "none"}"
-                    when (completion.category) {
-                        OutcomeCategory.PARTIAL_STATE_REQUIRES_MANUAL_ACTION -> OperatorMessages.warn(server, summary)
-                        OutcomeCategory.SKIPPED_ERROR_RECOVERED -> OperatorMessages.info(server, summary)
-                        OutcomeCategory.SUCCESS -> Unit
-                    }
-
-                    if (completion.category == OutcomeCategory.PARTIAL_STATE_REQUIRES_MANUAL_ACTION) {
-                        completion.operatorGuidance.forEach { line ->
-                            OperatorMessages.warn(server, line.removePrefix("[Memento] ").trim())
-                        }
-                    }
-                }
-
-            val scanTick = server?.overworld?.time ?: 0L
-            result.completions
-                .asSequence()
-                .filter { completion ->
-                    completion.outcome == Outcome.success || completion.outcome == Outcome.pruned_with_residual_backup
-                }
-                .forEach { completion ->
-                    val dimension = runCatching {
-                        RegistryKey.of(net.minecraft.registry.RegistryKeys.WORLD, net.minecraft.util.Identifier.of(completion.target.worldId))
-                    }.getOrNull() ?: return@forEach
-
-                    scanner?.startRegionRescan(
-                        world = dimension,
-                        regionX = completion.target.regionX,
-                        regionZ = completion.target.regionZ,
-                        reason = "renew_force_prune",
-                        scanTick = scanTick,
-                    )
-                }
-
+            finalizeBatchCompletion(result)
             return
         }
 
@@ -473,49 +598,70 @@ object WorldPruningService {
         }
     }
 
-    private fun pruneBatch(
-        root: Path,
-        targets: List<Pair<RegistryKey<World>, RegionKey>>,
-    ): BatchCompletion {
-        val completions = mutableListOf<Completion>()
-        var succeeded = 0
-        var failed = 0
+    private fun finalizeBatchCompletion(result: BatchCompletion) {
+        val success = result.failed == 0
+        state = if (success) OperationState.COMPLETED_SUCCESS else OperationState.COMPLETED_FAILED
+        lastBatchCompletion = result
+        lastCompletion = result.completions.lastOrNull()
 
-        targets.forEach { (dimension, region) ->
-            val completion = pruneRegionTriple(root, dimension, region)
-            completions += completion
-            val success = completion.category == OutcomeCategory.SUCCESS
-            if (success) succeeded++ else failed++
+        MementoLog.info(
+            MementoConcept.PRUNING,
+            "world pruning batch result requested={} submitted={} succeeded={} failed={}",
+            result.requested,
+            result.submitted,
+            result.succeeded,
+            result.failed,
+        )
 
-            if (completion.category == OutcomeCategory.PARTIAL_STATE_REQUIRES_MANUAL_ACTION) {
-                val remaining = targets.drop(completions.size)
-                remaining.forEach { (_, remainingRegion) ->
-                    completions += Completion(
-                        target = remainingRegion,
-                        category = OutcomeCategory.SKIPPED_ERROR_RECOVERED,
-                        outcome = Outcome.aborted_due_to_partial_state,
-                        detail =
-                            "not attempted because previous region entered partial state requiring manual action",
-                    )
-                    failed++
-                }
-                return BatchCompletion(
-                    requested = targets.size,
-                    submitted = completions.size,
-                    succeeded = succeeded,
-                    failed = failed,
-                    completions = completions,
-                )
-            }
+        if (result.failed == 0) {
+            OperatorMessages.info(
+                server,
+                "renewal batch completed: submitted=${result.submitted}, succeeded=${result.succeeded}, failed=${result.failed}.",
+            )
+        } else {
+            OperatorMessages.warn(
+                server,
+                "renewal batch completed with skipped regions: submitted=${result.submitted}, succeeded=${result.succeeded}, failed=${result.failed}.",
+            )
         }
 
-        return BatchCompletion(
-            requested = targets.size,
-            submitted = targets.size,
-            succeeded = succeeded,
-            failed = failed,
-            completions = completions,
-        )
+        result.completions
+            .filter { it.category != OutcomeCategory.SUCCESS }
+            .forEach { completion ->
+                val summary =
+                    "renewal region outcome class=${completion.category.name} outcome=${completion.outcome.name} world=${completion.target.worldId} r(${completion.target.regionX},${completion.target.regionZ}) detail=${completion.detail ?: "none"}"
+                when (completion.category) {
+                    OutcomeCategory.PARTIAL_STATE_REQUIRES_MANUAL_ACTION -> OperatorMessages.warn(server, summary)
+                    OutcomeCategory.SKIPPED_ERROR_RECOVERED -> OperatorMessages.info(server, summary)
+                    OutcomeCategory.SUCCESS -> Unit
+                }
+
+                if (completion.category == OutcomeCategory.PARTIAL_STATE_REQUIRES_MANUAL_ACTION) {
+                    completion.operatorGuidance.forEach { line ->
+                        OperatorMessages.warn(server, line.removePrefix("[Memento] ").trim())
+                    }
+                }
+            }
+
+        val scanTick = server?.overworld?.time ?: 0L
+        result.completions
+            .asSequence()
+            .filter { completion ->
+                completion.outcome == Outcome.success || completion.outcome == Outcome.pruned_with_residual_backup
+            }
+            .forEach { completion ->
+                val dimension = runCatching {
+                    RegistryKey.of(net.minecraft.registry.RegistryKeys.WORLD, net.minecraft.util.Identifier.of(completion.target.worldId))
+                }.getOrNull() ?: return@forEach
+
+                scanner?.startRegionRescan(
+                    world = dimension,
+                    regionX = completion.target.regionX,
+                    regionZ = completion.target.regionZ,
+                    reason = "renew_force_prune",
+                    scanTick = scanTick,
+                )
+            }
     }
 
     private fun pruneRegionTriple(
@@ -754,5 +900,49 @@ object WorldPruningService {
             }
         }
         return false
+    }
+
+    private fun guardFailure(input: GuardInput): Completion? {
+        val override = testGuardOverride
+        if (override != null) return override(input)
+        return guardFailureForTesting(input)
+    }
+
+    internal fun guardFailureForTesting(input: GuardInput): Completion? {
+        if (!input.dimensionMatches) {
+            val detail =
+                if (input.phase != null)
+                    "phase=${input.phase} requestedDimension=${input.requestedDimensionId} decisionWorld=${input.region.worldId}"
+                else
+                    "requestedDimension=${input.requestedDimensionId} decisionWorld=${input.region.worldId}"
+            return Completion(
+                target = input.region,
+                category = OutcomeCategory.SKIPPED_ERROR_RECOVERED,
+                outcome = Outcome.rejected_dimension_mismatch,
+                detail = detail,
+            )
+        }
+        if (!input.worldPresent) {
+            val detail =
+                if (input.phase != null)
+                    "phase=${input.phase} unknown world='${input.requestedDimensionId}'"
+                else
+                    "unknown world='${input.requestedDimensionId}'"
+            return Completion(
+                target = input.region,
+                category = OutcomeCategory.SKIPPED_ERROR_RECOVERED,
+                outcome = Outcome.rename_failed,
+                detail = detail,
+            )
+        }
+        if (input.loaded) {
+            return Completion(
+                target = input.region,
+                category = OutcomeCategory.SKIPPED_ERROR_RECOVERED,
+                outcome = Outcome.rejected_loaded,
+                detail = input.phase?.let { "phase=$it" },
+            )
+        }
+        return null
     }
 }
