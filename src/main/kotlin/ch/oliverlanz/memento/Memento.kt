@@ -10,7 +10,6 @@ import ch.oliverlanz.memento.application.renewal.WitherstoneRenewalEventSubscrib
 import ch.oliverlanz.memento.application.renewal.WitherstoneConsumptionEventSubscriber
 import ch.oliverlanz.memento.application.stone.StoneMaturityTimeBridge
 import ch.oliverlanz.memento.application.visualization.EffectsHost
-import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
 import ch.oliverlanz.memento.domain.worldmap.WorldMapService
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalProjection
 import ch.oliverlanz.memento.domain.renewal.projection.RenewalProjectionEvents
@@ -38,6 +37,7 @@ import ch.oliverlanz.memento.infrastructure.worldscan.RegionFileMetadataProvider
 import ch.oliverlanz.memento.infrastructure.worldscan.WorldScanListener
 import ch.oliverlanz.memento.infrastructure.observability.OperatorMessages
 import ch.oliverlanz.memento.infrastructure.ambient.MementoConfigStore
+import ch.oliverlanz.memento.infrastructure.ambient.AmbientIngestionService
 import net.fabricmc.api.ModInitializer
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents
@@ -70,6 +70,7 @@ object Memento : ModInitializer {
     private var renewalInitialObserver: RenewalInitialObserver? = null
     private var renewalChunkLoadProvider: RenewalChunkLoadProvider? = null
     private var ambientRenewalHandler: AmbientRenewalHandler? = null
+    private var ambientIngestionService: AmbientIngestionService? = null
     private var chunkLoadDriver: ChunkLoadDriver? = null
 
     private val onRealtimePulse: (PulseClock) -> Unit = {
@@ -95,7 +96,7 @@ object Memento : ModInitializer {
     }
 
     private val onUltraLowPulse: (PulseClock) -> Unit = {
-        // Reserved for future heavy maintenance cadence.
+        ambientIngestionService?.onVeryLowPulse()
     }
 
     private val onExtremeLowPulse: (PulseClock) -> Unit = {
@@ -174,10 +175,10 @@ object Memento : ModInitializer {
 
                 // Single fan-out point for chunk availability → domain renewal tracker
                 it.registerConsumer(object : ChunkAvailabilityListener {
-                    override fun onChunkMetadata(world: ServerWorld, fact: ChunkMetadataFact) {
+                    override fun onChunkLoaded(world: ServerWorld, pos: ChunkPos) {
                         RenewalChunkObservationAdapter.onChunkLoaded(
                             world.registryKey,
-                            ChunkPos(fact.key.chunkX, fact.key.chunkZ)
+                            pos,
                         )
                     }
 
@@ -185,6 +186,11 @@ object Memento : ModInitializer {
                         RenewalChunkObservationAdapter.onChunkUnloaded(world.registryKey, pos)
                     }
                 })
+            }
+
+            ambientIngestionService = AmbientIngestionService(checkNotNull(worldMapService)).also {
+                it.attach(server)
+                chunkLoadDriver?.registerConsumer(it)
             }
 
             effectsHost = EffectsHost(server)
@@ -265,6 +271,9 @@ object Memento : ModInitializer {
 
             ambientRenewalHandler?.detach()
             ambientRenewalHandler = null
+
+            ambientIngestionService?.detach()
+            ambientIngestionService = null
 
             RenewalRegenerationGate.clear()
             RenewalTrackerLogging.detach()

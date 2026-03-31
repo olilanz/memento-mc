@@ -77,10 +77,15 @@ class ChunkLoadDriver {
     private val register = ChunkLoadRegister()
 
     // Engine unload signals can arrive off-thread; queue them and forward on tick thread.
+    private data class LoadEvent(
+            val dim: net.minecraft.registry.RegistryKey<net.minecraft.world.World>,
+            val pos: ChunkPos
+    )
     private data class UnloadEvent(
             val dim: net.minecraft.registry.RegistryKey<net.minecraft.world.World>,
             val pos: ChunkPos
     )
+    private val pendingLoads = ConcurrentLinkedQueue<LoadEvent>()
     private val pendingUnloads = ConcurrentLinkedQueue<UnloadEvent>()
 
     // Aggregated observability
@@ -98,6 +103,7 @@ class ChunkLoadDriver {
         completedPendingPruneExpiredCount = 0
 
         register.clear()
+        pendingLoads.clear()
         pendingUnloads.clear()
     }
 
@@ -121,6 +127,7 @@ class ChunkLoadDriver {
 
         server = null
         register.clear()
+        pendingLoads.clear()
         pendingUnloads.clear()
     }
 
@@ -167,6 +174,7 @@ class ChunkLoadDriver {
         issueTicketsUpToCap(s)
 
         // 6) Forward unload events (tick thread).
+        forwardPendingLoads(s)
         forwardPendingUnloads(s)
     }
 
@@ -178,6 +186,7 @@ class ChunkLoadDriver {
         val ref = ChunkRef(world.registryKey, chunk.pos)
         // Record the observation into the register. No propagation here.
         register.recordEngineLoadObserved(ref, nowTick = tickCounter)
+        pendingLoads.add(LoadEvent(world.registryKey, chunk.pos))
 
         // IMPORTANT: do not ticket ambient engine loads.
         // Ticketing externally observed loads can amplify engine spillover and cause uncontrolled
@@ -422,29 +431,34 @@ class ChunkLoadDriver {
                     if (desiredSources.contains(ChunkLoadRegister.RequestSource.RENEWAL))
                             ChunkScanProvenance.ENGINE_FALLBACK
                     else ChunkScanProvenance.ENGINE_AMBIENT
-            val fact =
-                    ChunkMetadataFact(
-                            key =
-                                    ChunkKey(
-                                            world = world.registryKey,
-                                            regionX = Math.floorDiv(chunk.pos.x, 32),
-                                            regionZ = Math.floorDiv(chunk.pos.z, 32),
-                                            chunkX = chunk.pos.x,
-                                            chunkZ = chunk.pos.z,
-                                    ),
-                            source = source,
-                            unresolvedReason = null,
-                            signals =
-                                    ChunkSignals(
-                                            inhabitedTimeTicks = chunk.inhabitedTime,
-                                            lastUpdateTicks = null,
-                                            surfaceY = null,
-                                            biomeId = null,
-                                            isSpawnChunk = false,
-                                    ),
-                            scanTick = world.time,
-                    )
-            listeners.forEach { it.onChunkMetadata(world, fact) }
+            val emitAmbientMetadata =
+                    source != ChunkScanProvenance.ENGINE_AMBIENT ||
+                            MementoConstants.DRIVER_AMBIENT_METADATA_EMISSION_ENABLED
+            if (emitAmbientMetadata) {
+                val fact =
+                        ChunkMetadataFact(
+                                key =
+                                        ChunkKey(
+                                                world = world.registryKey,
+                                                regionX = Math.floorDiv(chunk.pos.x, 32),
+                                                regionZ = Math.floorDiv(chunk.pos.z, 32),
+                                                chunkX = chunk.pos.x,
+                                                chunkZ = chunk.pos.z,
+                                        ),
+                                source = source,
+                                unresolvedReason = null,
+                                signals =
+                                        ChunkSignals(
+                                                inhabitedTimeTicks = chunk.inhabitedTime,
+                                                lastUpdateTicks = null,
+                                                surfaceY = null,
+                                                biomeId = null,
+                                                isSpawnChunk = false,
+                                        ),
+                                scanTick = world.time,
+                        )
+                listeners.forEach { it.onChunkMetadata(world, fact) }
+            }
             register.completePropagation(ref, nowTick = tickCounter)
             forwarded++
 
@@ -536,6 +550,18 @@ class ChunkLoadDriver {
                     alreadyLoadedObserved,
                     register.allEntriesSnapshot().count { it.ticketName != null }
             )
+        }
+    }
+
+    /* ---------------------------------------------------------------------
+     * Loads (tick thread)
+     * ------------------------------------------------------------------ */
+
+    private fun forwardPendingLoads(server: MinecraftServer) {
+        while (true) {
+            val ev = pendingLoads.poll() ?: break
+            val world = server.getWorld(ev.dim) ?: continue
+            listeners.forEach { it.onChunkLoaded(world, ev.pos) }
         }
     }
 

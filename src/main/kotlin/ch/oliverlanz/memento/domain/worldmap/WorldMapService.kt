@@ -154,6 +154,87 @@ class WorldMapService {
     }
 
     /**
+     * Ambient ingestion boundary with localized monotonic merge guard.
+     *
+     * Ambient facts contribute to freshness only when they are newer observations or add missing
+     * information without weakening already-known values.
+     */
+    fun applyAmbientFactOnTickThread(fact: ChunkMetadataFact): Boolean {
+        if (!attached) return false
+        val existing = map.scannedEntry(fact.key)
+        if (!acceptAmbientFact(incoming = fact, existing = existing)) return false
+
+        val mergedSignals = mergeAmbientSignals(existing = existing?.signals, incoming = fact.signals)
+        val mergedTick = maxObservationTick(existing = existing?.scanTick, incoming = fact.scanTick)
+        val preserveExistingObservationMeta = existing != null && fact.scanTick <= existing.scanTick
+
+        // Provenance/unresolved metadata must follow the effective observation tick, not just
+        // signal completeness. When an older (or equal) ambient fact is accepted only to fill
+        // missing signal fields, keep the existing observation metadata so source semantics
+        // remain aligned with the newer recorded observation.
+        val existingObservationMeta = if (preserveExistingObservationMeta) existing else null
+        val mergedProvenance = if (preserveExistingObservationMeta) {
+            existingObservationMeta!!.provenance
+        } else {
+            fact.source
+        }
+        val mergedUnresolvedReason = if (preserveExistingObservationMeta) {
+            existingObservationMeta!!.unresolvedReason
+        } else {
+            fact.unresolvedReason
+        }
+
+        val merged = fact.copy(
+            signals = mergedSignals,
+            scanTick = mergedTick,
+            source = mergedProvenance,
+            unresolvedReason = mergedUnresolvedReason,
+        )
+
+        applyFactOnTickThread(merged)
+        return true
+    }
+
+    internal fun attachForTesting() {
+        attached = true
+    }
+
+    private fun acceptAmbientFact(incoming: ChunkMetadataFact, existing: ChunkScanSnapshotEntry?): Boolean {
+        if (existing == null) return true
+        if (incoming.scanTick > existing.scanTick) return true
+        return addsCompleteness(existing = existing.signals, incoming = incoming.signals)
+    }
+
+    private fun addsCompleteness(existing: ChunkSignals?, incoming: ChunkSignals?): Boolean {
+        if (incoming == null) return false
+        if (existing == null) return true
+
+        return (existing.inhabitedTimeTicks == null && incoming.inhabitedTimeTicks != null) ||
+            (existing.lastUpdateTicks == null && incoming.lastUpdateTicks != null) ||
+            (existing.surfaceY == null && incoming.surfaceY != null) ||
+            (existing.biomeId == null && incoming.biomeId != null) ||
+            (!existing.isSpawnChunk && incoming.isSpawnChunk)
+    }
+
+    private fun mergeAmbientSignals(existing: ChunkSignals?, incoming: ChunkSignals?): ChunkSignals? {
+        if (incoming == null) return existing
+        if (existing == null) return incoming
+
+        return ChunkSignals(
+            inhabitedTimeTicks = incoming.inhabitedTimeTicks ?: existing.inhabitedTimeTicks,
+            lastUpdateTicks = incoming.lastUpdateTicks ?: existing.lastUpdateTicks,
+            surfaceY = incoming.surfaceY ?: existing.surfaceY,
+            biomeId = incoming.biomeId ?: existing.biomeId,
+            isSpawnChunk = existing.isSpawnChunk || incoming.isSpawnChunk,
+        )
+    }
+
+    private fun maxObservationTick(existing: Long?, incoming: Long): Long {
+        val current = existing ?: return incoming
+        return if (incoming > current) incoming else current
+    }
+
+    /**
      * Removes all map entries for one world-region tuple on the tick thread.
      *
      * Projection recomputation is explicitly triggered for each removed key so derived renewal

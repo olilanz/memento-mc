@@ -11,7 +11,24 @@ import net.minecraft.util.math.ChunkPos
  * Application and domain code should not subscribe to Fabric chunk events directly.
  */
 interface ChunkAvailabilityListener {
-    fun onChunkMetadata(world: ServerWorld, fact: ChunkMetadataFact)
+    /**
+     * Optional metadata callback used by legacy/compatibility paths.
+     *
+     * Event-first consumers should prefer [onChunkLoaded] / [onChunkUnloaded].
+     */
+    fun onChunkMetadata(world: ServerWorld, fact: ChunkMetadataFact) {
+        /* default no-op */
+    }
+
+    /**
+     * Lifecycle-only signal that a chunk load was observed by the engine.
+     *
+     * This carries no chunk runtime object across boundary and may be emitted even when metadata
+     * extraction is disabled.
+     */
+    fun onChunkLoaded(world: ServerWorld, pos: ChunkPos) {
+        /* default no-op */
+    }
 
     /**
      * Best-effort outcome: the driver observed (or attempted) a load but gave up before a stable
