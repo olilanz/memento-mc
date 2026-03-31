@@ -172,13 +172,6 @@ object MementoConstants {
      */
     const val DRIVER_AMBIENT_METADATA_EMISSION_ENABLED: Boolean = true
 
-    /**
-     * Phase A/B scaffolding flag: ambient ingestion applies ambient facts to world map.
-     *
-     * S1 -> S2 handoff is restart-boundary by delivery protocol.
-     */
-    const val AMBIENT_INGESTION_WRITES_ENABLED: Boolean = false
-
     /** Ambient freshness: stale threshold based on accepted observation age. */
     const val AMBIENT_FRESHNESS_STALE_AFTER_TICKS: Long = OVERWORLD_DAY_TICKS
 

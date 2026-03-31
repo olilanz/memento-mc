@@ -22,6 +22,9 @@ import net.minecraft.util.math.ChunkPos
 class AmbientIngestionService(
     private val worldMapService: WorldMapService,
 ) : ChunkAvailabilityListener {
+    companion object {
+        private const val AMBIENT_UPDATE_LOG_SAMPLE_LIMIT_PER_PULSE: Int = 5
+    }
 
     private var server: MinecraftServer? = null
     private val tracker = LoadedChunkTracker()
@@ -46,18 +49,41 @@ class AmbientIngestionService(
     override fun onChunkUnloaded(world: ServerWorld, pos: ChunkPos) {
         val ref = LoadedChunkKey(world.registryKey, pos.x, pos.z)
         tracker.onUnloaded(ref)
-        if (!MementoConstants.AMBIENT_INGESTION_WRITES_ENABLED) return
 
         // Best-effort only at unload time.
         val chunk = world.chunkManager.getWorldChunk(pos.x, pos.z, false) ?: return
-        applyAmbientObservation(world = world, pos = chunk.pos, inhabitedTicks = chunk.inhabitedTime)
+        applyAmbientObservation(
+            world = world,
+            pos = chunk.pos,
+            inhabitedTicks = chunk.inhabitedTime,
+            reason = "UNLOAD",
+            shouldLogUpdate = true,
+        )
     }
 
     fun onVeryLowPulse() {
-        if (!MementoConstants.AMBIENT_INGESTION_WRITES_ENABLED) return
         val srv = server ?: return
         val ordered = tracker.snapshotOrdered()
-        if (ordered.isEmpty()) return
+
+        val loadedCount = ordered.size
+        var searchedCount = 0
+        var staleFound = false
+        var updatedCount = 0
+        var updateLogsEmitted = 0
+        val previousCursor = cursorLastKey
+
+        if (ordered.isEmpty()) {
+            MementoLog.debug(
+                MementoConcept.AMBIENT,
+                "refresh loaded={} searched={} staleFound={} updated={} cursorMoved={}",
+                loadedCount,
+                searchedCount,
+                staleFound,
+                updatedCount,
+                false,
+            )
+            return
+        }
 
         val start = tracker.indexAfter(cursorLastKey, ordered)
         val seekMax = minOf(MementoConstants.AMBIENT_FRESHNESS_SEARCH_WINDOW_MAX, ordered.size)
@@ -67,8 +93,10 @@ class AmbientIngestionService(
         while (seekVisited < seekMax) {
             val idx = (start + seekVisited) % ordered.size
             val ref = ordered[idx]
+            searchedCount++
             if (isStale(ref, srv)) {
                 staleIndex = idx
+                staleFound = true
                 break
             }
             seekVisited++
@@ -79,6 +107,15 @@ class AmbientIngestionService(
                 val cursorIndex = (start + seekMax - 1) % ordered.size
                 cursorLastKey = ordered[cursorIndex]
             }
+            MementoLog.debug(
+                MementoConcept.AMBIENT,
+                "refresh loaded={} searched={} staleFound={} updated={} cursorMoved={}",
+                loadedCount,
+                searchedCount,
+                staleFound,
+                updatedCount,
+                previousCursor != cursorLastKey,
+            )
             return
         }
 
@@ -92,8 +129,19 @@ class AmbientIngestionService(
                 val world = srv.getWorld(ref.dimension)
                 val chunk = world?.chunkManager?.getWorldChunk(ref.x, ref.z, false)
                 if (world != null && chunk != null) {
-                    val applied = applyAmbientObservation(world = world, pos = chunk.pos, inhabitedTicks = chunk.inhabitedTime)
-                    if (applied) updates++
+                    val shouldLogUpdate = updateLogsEmitted < AMBIENT_UPDATE_LOG_SAMPLE_LIMIT_PER_PULSE
+                    val applied = applyAmbientObservation(
+                        world = world,
+                        pos = chunk.pos,
+                        inhabitedTicks = chunk.inhabitedTime,
+                        reason = "STALE",
+                        shouldLogUpdate = shouldLogUpdate,
+                    )
+                    if (applied) {
+                        updates++
+                        updatedCount++
+                        if (shouldLogUpdate) updateLogsEmitted++
+                    }
                 }
             }
             traversed++
@@ -102,13 +150,13 @@ class AmbientIngestionService(
         cursorLastKey = ordered[(staleIndex + batch - 1) % ordered.size]
 
         MementoLog.debug(
-            MementoConcept.WORLD,
-            "ambient freshness pulse loaded={} seekVisited={} batchTraversed={} updates={} cursorSet={}",
-            tracker.size(),
-            seekVisited,
-            batch,
-            updates,
-            cursorLastKey != null,
+            MementoConcept.AMBIENT,
+            "refresh loaded={} searched={} staleFound={} updated={} cursorMoved={}",
+            loadedCount,
+            searchedCount,
+            staleFound,
+            updatedCount,
+            previousCursor != cursorLastKey,
         )
     }
 
@@ -119,9 +167,18 @@ class AmbientIngestionService(
         return (world.time - existing.scanTick) > MementoConstants.AMBIENT_FRESHNESS_STALE_AFTER_TICKS
     }
 
-    private fun applyAmbientObservation(world: ServerWorld, pos: ChunkPos, inhabitedTicks: Long): Boolean {
+    private fun applyAmbientObservation(
+        world: ServerWorld,
+        pos: ChunkPos,
+        inhabitedTicks: Long,
+        reason: String,
+        shouldLogUpdate: Boolean,
+    ): Boolean {
+        val key = toChunkKey(world, pos)
+        val previousTick = worldMapService.substrate().scannedEntry(key)?.scanTick
+
         val fact = ChunkMetadataFact(
-            key = toChunkKey(world, pos),
+            key = key,
             source = ChunkScanProvenance.ENGINE_AMBIENT,
             unresolvedReason = null,
             signals = ChunkSignals(
@@ -133,7 +190,21 @@ class AmbientIngestionService(
             ),
             scanTick = world.time,
         )
-        return worldMapService.applyAmbientFactOnTickThread(fact)
+        val applied = worldMapService.applyAmbientFactOnTickThread(fact)
+
+        if (applied && shouldLogUpdate) {
+            MementoLog.debug(
+                MementoConcept.AMBIENT,
+                "update chunk={} reason={} prevTick={} newTick={} inhabitedTicks={}",
+                "${key.world.value}:${key.chunkX},${key.chunkZ}",
+                reason,
+                previousTick,
+                fact.scanTick,
+                inhabitedTicks,
+            )
+        }
+
+        return applied
     }
 
     private fun toChunkKey(world: ServerWorld, pos: ChunkPos): ChunkKey =
