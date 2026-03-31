@@ -18,7 +18,7 @@ Over time, more and more terrain is explored, while older areas remain unchanged
 
 Memento changes that.
 
-It observes where players spend meaningful time and uses that as a signal for what should remain stable. Terrain outside those areas can be replaced with freshly generated terrain, while preserving the places players still care about.
+It observes where players spend meaningful time and uses that as a memory signal for what should remain stable. Terrain outside those areas can be replaced with freshly generated terrain, while preserving the places players still care about.
 
 ---
 
@@ -111,7 +111,7 @@ Memento is most useful when a world has been running for a while.
 
 You start to notice:
 
-* large areas that no one spends time in anymore
+* large areas outside where players spend meaningful time
 * new terrain appearing far away
 * old terrain that no longer reflects current world generation
 
@@ -144,5 +144,8 @@ No client installation required.
 
 ## Links
 
-* Source code: GitHub repository
-* Documentation: included in repository
+* Source code and releases: [GitHub](../README.md)
+* Conceptual model: [RENEWAL_MODEL.md](RENEWAL_MODEL.md)
+* Derivation flow: [RENEWAL_PIPELINE.md](RENEWAL_PIPELINE.md)
+* Architecture and invariants: [ARCHITECTURE.md](ARCHITECTURE.md)
+* Development setup: [DEVELOPMENT.md](DEVELOPMENT.md)

@@ -7,10 +7,12 @@ decisions so that future maintainers do not have to rediscover them
 through failure. The focus is on **what must remain true**, not on
 explaining the code line‑by‑line.
 
-This document is not user‑facing. Gameplay concepts, player experience,
-and operator semantics are covered in [README.md](README.md) and
-[RENEWAL_MODEL.md](RENEWAL_MODEL.md). Development setup and workflows
-are covered in [DEVELOPMENT.md](DEVELOPMENT.md). Where those documents
+This document is not user‑facing. For player and operator usage, see
+[MODRINTH.md](MODRINTH.md). For repository entry and quick orientation,
+see [README.md](../README.md). Conceptual renewal semantics are covered
+in [RENEWAL_MODEL.md](RENEWAL_MODEL.md), derivation flow is covered in
+[RENEWAL_PIPELINE.md](RENEWAL_PIPELINE.md), and development setup is
+covered in [DEVELOPMENT.md](DEVELOPMENT.md). Where those documents
 already define concepts, this document references them instead of
 repeating them.
 
@@ -705,6 +707,44 @@ from this document.
 
 ## 9. Architectural Decision Records (ADRs)
 
+### ADR index (scan-first)
+
+| ADR | Status | Scope |
+| --- | --- | --- |
+| ADR-001 | Active | Two renewal mechanisms coexist |
+| ADR-002 | Active | Detection vs execution separation |
+| ADR-003 | Active | Minecraft and server chunk-lifecycle authority |
+| ADR-004 | Superseded | Early stone influence authority superseded by ADR-014 |
+| ADR-005 | Active | One Witherstone to one RenewalBatch |
+| ADR-006 | Active | Typed domain events as boundary |
+| ADR-007 | Superseded | Engine-mediated scanning superseded by ADR-012 |
+| ADR-008 | Active | Shared Chunk Load Driver |
+| ADR-009 | Active | WorldMap replaces scan plans |
+| ADR-010 | Active | Adaptive pacing over fixed modes |
+| ADR-011 | Active | Scan completion allows unresolved leftovers |
+| ADR-012 | Active | Filesystem-primary scanning with no scanner demand |
+| ADR-013 | Active | Domain WorldMapService and metadata-fact ingestion boundary |
+| ADR-014 | Superseded | Stone lifecycle and projection split superseded by ADR-015 |
+| ADR-016 | Active | Pulse generator cadence shielding |
+| ADR-017 | Superseded | Projection as derived boundary superseded by ADR-020 |
+| ADR-018 | Active | Generation guard for stable renewal decisions |
+| ADR-019 | Active | Single background slot for background work |
+| ADR-020 | Superseded | Projection command-time eligibility authority superseded by ADR-021 |
+| ADR-021 | Superseded | Projection-owned ranking with stored preview binding |
+
+Command-surface note: some superseded ADRs include historical command
+forms. Current command grammar is defined in
+[`Commands.register()`](../src/main/kotlin/ch/oliverlanz/memento/Commands.kt:22).
+
+### Active ADR groups
+
+- Active ADRs: ADR-001, ADR-002, ADR-003, ADR-005, ADR-006, ADR-008,
+  ADR-009, ADR-010, ADR-011, ADR-012, ADR-013, ADR-016, ADR-018,
+  ADR-019
+- Superseded ADRs: ADR-004, ADR-007, ADR-014, ADR-017, ADR-020, ADR-021
+
+### ADR entries (chronological)
+
 ### ADR-001: Two renewal mechanisms coexist
 
 Two renewal mechanisms exist: player-driven stones and autonomous
@@ -896,6 +936,8 @@ processing could overlap, compete for resources, or introduce race
 conditions when renewal begins mutating world data.
 
 ------------------------------------------------------------------------
+
+### Superseded ADRs (historical chain retained as institutional memory)
 
 ### ADR-020: Projection world-view boundary and command-time eligibility authority
 

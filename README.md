@@ -11,16 +11,16 @@ https://modrinth.com/mod/memento-natural-renewal/
 
 ## What problem this solves
 
-Minecraft worlds accumulate terrain that is no longer used.
+Minecraft worlds accumulate terrain outside the regions players meaningfully use.
 
-* New world generation appears far away from existing areas
+* New world generation appears farther and farther away from active regions
 * Old terrain remains unchanged indefinitely
 * Servers either expand endlessly or require disruptive resets
 
 Memento introduces a controlled alternative:
 
 * Preserve areas that are still relevant
-* Allow abandoned areas to be renewed over time
+* Allow areas outside those regions to be renewed over time
 * Keep the world evolving without wiping it
 
 Renewal is conservative and operator-controlled.
@@ -52,19 +52,19 @@ https://modrinth.com/mod/memento-natural-renewal/
 
 ## Repository contents
 
-* `doc/MODRINTH.md`
+* [`doc/MODRINTH.md`](doc/MODRINTH.md)
   User-facing documentation and usage
 
-* `doc/RENEWAL_MODEL.md`
+* [`doc/RENEWAL_MODEL.md`](doc/RENEWAL_MODEL.md)
   Conceptual model (memory, forgettability, renewal)
 
-* `doc/RENEWAL_PIPELINE.md`
+* [`doc/RENEWAL_PIPELINE.md`](doc/RENEWAL_PIPELINE.md)
   How world data is processed into renewal decisions
 
-* `doc/ARCHITECTURE.md`
+* [`doc/ARCHITECTURE.md`](doc/ARCHITECTURE.md)
   System design, invariants, and responsibilities
 
-* `doc/DEVELOPMENT.md`
+* [`doc/DEVELOPMENT.md`](doc/DEVELOPMENT.md)
   Development environment and tooling
 
 ---
