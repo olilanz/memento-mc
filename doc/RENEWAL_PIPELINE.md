@@ -4,6 +4,9 @@
 
 This document explains how Memento turns player activity into renewal decisions.
 
+For conceptual semantics and terminology, see [RENEWAL_MODEL.md](RENEWAL_MODEL.md).
+This document is the operational derivation flow used to compute eligibility.
+
 It is grounded in the actual pipeline implemented in code:
 
 inhabitedTicks → memorabilityIndex → chunkMemorable → chunkForgettable → renewalRank
@@ -14,7 +17,7 @@ Each step is deterministic, local, and bounded. The goal is to make the behavior
 
 ## 1. The Core Problem
 
-We want the world to “remember” meaningful places and gradually forget the rest.
+We want the world to "remember" meaningful places and gradually forget the rest.
 
 The challenge is that not all activity is equal:
 
@@ -24,7 +27,7 @@ The challenge is that not all activity is equal:
 So the system must distinguish between:
 
 - **incidental presence**
-- **meaningful presence**
+- **meaningful player time**
 
 And it must do so in a way that:
 

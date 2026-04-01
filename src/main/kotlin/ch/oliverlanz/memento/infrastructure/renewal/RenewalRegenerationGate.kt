@@ -1,6 +1,9 @@
 
 package ch.oliverlanz.memento.infrastructure.renewal
 
+import ch.oliverlanz.memento.MementoConstants
+import ch.oliverlanz.memento.domain.worldmap.ChunkKey
+import ch.oliverlanz.memento.domain.worldmap.WorldMapService
 import ch.oliverlanz.memento.domain.renewal.BatchCompleted
 import ch.oliverlanz.memento.domain.renewal.BatchRemoved
 import ch.oliverlanz.memento.domain.renewal.BatchWaitingForRenewal
@@ -9,6 +12,8 @@ import ch.oliverlanz.memento.domain.renewal.RenewalBatchState
 import ch.oliverlanz.memento.domain.renewal.RenewalEvent
 import ch.oliverlanz.memento.domain.renewal.RenewalTrigger
 import net.minecraft.registry.RegistryKey
+import net.minecraft.registry.RegistryKeys
+import net.minecraft.util.Identifier
 import net.minecraft.util.math.ChunkPos
 import net.minecraft.world.World
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
@@ -44,10 +49,17 @@ object RenewalRegenerationGate {
     private val regenTriggered: MutableSet<Pair<String, Long>> =
         ConcurrentHashMap.newKeySet()
 
+    @Volatile private var worldMapService: WorldMapService? = null
+
+    fun attachWorldMapService(service: WorldMapService) {
+        worldMapService = service
+    }
+
     fun clear() {
         pendingByDimension.clear()
         batchIndex.clear()
         regenTriggered.clear()
+        worldMapService = null
     }
 
     fun onRenewalEvent(e: RenewalEvent) {
@@ -90,6 +102,7 @@ object RenewalRegenerationGate {
         regenTriggered.removeAll(snapshot)
 
         val acknowledgedByDimension = linkedMapOf<String, MutableList<Long>>()
+        var staleMarksAppliedTotal = 0
 
         for ((dim, chunkLong) in snapshot) {
             pendingByDimension[dim]?.remove(chunkLong)
@@ -101,6 +114,8 @@ object RenewalRegenerationGate {
         }
 
         acknowledgedByDimension.forEach { (dim, acknowledgedChunks) ->
+            val staleMarksApplied = applyStaleMarks(dim = dim, acknowledgedChunks = acknowledgedChunks)
+            staleMarksAppliedTotal += staleMarksApplied
             val sample = acknowledgedChunks
                 .asSequence()
                 .distinct()
@@ -115,7 +130,49 @@ object RenewalRegenerationGate {
                 acknowledgedChunks.size,
                 sample,
             )
+
+            if (staleMarksApplied > 0) {
+                MementoLog.debug(
+                    MementoConcept.RENEWAL,
+                    "regeneration stale-mark applied dim='{}' chunks={} staleMarks={}",
+                    dim,
+                    acknowledgedChunks.size,
+                    staleMarksApplied,
+                )
+            }
         }
+
+        MementoLog.debug(
+            MementoConcept.RENEWAL,
+            "staleMark applied count={}",
+            staleMarksAppliedTotal,
+        )
+    }
+
+    private fun applyStaleMarks(dim: String, acknowledgedChunks: List<Long>): Int {
+        val service = worldMapService ?: return 0
+        val worldKey = runCatching {
+            RegistryKey.of(RegistryKeys.WORLD, Identifier.of(dim))
+        }.getOrNull() ?: return 0
+
+        // Force old-enough observation tick; keeps factual signals untouched.
+        val staleScanTick = -1L - MementoConstants.AMBIENT_FRESHNESS_STALE_AFTER_TICKS
+        var applied = 0
+        for (chunkLong in acknowledgedChunks) {
+            val pos = ChunkPos(chunkLong)
+            val key =
+                ChunkKey(
+                    world = worldKey,
+                    regionX = Math.floorDiv(pos.x, 32),
+                    regionZ = Math.floorDiv(pos.z, 32),
+                    chunkX = pos.x,
+                    chunkZ = pos.z,
+                )
+            if (service.forceStaleObservationTickOnTickThread(key = key, staleScanTick = staleScanTick)) {
+                applied++
+            }
+        }
+        return applied
     }
 
     private fun onBatchWaitingForRenewal(e: BatchWaitingForRenewal) {

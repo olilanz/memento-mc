@@ -166,6 +166,25 @@ object MementoConstants {
     const val OVERWORLD_DAY_TICKS: Long = 24_000L
 
     /**
+     * Phase A/B scaffolding flag: driver metadata emission for ambient path.
+     *
+     * This is a code-level rollout scaffold, not a runtime hot-switch control surface.
+     */
+    const val DRIVER_AMBIENT_METADATA_EMISSION_ENABLED: Boolean = true
+
+    /** Ambient freshness: stale threshold based on accepted observation age. */
+    const val AMBIENT_FRESHNESS_STALE_AFTER_TICKS: Long = OVERWORLD_DAY_TICKS
+
+    /** Ambient freshness: max entries scanned while seeking first stale chunk per VERY_LOW pulse. */
+    const val AMBIENT_FRESHNESS_SEARCH_WINDOW_MAX: Int = 1500
+
+    /** Ambient freshness: traversal window after stale seek hit. */
+    const val AMBIENT_FRESHNESS_BATCH_WINDOW: Int = 200
+
+    /** Ambient freshness: hard write cap per VERY_LOW pulse. */
+    const val AMBIENT_FRESHNESS_MAX_UPDATES_PER_PULSE: Int = 80
+
+    /**
      * Conceptual "renewal checkpoint" time-of-night.
      *
      * The current implementation ages anchors by Overworld day index (time / OVERWORLD_DAY_TICKS)

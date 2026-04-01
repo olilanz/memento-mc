@@ -155,5 +155,8 @@ The dev container forwards required ports automatically.
 
 ## 9. Related Documentation
 
-- README.md — user-facing overview
-- ARCHITECTURE.md — system design and invariants
+- [README.md](../README.md) — repository entry point and navigation
+- [MODRINTH.md](MODRINTH.md) — user-facing behavior and commands
+- [RENEWAL_MODEL.md](RENEWAL_MODEL.md) — conceptual renewal model
+- [RENEWAL_PIPELINE.md](RENEWAL_PIPELINE.md) — derivation flow
+- [ARCHITECTURE.md](ARCHITECTURE.md) — system design and invariants

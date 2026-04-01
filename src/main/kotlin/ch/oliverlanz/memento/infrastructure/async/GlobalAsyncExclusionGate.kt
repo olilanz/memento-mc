@@ -78,4 +78,19 @@ object GlobalAsyncExclusionGate {
         MementoLog.debug(concept, "global async gate accepted owner={}", owner)
         return SubmitResult.Accepted(future = future, owner = owner)
     }
+
+    /**
+     * Returns current busy owner, or `detached` when gate is not attached, else null when idle.
+     */
+    @Synchronized
+    fun busyOwnerOrDetachedOrNull(): String? {
+        val exec = executor ?: return "detached"
+        val active = activeJob
+        if (active == null) return null
+        if (active.future.isDone) {
+            activeJob = null
+            return null
+        }
+        return active.owner
+    }
 }

@@ -12,6 +12,7 @@ enum class MementoConcept {
     PROJECTION,
     SCANNER,
     DRIVER,
+    AMBIENT,
     OPERATOR,
     WORLD,
     STORAGE,

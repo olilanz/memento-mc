@@ -697,10 +697,11 @@ object CommandHandlers {
         if (orderedRegions.isNotEmpty()) {
             regionPathResult = when (val batch = WorldPruningService.submitBatch(orderedRegions)) {
                 is WorldPruningService.BatchSubmitResult.Submitted -> {
+                    val preflightSkipped = batch.requested - batch.submitted
                     source.sendFeedback(
                         {
                             Text.literal(
-                                "[Memento] renewal batch submitted: requested=${batch.requested}, submitted=${batch.submitted}, pending outcomes after completion."
+                                "[Memento] renewal batch submitted: requested=${batch.requested}, preflightSkipped=$preflightSkipped, admitted=${batch.submitted}, pending outcomes after completion."
                             ).formatted(Formatting.YELLOW)
                         },
                         false,
@@ -713,14 +714,15 @@ object CommandHandlers {
                     }
                     MementoLog.info(
                         MementoConcept.RENEWAL,
-                        "do renewal action=REGION_PRUNE result=submitted requested={} submitted={} invalidTargets={} by={}",
+                        "do renewal action=REGION_PRUNE result=submitted requested={} preflightSkipped={} admitted={} invalidTargets={} by={}",
                         batch.requested,
+                        preflightSkipped,
                         batch.submitted,
                         invalidTargets,
                         source.name,
                     )
 
-                    orderedRegions.forEach { (_, region) ->
+                    batch.acceptedTargets.forEach { region ->
                         MementoLog.info(
                             MementoConcept.RENEWAL,
                             "do renewal action=REGION_PRUNE dimension={} region=({}, {}) result=submitted by={}",

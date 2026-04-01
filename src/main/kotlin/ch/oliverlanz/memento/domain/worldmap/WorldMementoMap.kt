@@ -99,6 +99,21 @@ class WorldMementoMap {
 
     fun hasSignals(key: ChunkKey): Boolean = records[key]?.signals != null
 
+    /** Read-only scanned entry lookup for merge-policy callers. */
+    fun scannedEntry(key: ChunkKey): ChunkScanSnapshotEntry? {
+        val record = records[key] ?: return null
+        val tick = record.scanTick ?: return null
+        return ChunkScanSnapshotEntry(
+            key = key,
+            signals = record.signals,
+            dominantStone = record.dominantStone,
+            dominantStoneEffect = record.dominantStoneEffect,
+            scanTick = tick,
+            provenance = record.provenance,
+            unresolvedReason = record.unresolvedReason,
+        )
+    }
+
     /** True when the chunk exists and has not yet been scanned (scanTick == null). */
     fun isMissing(key: ChunkKey): Boolean = records[key]?.scanTick == null
 

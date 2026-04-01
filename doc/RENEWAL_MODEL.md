@@ -3,6 +3,9 @@
 This document describes how Natural Renewal decides **where renewal may occur**,
 independent of implementation or technology.
 
+It is a conceptual model. The operational derivation flow and concrete
+signals used in runtime are documented in [RENEWAL_PIPELINE.md](RENEWAL_PIPELINE.md).
+
 Natural Renewal is one operator-facing model composed of two complementary,
 architecturally distinct mechanisms:
 
@@ -20,7 +23,7 @@ By default, Minecraft worlds remember everything.
 
 Every explored area is kept indefinitely, regardless of whether it remains
 relevant to gameplay. Over time, this causes long-lived worlds to stagnate,
-with large regions of unused terrain frozen in an old state.
+with large regions outside everyday play frozen in an old state.
 
 Natural Renewal introduces the idea that **memory can fade**.
 
@@ -28,7 +31,7 @@ Natural Renewal introduces the idea that **memory can fade**.
 
 ## What creates memory
 
-A chunk’s memory is influenced by three factors:
+A chunk's memory is derived from meaningful player time and spatial continuity.
 
 ### Presence
 
@@ -36,15 +39,6 @@ Player presence is the strongest signal of memory.
 
 Chunks that players inhabit, return to, or meaningfully interact with are
 considered memorable.
-
----
-
-### Time since last altered
-
-Memory weakens with inactivity.
-
-Chunks that have not been altered for a long time gradually lose significance,
-even if they were once visited.
 
 ---
 
@@ -63,7 +57,7 @@ The model does not assume square or grid-aligned regions.
 
 ## Forgettability and thresholds
 
-The combined influence of presence, time, and proximity determines a chunk’s
+The combined influence of presence and proximity determines a chunk's
 **forgettability**.
 
 - Chunks below the forgettability threshold are **candidates for natural renewal**
@@ -80,7 +74,7 @@ This makes renewal conservative by default.
 Natural renewal progresses where memory is weakest:
 
 - far from inhabited areas
-- in regions with long inactivity
+- in regions with little meaningful player time
 - where player presence has been minimal or absent
 
 Renewal does not jump across space or bypass memorable land.
