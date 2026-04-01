@@ -4,9 +4,9 @@ import ch.oliverlanz.memento.MementoConstants
 import ch.oliverlanz.memento.domain.worldmap.ChunkKey
 import ch.oliverlanz.memento.domain.worldmap.ChunkMetadataFact
 import ch.oliverlanz.memento.domain.worldmap.ChunkScanProvenance
-import ch.oliverlanz.memento.domain.worldmap.ChunkSignals
 import ch.oliverlanz.memento.domain.worldmap.WorldMapService
 import ch.oliverlanz.memento.infrastructure.chunk.ChunkAvailabilityListener
+import ch.oliverlanz.memento.infrastructure.chunk.ChunkLoadDriver
 import ch.oliverlanz.memento.infrastructure.observability.MementoConcept
 import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import net.minecraft.server.MinecraftServer
@@ -18,9 +18,14 @@ import net.minecraft.util.math.ChunkPos
  *
  * This component never requests chunk loads. It only consumes load lifecycle signals and performs
  * bounded best-effort enrichment on tick thread.
+ *
+ * Unload-path semantics:
+ * - unload-time refresh is best-effort only and may miss due to normal lifecycle races
+ * - VERY_LOW pulse sweep is the reliable reconciliation path for stale ambient metadata
  */
 class AmbientIngestionService(
     private val worldMapService: WorldMapService,
+    private val chunkLoadDriver: ChunkLoadDriver,
 ) : ChunkAvailabilityListener {
     companion object {
         private const val AMBIENT_UPDATE_LOG_SAMPLE_LIMIT_PER_PULSE: Int = 5
@@ -50,36 +55,42 @@ class AmbientIngestionService(
         val ref = LoadedChunkKey(world.registryKey, pos.x, pos.z)
         tracker.onUnloaded(ref)
 
-        // Best-effort only at unload time.
-        val chunk = world.chunkManager.getWorldChunk(pos.x, pos.z, false) ?: return
+        // Best-effort only at unload time; misses are expected under lifecycle races.
+        // Reliable reconciliation happens on VERY_LOW pulse sweep.
+        val metadata = chunkLoadDriver.getMetadataIfLoaded(ref.dimension, ref.x, ref.z) ?: return
         applyAmbientObservation(
-            world = world,
-            pos = chunk.pos,
-            inhabitedTicks = chunk.inhabitedTime,
+            metadata = metadata,
             reason = "UNLOAD",
             shouldLogUpdate = true,
         )
     }
 
     fun onVeryLowPulse() {
-        val srv = server ?: return
         val ordered = tracker.snapshotOrdered()
+        val pulseTick = server?.overworld?.time ?: -1L
 
         val loadedCount = ordered.size
         var searchedCount = 0
         var staleFound = false
-        var updatedCount = 0
+        var requestedCount = 0
+        var hitCount = 0
+        var missCount = 0
+        var appliedCount = 0
         var updateLogsEmitted = 0
         val previousCursor = cursorLastKey
 
         if (ordered.isEmpty()) {
             MementoLog.debug(
                 MementoConcept.AMBIENT,
-                "refresh loaded={} searched={} staleFound={} updated={} cursorMoved={}",
+                "refresh tick={} loaded={} searched={} staleFound={} requested={} hits={} misses={} applied={} cursorMoved={}",
+                pulseTick,
                 loadedCount,
                 searchedCount,
                 staleFound,
-                updatedCount,
+                requestedCount,
+                hitCount,
+                missCount,
+                appliedCount,
                 false,
             )
             return
@@ -93,8 +104,16 @@ class AmbientIngestionService(
         while (seekVisited < seekMax) {
             val idx = (start + seekVisited) % ordered.size
             val ref = ordered[idx]
+            val metadata = metadataOrDrop(ref = ref, reason = "SWEEP_STALE")
+            requestedCount++
+            if (metadata == null) {
+                missCount++
+                seekVisited++
+                continue
+            }
+            hitCount++
             searchedCount++
-            if (isStale(ref, srv)) {
+            if (isStale(ref = ref, currentTick = metadata.scanTick)) {
                 staleIndex = idx
                 staleFound = true
                 break
@@ -109,11 +128,15 @@ class AmbientIngestionService(
             }
             MementoLog.debug(
                 MementoConcept.AMBIENT,
-                "refresh loaded={} searched={} staleFound={} updated={} cursorMoved={}",
+                "refresh tick={} loaded={} searched={} staleFound={} requested={} hits={} misses={} applied={} cursorMoved={}",
+                pulseTick,
                 loadedCount,
                 searchedCount,
                 staleFound,
-                updatedCount,
+                requestedCount,
+                hitCount,
+                missCount,
+                appliedCount,
                 previousCursor != cursorLastKey,
             )
             return
@@ -125,23 +148,30 @@ class AmbientIngestionService(
         while (traversed < batch) {
             val idx = (staleIndex + traversed) % ordered.size
             val ref = ordered[idx]
-            if (updates < MementoConstants.AMBIENT_FRESHNESS_MAX_UPDATES_PER_PULSE && isStale(ref, srv)) {
-                val world = srv.getWorld(ref.dimension)
-                val chunk = world?.chunkManager?.getWorldChunk(ref.x, ref.z, false)
-                if (world != null && chunk != null) {
-                    val shouldLogUpdate = updateLogsEmitted < AMBIENT_UPDATE_LOG_SAMPLE_LIMIT_PER_PULSE
-                    val applied = applyAmbientObservation(
-                        world = world,
-                        pos = chunk.pos,
-                        inhabitedTicks = chunk.inhabitedTime,
-                        reason = "STALE",
-                        shouldLogUpdate = shouldLogUpdate,
-                    )
-                    if (applied) {
-                        updates++
-                        updatedCount++
-                        if (shouldLogUpdate) updateLogsEmitted++
-                    }
+            if (updates < MementoConstants.AMBIENT_FRESHNESS_MAX_UPDATES_PER_PULSE) {
+                val metadata = metadataOrDrop(ref = ref, reason = "SWEEP_STALE")
+                requestedCount++
+                if (metadata == null) {
+                    missCount++
+                    traversed++
+                    continue
+                }
+                hitCount++
+                if (!isStale(ref = ref, currentTick = metadata.scanTick)) {
+                    traversed++
+                    continue
+                }
+
+                val shouldLogUpdate = updateLogsEmitted < AMBIENT_UPDATE_LOG_SAMPLE_LIMIT_PER_PULSE
+                val applied = applyAmbientObservation(
+                    metadata = metadata,
+                    reason = "SWEEP_STALE",
+                    shouldLogUpdate = shouldLogUpdate,
+                )
+                if (applied) {
+                    updates++
+                    appliedCount++
+                    if (shouldLogUpdate) updateLogsEmitted++
                 }
             }
             traversed++
@@ -151,68 +181,82 @@ class AmbientIngestionService(
 
         MementoLog.debug(
             MementoConcept.AMBIENT,
-            "refresh loaded={} searched={} staleFound={} updated={} cursorMoved={}",
+            "refresh tick={} loaded={} searched={} staleFound={} requested={} hits={} misses={} applied={} cursorMoved={}",
+            pulseTick,
             loadedCount,
             searchedCount,
             staleFound,
-            updatedCount,
+            requestedCount,
+            hitCount,
+            missCount,
+            appliedCount,
             previousCursor != cursorLastKey,
         )
     }
 
-    private fun isStale(ref: LoadedChunkKey, server: MinecraftServer): Boolean {
-        val world = server.getWorld(ref.dimension) ?: return false
-        val key = toChunkKey(world, ChunkPos(ref.x, ref.z))
+    private fun isStale(ref: LoadedChunkKey, currentTick: Long): Boolean {
+        val key = toChunkKey(ref)
         val existing = worldMapService.substrate().scannedEntry(key) ?: return true
-        return (world.time - existing.scanTick) > MementoConstants.AMBIENT_FRESHNESS_STALE_AFTER_TICKS
+        return (currentTick - existing.scanTick) > MementoConstants.AMBIENT_FRESHNESS_STALE_AFTER_TICKS
+    }
+
+    private fun metadataOrDrop(ref: LoadedChunkKey, reason: String): ChunkLoadDriver.LoadedChunkMetadata? {
+        val metadata = chunkLoadDriver.getMetadataIfLoaded(ref.dimension, ref.x, ref.z)
+        if (metadata == null) {
+            // Expected race: tracker entry can outlive loaded-state visibility.
+            tracker.onUnloaded(ref)
+            MementoLog.debug(
+                MementoConcept.AMBIENT,
+                "tracker.drop key={} reason=METADATA_MISS source={}",
+                "${ref.dimension.value}:${ref.x},${ref.z}",
+                reason,
+            )
+        }
+        return metadata
     }
 
     private fun applyAmbientObservation(
-        world: ServerWorld,
-        pos: ChunkPos,
-        inhabitedTicks: Long,
+        metadata: ChunkLoadDriver.LoadedChunkMetadata,
         reason: String,
         shouldLogUpdate: Boolean,
     ): Boolean {
-        val key = toChunkKey(world, pos)
+        val key = metadata.key
         val previousTick = worldMapService.substrate().scannedEntry(key)?.scanTick
 
         val fact = ChunkMetadataFact(
             key = key,
             source = ChunkScanProvenance.ENGINE_AMBIENT,
             unresolvedReason = null,
-            signals = ChunkSignals(
-                inhabitedTimeTicks = inhabitedTicks,
-                lastUpdateTicks = null,
-                surfaceY = null,
-                biomeId = null,
-                isSpawnChunk = false,
-            ),
-            scanTick = world.time,
+            signals = metadata.signals,
+            scanTick = metadata.scanTick,
         )
         val applied = worldMapService.applyAmbientFactOnTickThread(fact)
 
         if (applied && shouldLogUpdate) {
+            val signals = fact.signals
             MementoLog.debug(
                 MementoConcept.AMBIENT,
-                "update chunk={} reason={} prevTick={} newTick={} inhabitedTicks={}",
+                "update key={} reason={} prevTick={} newTick={} inhabited={} surfaceY={} biome={}",
                 "${key.world.value}:${key.chunkX},${key.chunkZ}",
                 reason,
                 previousTick,
                 fact.scanTick,
-                inhabitedTicks,
+                signals?.inhabitedTimeTicks,
+                signals?.surfaceY,
+                signals?.biomeId,
             )
         }
 
         return applied
     }
 
-    private fun toChunkKey(world: ServerWorld, pos: ChunkPos): ChunkKey =
+    private fun toChunkKey(ref: LoadedChunkKey): ChunkKey =
         ChunkKey(
-            world = world.registryKey,
-            regionX = Math.floorDiv(pos.x, 32),
-            regionZ = Math.floorDiv(pos.z, 32),
-            chunkX = pos.x,
-            chunkZ = pos.z,
+            world = ref.dimension,
+            regionX = Math.floorDiv(ref.x, 32),
+            regionZ = Math.floorDiv(ref.z, 32),
+            chunkX = ref.x,
+            chunkZ = ref.z,
         )
+
 }

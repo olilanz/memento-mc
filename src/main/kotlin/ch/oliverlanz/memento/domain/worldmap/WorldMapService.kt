@@ -195,6 +195,31 @@ class WorldMapService {
         return true
     }
 
+    /**
+     * Forces a chunk observation tick old enough to be considered stale without mutating factual
+     * signals.
+     *
+     * This is used by regeneration acknowledgment to trigger ambient re-enrichment on the next
+     * very-low sweep while preserving existing metadata payload.
+     *
+     * @return true when a scanned entry existed and stale-mark was applied.
+     */
+    fun forceStaleObservationTickOnTickThread(key: ChunkKey, staleScanTick: Long): Boolean {
+        if (!attached) return false
+        val existing = map.scannedEntry(key) ?: return false
+
+        applyFactOnTickThread(
+            ChunkMetadataFact(
+                key = key,
+                source = existing.provenance,
+                unresolvedReason = existing.unresolvedReason,
+                signals = existing.signals,
+                scanTick = staleScanTick,
+            )
+        )
+        return true
+    }
+
     internal fun attachForTesting() {
         attached = true
     }

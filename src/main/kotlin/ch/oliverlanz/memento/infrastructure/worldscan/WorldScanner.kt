@@ -512,6 +512,10 @@ class WorldScanner : ChunkAvailabilityListener {
     }
 
     override fun onChunkMetadata(world: ServerWorld, fact: ChunkMetadataFact) {
+        // Ambient runtime metadata ingestion is owned by AmbientIngestionService.
+        // Scanner only accepts non-ambient metadata callbacks (e.g. renewal fallback compatibility).
+        if (fact.source == ChunkScanProvenance.ENGINE_AMBIENT) return
+
         val m = mapSnapshot() ?: return
         worldMapService?.applyFactOnTickThread(fact)
         // If not active scan, we do not drive demand; we only enrich the map.

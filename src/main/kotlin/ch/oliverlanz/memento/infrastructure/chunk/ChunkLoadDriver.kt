@@ -10,10 +10,13 @@ import ch.oliverlanz.memento.infrastructure.observability.MementoLog
 import java.lang.Math
 import java.util.concurrent.ConcurrentLinkedQueue
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerChunkEvents
+import net.minecraft.registry.RegistryKeys
 import net.minecraft.server.MinecraftServer
 import net.minecraft.server.world.ChunkTicketType
 import net.minecraft.server.world.ServerWorld
+import net.minecraft.util.math.BlockPos
 import net.minecraft.util.math.ChunkPos
+import net.minecraft.world.Heightmap
 import net.minecraft.world.chunk.WorldChunk
 
 /**
@@ -48,9 +51,16 @@ import net.minecraft.world.chunk.WorldChunk
  */
 class ChunkLoadDriver {
 
+    data class LoadedChunkMetadata(
+            val key: ChunkKey,
+            val signals: ChunkSignals,
+            val scanTick: Long,
+    )
+
     companion object {
         @Volatile private var activeInstance: ChunkLoadDriver? = null
         @Volatile private var hooksInstalled: Boolean = false
+        private const val METADATA_LOG_SAMPLE_EVERY_CALLS: Long = 64
 
         fun installEngineHooks() {
             if (hooksInstalled) return
@@ -90,6 +100,7 @@ class ChunkLoadDriver {
 
     // Aggregated observability
     private var completedPendingPruneExpiredCount: Long = 0
+    private var metadataLookupCalls: Long = 0
 
     /* ---------------------------------------------------------------------
      * Lifecycle
@@ -137,6 +148,68 @@ class ChunkLoadDriver {
 
     fun registerConsumer(listener: ChunkAvailabilityListener) {
         listeners += listener
+    }
+
+    /**
+     * Best-effort metadata snapshot for a currently loaded chunk.
+     *
+     * Contract:
+     * - tick-thread only API surface (engine-state access boundary)
+     * - non-blocking
+     * - non-loading (never requests/chases a chunk load)
+     * - no ticket/retry side effects
+     * - no caching/deferred resolution; returns immediate loaded-state snapshot only
+     */
+    fun getMetadataIfLoaded(ref: ChunkRef): LoadedChunkMetadata? {
+        return getMetadataIfLoaded(ref.dimension, ref.pos.x, ref.pos.z)
+    }
+
+    fun getMetadataIfLoaded(
+            dimension: net.minecraft.registry.RegistryKey<net.minecraft.world.World>,
+            chunkX: Int,
+            chunkZ: Int,
+    ): LoadedChunkMetadata? {
+        metadataLookupCalls++
+        val sampled = (metadataLookupCalls % METADATA_LOG_SAMPLE_EVERY_CALLS) == 0L
+        val lookupKey = "${dimension.value}:$chunkX,$chunkZ"
+
+        val s = server
+        if (s == null) {
+            if (sampled) {
+                MementoLog.debug(MementoConcept.AMBIENT, "driver.metadata unavailable (not-loaded) key={}", lookupKey)
+            }
+            return null
+        }
+
+        val world = s.getWorld(dimension)
+        if (world == null) {
+            if (sampled) {
+                MementoLog.debug(MementoConcept.AMBIENT, "driver.metadata unavailable (not-loaded) key={}", lookupKey)
+            }
+            return null
+        }
+
+        val chunk = world.chunkManager.getWorldChunk(chunkX, chunkZ, false)
+        if (chunk == null) {
+            if (sampled) {
+                MementoLog.debug(MementoConcept.AMBIENT, "driver.metadata unavailable (not-loaded) key={}", lookupKey)
+            }
+            return null
+        }
+
+        val metadata = buildLoadedChunkMetadata(world = world, chunk = chunk)
+        if (sampled) {
+            val signals = metadata.signals
+            MementoLog.debug(
+                    MementoConcept.AMBIENT,
+                    "driver.metadata hit key={} inhabited={} surfaceY={} biome={}",
+                    lookupKey,
+                    signals.inhabitedTimeTicks,
+                    signals.surfaceY,
+                    signals.biomeId,
+            )
+        }
+        return metadata
     }
 
     /* ---------------------------------------------------------------------
@@ -431,31 +504,18 @@ class ChunkLoadDriver {
                     if (desiredSources.contains(ChunkLoadRegister.RequestSource.RENEWAL))
                             ChunkScanProvenance.ENGINE_FALLBACK
                     else ChunkScanProvenance.ENGINE_AMBIENT
-            val emitAmbientMetadata =
-                    source != ChunkScanProvenance.ENGINE_AMBIENT ||
-                            MementoConstants.DRIVER_AMBIENT_METADATA_EMISSION_ENABLED
-            if (emitAmbientMetadata) {
+            // Ambient metadata writes are ingestion-owned. Driver metadata callbacks remain for
+            // fallback/renewal compatibility only.
+            val emitDriverMetadataCallback = source != ChunkScanProvenance.ENGINE_AMBIENT
+            if (emitDriverMetadataCallback) {
+                val metadata = buildLoadedChunkMetadata(world = world, chunk = chunk)
                 val fact =
                         ChunkMetadataFact(
-                                key =
-                                        ChunkKey(
-                                                world = world.registryKey,
-                                                regionX = Math.floorDiv(chunk.pos.x, 32),
-                                                regionZ = Math.floorDiv(chunk.pos.z, 32),
-                                                chunkX = chunk.pos.x,
-                                                chunkZ = chunk.pos.z,
-                                        ),
+                                key = metadata.key,
                                 source = source,
                                 unresolvedReason = null,
-                                signals =
-                                        ChunkSignals(
-                                                inhabitedTimeTicks = chunk.inhabitedTime,
-                                                lastUpdateTicks = null,
-                                                surfaceY = null,
-                                                biomeId = null,
-                                                isSpawnChunk = false,
-                                        ),
-                                scanTick = world.time,
+                                signals = metadata.signals,
+                                scanTick = metadata.scanTick,
                         )
                 listeners.forEach { it.onChunkMetadata(world, fact) }
             }
@@ -575,6 +635,44 @@ class ChunkLoadDriver {
             val world = server.getWorld(ev.dim) ?: continue
             listeners.forEach { it.onChunkUnloaded(world, ev.pos) }
         }
+    }
+
+    private fun buildLoadedChunkMetadata(world: ServerWorld, chunk: WorldChunk): LoadedChunkMetadata {
+        val centerX = chunk.pos.startX + 8
+        val centerZ = chunk.pos.startZ + 8
+
+        val surfaceY = runCatching {
+            world.getTopY(Heightmap.Type.WORLD_SURFACE, centerX, centerZ)
+        }.getOrNull()
+
+        val biomeId = runCatching {
+            val sampleY = (surfaceY ?: world.bottomY).coerceAtLeast(world.bottomY)
+            val biomeEntry = world.getBiome(BlockPos(centerX, sampleY, centerZ))
+            world.registryManager
+                    .getOrThrow(RegistryKeys.BIOME)
+                    .getId(biomeEntry.value())
+                    ?.toString()
+        }.getOrNull()
+
+        return LoadedChunkMetadata(
+                key =
+                        ChunkKey(
+                                world = world.registryKey,
+                                regionX = Math.floorDiv(chunk.pos.x, 32),
+                                regionZ = Math.floorDiv(chunk.pos.z, 32),
+                                chunkX = chunk.pos.x,
+                                chunkZ = chunk.pos.z,
+                        ),
+                signals =
+                        ChunkSignals(
+                                inhabitedTimeTicks = chunk.inhabitedTime,
+                                lastUpdateTicks = null,
+                                surfaceY = surfaceY,
+                                biomeId = biomeId,
+                                isSpawnChunk = false,
+                        ),
+                scanTick = world.time,
+        )
     }
 
     /* ---------------------------------------------------------------------

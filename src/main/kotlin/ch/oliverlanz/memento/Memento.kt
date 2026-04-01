@@ -136,6 +136,7 @@ object Memento : ModInitializer {
             PulseEvents.subscribe(PulseCadence.ULTRA_LOW, onExtremeLowPulse)
 
             worldMapService = WorldMapService().also { it.attach(server) }
+            RenewalRegenerationGate.attachWorldMapService(checkNotNull(worldMapService))
             MementoConfigStore.attach(server)
 
             renewalProjection = RenewalProjection().also { projection ->
@@ -188,7 +189,10 @@ object Memento : ModInitializer {
                 })
             }
 
-            ambientIngestionService = AmbientIngestionService(checkNotNull(worldMapService)).also {
+            ambientIngestionService = AmbientIngestionService(
+                checkNotNull(worldMapService),
+                checkNotNull(chunkLoadDriver),
+            ).also {
                 it.attach(server)
                 chunkLoadDriver?.registerConsumer(it)
             }
